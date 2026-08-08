@@ -21,6 +21,21 @@ Android 16 / Pixel 10aを初期基準端末とした24時間録音アプリで�
 - 5分M4AをAndroid MediaCodecでPCMへ復号し、端末内で推論
 - WorkManagerで文字起こしを録音処理から分離し、低バッテリー時は延期
 - 文字起こし結果をfsyncで永続保存してから元音声を削除
+- Jetpack Compose + Material 3によるUI
+- 「ホーム / 記録 / 設定」の3画面構成
+- 録音履歴と文字起こし結果を時系列で一覧表示
+- 文字起こし本文・segment ID・ファイル名の検索
+- 「文字起こし済み / 音声あり / 要確認」のフィルタ
+- セグメント詳細で文字起こし全文表示・コピー
+- 未削除M4Aが残っているセグメントは端末内再生
+- 録音停止前の確認ダイアログ
+- Dynamic Color、edge-to-edge、コンパクト画面のBottom Navigationと広幅画面のNavigation Rail
+
+## 記録閲覧
+
+「記録」画面は`files/metadata/segments.jsonl`、`files/transcripts/*.json`、現在残っている音声ファイルをsegmentIdで統合して表示します。文字起こし成功後は仕様どおり元M4Aを削除するため、通常は文字起こし済み項目で音声は「削除済み」と表示されます。失敗・待機中などでM4Aが残っている場合のみ詳細画面から再生できます。
+
+録音プロセスがjournal末尾へ追記している最中でもUIが落ちないよう、不完全な最終JSONL行は読み飛ばします。履歴読み込みはUIスレッドや`:recorder`プロセスでは行いません。
 
 ## ローカルWhisperモデル
 
@@ -32,7 +47,7 @@ Android 16 / Pixel 10aを初期基準端末とした24時間録音アプリで�
 
 ## ビルド
 
-Android SDK API 36、JDK 17、Gradle 8.13、Android Gradle Plugin 8.13.2、NDK 27.0.12077973、CMake 3.22.1を使用します。ネイティブビルド時に`whisper.cpp v1.9.1`のソースを取得してarm64-v8a向けにビルドします。
+Android SDK API 36、JDK 17、Gradle 8.13、Android Gradle Plugin 8.13.2、Kotlin 2.3.21、Compose BOM 2026.06.00、NDK 27.0.12077973、CMake 3.22.1を使用します。ネイティブビルド時に`whisper.cpp v1.9.1`のソースを取得してarm64-v8a向けにビルドします。
 
 ```bash
 gradle :app:assembleDebug
@@ -42,8 +57,8 @@ APK: `app/build/outputs/apk/debug/app-debug.apk`
 
 ## 現在のバージョン
 
-- versionName: `0.3.0-debug`
-- versionCode: `3`
+- versionName: `0.4.0-debug`
+- versionCode: `4`
 - minSdk: `29`
 - targetSdk: `36`
 - ABI: `arm64-v8a`
@@ -51,3 +66,5 @@ APK: `app/build/outputs/apk/debug/app-debug.apk`
 ## 注意
 
 Pixel 10a実機での5分音声の推論時間、24時間録音との同時運用時の電池消費・温度・メモリ使用量は実測が必要です。ローカル文字起こしが失敗しても録音処理を停止させず、元音声は保持します。
+
+履歴画面は現段階ではJSONLとファイルを読み合わせる実装です。長期間運用して履歴件数が大きくなった場合は、起動・検索性能を実測し、必要ならインデックス付きDBへ移行します。
