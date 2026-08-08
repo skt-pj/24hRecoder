@@ -1,5 +1,7 @@
 plugins {
     id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'org.jetbrains.kotlin.plugin.compose'
 }
 
 android {
@@ -11,8 +13,8 @@ android {
         applicationId 'com.sktpj.recorder24h'
         minSdk 29
         targetSdk 36
-        versionCode 3
-        versionName '0.3.0'
+        versionCode 4
+        versionName '0.4.0'
 
         ndk {
             abiFilters 'arm64-v8a'
@@ -22,13 +24,6 @@ android {
             cmake {
                 cppFlags '-std=c++17'
             }
-        }
-    }
-
-    externalNativeBuild {
-        cmake {
-            path file('src/main/cpp/CMakeLists.txt')
-            version '3.22.1'
         }
     }
 
@@ -43,12 +38,38 @@ android {
         }
     }
 
+    externalNativeBuild {
+        cmake {
+            path file('src/main/cpp/CMakeLists.txt')
+            version '3.22.1'
+        }
+    }
+
+    buildFeatures {
+        compose true
+    }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
 }
 
+kotlin {
+    jvmToolchain(17)
+}
+
 dependencies {
     implementation 'androidx.work:work-runtime:2.11.2'
+
+    def composeBom = platform('androidx.compose:compose-bom:2026.06.00')
+    implementation composeBom
+
+    implementation 'androidx.activity:activity-compose:1.13.0'
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.ui:ui-tooling-preview'
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.compose.material:material-icons-core'
+
+    debugImplementation 'androidx.compose.ui:ui-tooling'
 }
