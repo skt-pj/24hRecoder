@@ -13,8 +13,7 @@ set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
         whisper_cpp
-        URL https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.9.1.tar.gz
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+        URL https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.9.1.tar.gz)
 FetchContent_MakeAvailable(whisper_cpp)
 
 add_library(whisper_jni SHARED whisper_jni.cpp)
