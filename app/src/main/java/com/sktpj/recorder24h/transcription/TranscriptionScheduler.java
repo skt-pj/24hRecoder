@@ -7,7 +7,6 @@ import androidx.work.BackoffPolicy;
 import androidx.work.Constraints;
 import androidx.work.Data;
 import androidx.work.ExistingWorkPolicy;
-import androidx.work.NetworkType;
 import androidx.work.OneTimeWorkRequest;
 import androidx.work.WorkManager;
 
@@ -42,17 +41,17 @@ public final class TranscriptionScheduler {
         if (segmentId == null || segmentId.isEmpty() || file == null || !file.isFile()) {
             return;
         }
-        if (!ApiKeyStore.isConfigured(context)) {
-            log(context, "TRANSCRIPTION_WAITING_FOR_API_KEY", segmentId, file, null);
-            return;
-        }
         if (TranscriptionRepository.exists(context, segmentId)) {
             deleteAudioAfterExistingTranscript(context, segmentId, file);
             return;
         }
+        if (!WhisperModelManager.isReady(context)) {
+            log(context, "TRANSCRIPTION_WAITING_FOR_LOCAL_MODEL", segmentId, file, null);
+            return;
+        }
 
         Constraints constraints = new Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .setRequiresBatteryNotLow(true)
                 .build();
         Data input = new Data.Builder()
                 .putString(EXTRA_SEGMENT_ID, segmentId)
@@ -69,10 +68,13 @@ public final class TranscriptionScheduler {
                 uniqueWorkName(segmentId),
                 ExistingWorkPolicy.KEEP,
                 request);
-        log(context, "TRANSCRIPTION_ENQUEUED", segmentId, file, null);
+        log(context, "LOCAL_TRANSCRIPTION_ENQUEUED", segmentId, file, null);
     }
 
     public static int enqueueExisting(Context context) {
+        if (!WhisperModelManager.isReady(context)) {
+            return 0;
+        }
         File[] files = StoragePolicy.getAudioDir(context)
                 .listFiles((dir, name) -> name.endsWith(".m4a"));
         if (files == null) {
@@ -128,6 +130,7 @@ public final class TranscriptionScheduler {
             JSONObject details = new JSONObject();
             details.put("segmentId", segmentId == null ? JSONObject.NULL : segmentId);
             details.put("file", file == null ? JSONObject.NULL : file.getName());
+            details.put("engine", LocalWhisperEngine.ENGINE_ID);
             if (message != null) {
                 details.put("message", message);
             }
