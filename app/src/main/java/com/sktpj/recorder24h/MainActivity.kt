@@ -44,7 +44,6 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -54,6 +53,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
@@ -126,17 +126,15 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         AppLogger.event(this, "MAIN_ACTIVITY_CREATED")
-
         if (WhisperModelManager.isReady(this)) {
             TranscriptionScheduler.enqueueExisting(this)
         }
-
         setContent {
             RecorderTheme {
                 RecorderApp(
-                    onRequestStart = { requestStart() },
-                    onStop = { stopRecording() },
-                    onOpenSystemSettings = { openSystemSettings() }
+                    onRequestStart = ::requestStart,
+                    onStop = ::stopRecording,
+                    onOpenSystemSettings = ::openSystemSettings
                 )
             }
         }
@@ -144,12 +142,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onRequestPermissionsResult(
         requestCode: Int,
-        permissions: Array<out String>,
+        permissions: Array<String>,
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQUEST_PERMISSIONS) return
-
         if (startAfterPermission &&
             checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         ) {
@@ -161,29 +158,30 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestStart() {
-        val permissions = mutableListOf<String>()
+        val needed = mutableListOf<String>()
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            permissions += Manifest.permission.RECORD_AUDIO
+            needed += Manifest.permission.RECORD_AUDIO
         }
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
-            permissions += Manifest.permission.POST_NOTIFICATIONS
+            needed += Manifest.permission.POST_NOTIFICATIONS
         }
-        if (permissions.isNotEmpty()) {
+        if (needed.isNotEmpty()) {
             startAfterPermission = true
-            requestPermissions(permissions.toTypedArray(), REQUEST_PERMISSIONS)
-            return
+            requestPermissions(needed.toTypedArray(), REQUEST_PERMISSIONS)
+        } else {
+            startRecording()
         }
-        startRecording()
     }
 
     private fun startRecording() {
         RecordingIntentStore.setRequested(this, true)
         RecorderStateStore.write(this, "STARTING", null, null)
-        val intent = Intent(this, RecorderService::class.java).setAction(RecorderService.ACTION_START)
         try {
-            startForegroundService(intent)
+            startForegroundService(
+                Intent(this, RecorderService::class.java).setAction(RecorderService.ACTION_START)
+            )
             AppLogger.event(this, "UI_START_RECORDING")
         } catch (error: RuntimeException) {
             RecordingIntentStore.setRequested(this, false)
@@ -195,9 +193,8 @@ class MainActivity : ComponentActivity() {
 
     private fun stopRecording() {
         RecordingIntentStore.setRequested(this, false)
-        val intent = Intent(this, RecorderService::class.java).setAction(RecorderService.ACTION_STOP)
         try {
-            startService(intent)
+            startService(Intent(this, RecorderService::class.java).setAction(RecorderService.ACTION_STOP))
             AppLogger.event(this, "UI_STOP_RECORDING")
         } catch (error: RuntimeException) {
             RecorderStateStore.write(this, "ERROR", null, error.message)
@@ -213,16 +210,11 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class AppSection(val label: String) {
-    HOME("ホーム"),
-    HISTORY("記録"),
-    SETTINGS("設定")
+    HOME("ホーム"), HISTORY("記録"), SETTINGS("設定")
 }
 
 private enum class HistoryFilter(val label: String) {
-    ALL("すべて"),
-    TRANSCRIBED("文字起こし済み"),
-    AUDIO("音声あり"),
-    ATTENTION("要確認")
+    ALL("すべて"), TRANSCRIBED("文字起こし済み"), AUDIO("音声あり"), ATTENTION("要確認")
 }
 
 private data class DashboardSnapshot(
@@ -250,38 +242,23 @@ private fun RecorderTheme(content: @Composable () -> Unit) {
         dark -> darkColorScheme()
         else -> lightColorScheme()
     }
-
-    val typography = Typography(
-        headlineLarge = TextStyle(
-            fontSize = 32.sp,
-            lineHeight = 38.sp,
-            fontWeight = FontWeight.Bold
-        ),
-        headlineMedium = TextStyle(
-            fontSize = 26.sp,
-            lineHeight = 32.sp,
-            fontWeight = FontWeight.Bold
-        ),
-        titleLarge = TextStyle(
-            fontSize = 22.sp,
-            lineHeight = 28.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-    )
-    val shapes = Shapes(
-        small = RoundedCornerShape(12.dp),
-        medium = RoundedCornerShape(20.dp),
-        large = RoundedCornerShape(28.dp)
-    )
-
     MaterialTheme(
         colorScheme = scheme,
-        typography = typography,
-        shapes = shapes,
+        typography = Typography(
+            headlineLarge = TextStyle(fontSize = 32.sp, lineHeight = 38.sp, fontWeight = FontWeight.Bold),
+            headlineMedium = TextStyle(fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold),
+            titleLarge = TextStyle(fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.SemiBold)
+        ),
+        shapes = Shapes(
+            small = RoundedCornerShape(12.dp),
+            medium = RoundedCornerShape(20.dp),
+            large = RoundedCornerShape(28.dp)
+        ),
         content = content
     )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RecorderApp(
     onRequestStart: () -> Unit,
@@ -290,9 +267,9 @@ private fun RecorderApp(
 ) {
     val context = LocalContext.current
     var section by remember { mutableStateOf(AppSection.HOME) }
-    var selectedSegmentId by remember { mutableStateOf<String?>(null) }
-    var historyRecords by remember { mutableStateOf<List<SegmentRecord>>(emptyList()) }
-    var historyRefresh by remember { mutableIntStateOf(0) }
+    var selectedId by remember { mutableStateOf<String?>(null) }
+    var records by remember { mutableStateOf<List<SegmentRecord>>(emptyList()) }
+    var refresh by remember { mutableIntStateOf(0) }
     var dashboard by remember { mutableStateOf(readDashboard(context)) }
 
     LaunchedEffect(Unit) {
@@ -301,42 +278,27 @@ private fun RecorderApp(
             delay(2_000L)
         }
     }
-
-    LaunchedEffect(section, historyRefresh) {
+    LaunchedEffect(section, refresh) {
         if (section == AppSection.HISTORY) {
             do {
-                historyRecords = withContext(Dispatchers.IO) {
-                    SegmentHistoryRepository.load(context)
-                }
+                records = withContext(Dispatchers.IO) { SegmentHistoryRepository.load(context) }
                 delay(5_000L)
             } while (section == AppSection.HISTORY)
         }
     }
 
-    val selectedRecord = selectedSegmentId?.let { id ->
-        historyRecords.firstOrNull { it.segmentId == id }
-    }
+    val selected = selectedId?.let { id -> records.firstOrNull { it.segmentId == id } }
+    BackHandler(enabled = selected != null) { selectedId = null }
 
-    BackHandler(enabled = selectedSegmentId != null) {
-        selectedSegmentId = null
-    }
-
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
         val expanded = maxWidth >= 840.dp
-        val title = when {
-            selectedRecord != null -> "記録の詳細"
-            section == AppSection.HOME -> "24hRecoder"
-            section == AppSection.HISTORY -> "記録"
-            else -> "設定"
-        }
-
         Scaffold(
             topBar = {
                 TopAppBar(
                     title = {
                         Column {
-                            Text(title)
-                            if (section == AppSection.HOME && selectedRecord == null) {
+                            Text(if (selected != null) "記録の詳細" else sectionTitle(section))
+                            if (section == AppSection.HOME && selected == null) {
                                 Text(
                                     "端末内録音・ローカル文字起こし",
                                     style = MaterialTheme.typography.labelMedium,
@@ -346,15 +308,15 @@ private fun RecorderApp(
                         }
                     },
                     navigationIcon = {
-                        if (selectedRecord != null) {
-                            IconButton(onClick = { selectedSegmentId = null }) {
+                        if (selected != null) {
+                            IconButton(onClick = { selectedId = null }) {
                                 Icon(Icons.Filled.ArrowBack, contentDescription = "記録一覧へ戻る")
                             }
                         }
                     },
                     actions = {
-                        if (section == AppSection.HISTORY && selectedRecord == null) {
-                            IconButton(onClick = { historyRefresh++ }) {
+                        if (section == AppSection.HISTORY && selected == null) {
+                            IconButton(onClick = { refresh++ }) {
                                 Icon(Icons.Filled.Refresh, contentDescription = "記録を更新")
                             }
                         }
@@ -362,15 +324,12 @@ private fun RecorderApp(
                 )
             },
             bottomBar = {
-                if (!expanded && selectedRecord == null) {
+                if (!expanded && selected == null) {
                     NavigationBar {
                         AppSection.entries.forEach { destination ->
                             NavigationBarItem(
                                 selected = section == destination,
-                                onClick = {
-                                    section = destination
-                                    selectedSegmentId = null
-                                },
+                                onClick = { section = destination; selectedId = null },
                                 icon = { SectionIcon(destination) },
                                 label = { Text(destination.label) }
                             )
@@ -379,94 +338,50 @@ private fun RecorderApp(
                 }
             }
         ) { innerPadding ->
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            ) {
-                if (expanded && selectedRecord == null) {
-                    NavigationRail(modifier = Modifier.fillMaxHeight()) {
+            Row(Modifier.fillMaxSize().padding(innerPadding)) {
+                if (expanded && selected == null) {
+                    NavigationRail(Modifier.fillMaxHeight()) {
                         Spacer(Modifier.height(8.dp))
                         AppSection.entries.forEach { destination ->
                             NavigationRailItem(
                                 selected = section == destination,
-                                onClick = {
-                                    section = destination
-                                    selectedSegmentId = null
-                                },
+                                onClick = { section = destination; selectedId = null },
                                 icon = { SectionIcon(destination) },
                                 label = { Text(destination.label) }
                             )
                         }
                     }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .width(1.dp)
-                            .background(MaterialTheme.colorScheme.outlineVariant)
-                    )
+                    Box(Modifier.fillMaxHeight().width(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
                 }
-
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                ) {
+                Box(Modifier.weight(1f).fillMaxHeight()) {
                     when {
-                        selectedRecord != null -> RecordDetailScreen(record = selectedRecord)
+                        selected != null -> RecordDetailScreen(selected)
                         section == AppSection.HOME -> HomeScreen(
-                            dashboard = dashboard,
-                            onRequestStart = onRequestStart,
-                            onStop = onStop,
-                            onOpenHistory = {
-                                section = AppSection.HISTORY
-                                selectedSegmentId = null
-                                historyRefresh++
-                            }
+                            dashboard,
+                            onRequestStart,
+                            onStop,
+                            onOpenHistory = { section = AppSection.HISTORY; refresh++ }
                         )
-                        section == AppSection.HISTORY -> HistoryScreen(
-                            records = historyRecords,
-                            onSelect = { selectedSegmentId = it.segmentId }
-                        )
-                        section == AppSection.SETTINGS -> SettingsScreen(
-                            dashboard = dashboard,
+                        section == AppSection.HISTORY -> HistoryScreen(records) { selectedId = it.segmentId }
+                        else -> SettingsScreen(
+                            dashboard,
                             onDownloadModel = {
                                 WhisperModelManager.enqueueDownload(context)
                                 AppLogger.event(context, "UI_WHISPER_MODEL_DOWNLOAD_REQUESTED")
-                                Toast.makeText(
-                                    context,
-                                    "Whisper baseモデルのダウンロードを開始します",
-                                    Toast.LENGTH_SHORT
-                                ).show()
+                                Toast.makeText(context, "Whisper baseモデルのダウンロードを開始します", Toast.LENGTH_SHORT).show()
                             },
                             onRetryTranscription = {
                                 if (!WhisperModelManager.isReady(context)) {
-                                    Toast.makeText(
-                                        context,
-                                        "先にWhisperモデルを準備してください",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
+                                    Toast.makeText(context, "先にWhisperモデルを準備してください", Toast.LENGTH_SHORT).show()
                                 } else {
                                     val count = TranscriptionScheduler.enqueueExisting(context)
-                                    Toast.makeText(
-                                        context,
-                                        "${count}件の未処理音声を確認しました",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
+                                    Toast.makeText(context, "${count}件の未処理音声を確認しました", Toast.LENGTH_SHORT).show()
                                 }
                             },
                             onDeleteModel = {
-                                val deleted = WhisperModelManager.deleteModel(context)
-                                AppLogger.event(
-                                    context,
-                                    if (deleted) "UI_WHISPER_MODEL_DELETED"
-                                    else "UI_WHISPER_MODEL_DELETE_FAILED"
-                                )
-                                Toast.makeText(
-                                    context,
-                                    if (deleted) "モデルを削除しました" else "モデルを削除できませんでした",
-                                    Toast.LENGTH_SHORT
-                                ).show()
+                                val ok = WhisperModelManager.deleteModel(context)
+                                AppLogger.event(context, if (ok) "UI_WHISPER_MODEL_DELETED" else "UI_WHISPER_MODEL_DELETE_FAILED")
+                                Toast.makeText(context, if (ok) "モデルを削除しました" else "モデルを削除できませんでした", Toast.LENGTH_SHORT).show()
                             },
                             onOpenSystemSettings = onOpenSystemSettings
                         )
@@ -475,6 +390,12 @@ private fun RecorderApp(
             }
         }
     }
+}
+
+private fun sectionTitle(section: AppSection) = when (section) {
+    AppSection.HOME -> "24hRecoder"
+    AppSection.HISTORY -> "記録"
+    AppSection.SETTINGS -> "設定"
 }
 
 @Composable
@@ -494,161 +415,99 @@ private fun HomeScreen(
     onStop: () -> Unit,
     onOpenHistory: () -> Unit
 ) {
-    var showStopConfirmation by remember { mutableStateOf(false) }
-    val active = dashboard.state == "STARTING" ||
-        dashboard.state == "RECORDING" ||
-        dashboard.state == "STOPPING"
-
-    if (showStopConfirmation) {
+    var confirmStop by remember { mutableStateOf(false) }
+    if (confirmStop) {
         AlertDialog(
-            onDismissRequest = { showStopConfirmation = false },
+            onDismissRequest = { confirmStop = false },
             title = { Text("録音を停止しますか？") },
-            text = {
-                Text("24時間録音を停止します。停止後はホーム画面からいつでも再開できます。")
-            },
+            text = { Text("24時間録音を停止します。停止後はホームから再開できます。") },
             confirmButton = {
                 Button(
-                    onClick = {
-                        showStopConfirmation = false
-                        onStop()
-                    },
+                    onClick = { confirmStop = false; onStop() },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError
                     )
-                ) {
-                    Text("停止する")
-                }
+                ) { Text("停止する") }
             },
-            dismissButton = {
-                TextButton(onClick = { showStopConfirmation = false }) {
-                    Text("キャンセル")
-                }
-            }
+            dismissButton = { TextButton(onClick = { confirmStop = false }) { Text("キャンセル") } }
         )
     }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
-            RecordingHeroCard(
-                dashboard = dashboard,
-                active = active,
-                onRequestStart = onRequestStart,
-                onRequestStop = { showStopConfirmation = true }
+            RecordingCard(
+                dashboard,
+                onRequestStart,
+                onRequestStop = { confirmStop = true }
             )
         }
-        item {
-            OverviewCard(dashboard)
-        }
-        item {
-            TranscriptionSummaryCard(
-                dashboard = dashboard,
-                onOpenHistory = onOpenHistory
-            )
-        }
+        item { StorageCard(dashboard) }
+        item { TranscriptionCard(dashboard, onOpenHistory) }
         item {
             Text(
-                "設計上、録音処理は文字起こしやUIとは別プロセスです。後段処理が遅れても録音継続を優先します。",
+                "録音処理はUI・文字起こしとは別プロセスです。後段処理が遅れても録音継続を優先します。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+                modifier = Modifier.padding(4.dp)
             )
         }
     }
 }
 
 @Composable
-private fun RecordingHeroCard(
+private fun RecordingCard(
     dashboard: DashboardSnapshot,
-    active: Boolean,
     onRequestStart: () -> Unit,
     onRequestStop: () -> Unit
 ) {
-    val recording = dashboard.state == "RECORDING"
-    val statusColor = when (dashboard.state) {
+    val active = dashboard.state in setOf("STARTING", "RECORDING", "STOPPING") || dashboard.recordingRequested
+    val stale = dashboard.state == "RECORDING" && dashboard.heartbeatMs > 0L &&
+        System.currentTimeMillis() - dashboard.heartbeatMs > 10_000L
+    val dotColor = when (dashboard.state) {
         "RECORDING" -> MaterialTheme.colorScheme.primary
         "ERROR" -> MaterialTheme.colorScheme.error
         "STARTING", "STOPPING" -> MaterialTheme.colorScheme.tertiary
         else -> MaterialTheme.colorScheme.outline
     }
-    val statusLabel = recordingStateLabel(dashboard.state)
-    val heartbeatStale = recording &&
-        dashboard.heartbeatMs > 0L &&
-        System.currentTimeMillis() - dashboard.heartbeatMs > 10_000L
 
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer
-        )
-    ) {
-        Column(
-            modifier = Modifier.padding(22.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+        Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier
-                        .size(14.dp)
-                        .background(statusColor, CircleShape)
-                )
+                Box(Modifier.size(14.dp).background(dotColor, CircleShape))
                 Spacer(Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(statusLabel, style = MaterialTheme.typography.headlineMedium)
+                Column(Modifier.weight(1f)) {
+                    Text(recordingStateLabel(dashboard.state), style = MaterialTheme.typography.headlineMedium)
                     Text(
-                        if (recording) "バックグラウンドで録音しています"
-                        else "24時間録音の状態をここで管理します",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.78f)
+                        if (dashboard.state == "RECORDING") "バックグラウンドで録音しています" else "24時間録音の状態を管理します",
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.76f)
                     )
                 }
             }
-
             if (dashboard.segmentId.isNotBlank() && dashboard.segmentId != "null") {
-                Text(
-                    "現在のセグメント  ${dashboard.segmentId}",
-                    style = MaterialTheme.typography.labelLarge
-                )
+                Text("現在のセグメント  ${dashboard.segmentId}", style = MaterialTheme.typography.labelLarge)
             }
-
-            if (heartbeatStale) {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    shape = MaterialTheme.shapes.small
-                ) {
+            if (stale) {
+                Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.small) {
                     Text(
-                        "録音中ですがheartbeatが10秒以上更新されていません。ログ確認を推奨します。",
+                        "heartbeatが10秒以上更新されていません。ログ確認を推奨します。",
                         color = MaterialTheme.colorScheme.onErrorContainer,
-                        style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(12.dp)
                     )
                 }
             } else if (dashboard.heartbeatMs > 0L) {
-                Text(
-                    "最終heartbeat  ${formatDateTime(dashboard.heartbeatMs)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.72f)
-                )
+                Text("最終heartbeat  ${formatDateTime(dashboard.heartbeatMs)}", style = MaterialTheme.typography.bodySmall)
             }
-
             if (dashboard.error.isNotBlank() && dashboard.error != "null") {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    shape = MaterialTheme.shapes.small
-                ) {
-                    Text(
-                        dashboard.error,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(12.dp)
-                    )
+                Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.small) {
+                    Text(dashboard.error, color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.padding(12.dp))
                 }
             }
-
-            if (active || dashboard.recordingRequested) {
+            if (active) {
                 Button(
                     onClick = onRequestStop,
                     enabled = dashboard.state != "STOPPING",
@@ -656,19 +515,10 @@ private fun RecordingHeroCard(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError
                     ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp)
-                ) {
-                    Text(if (dashboard.state == "STOPPING") "停止中…" else "録音を停止")
-                }
+                    modifier = Modifier.fillMaxWidth().height(56.dp)
+                ) { Text(if (dashboard.state == "STOPPING") "停止中…" else "録音を停止") }
             } else {
-                Button(
-                    onClick = onRequestStart,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp)
-                ) {
+                Button(onClick = onRequestStart, modifier = Modifier.fillMaxWidth().height(56.dp)) {
                     Text("録音を開始")
                 }
             }
@@ -677,39 +527,18 @@ private fun RecordingHeroCard(
 }
 
 @Composable
-private fun OverviewCard(dashboard: DashboardSnapshot) {
-    val audioProgress = dashboard.audioBytes.toFloat() / StoragePolicy.AUDIO_LIMIT_BYTES.toFloat()
-    val appProgress = dashboard.appBytes.toFloat() / StoragePolicy.LOGICAL_APP_LIMIT_BYTES.toFloat()
-
+private fun StorageCard(dashboard: DashboardSnapshot) {
     Card {
-        Column(
-            modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("ストレージ", style = MaterialTheme.typography.titleLarge)
-
-            StorageMeter(
-                label = "未処理音声",
-                value = "${formatMb(dashboard.audioBytes)} / 600 MB",
-                progress = audioProgress
-            )
-            StorageMeter(
-                label = "作業データ",
-                value = "${formatMb(dashboard.appBytes)} / 1 GB",
-                progress = appProgress
-            )
-
+            Meter("未処理音声", "${formatMb(dashboard.audioBytes)} / 600 MB", dashboard.audioBytes.toFloat() / StoragePolicy.AUDIO_LIMIT_BYTES)
+            Meter("作業データ", "${formatMb(dashboard.appBytes)} / 1 GB", dashboard.appBytes.toFloat() / StoragePolicy.LOGICAL_APP_LIMIT_BYTES)
             HorizontalDivider()
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Metric("未処理", "${dashboard.pendingAudio}件")
                 Metric("文字起こし", "${dashboard.transcriptCount}件")
                 Metric("端末空き", formatStorage(dashboard.deviceFreeBytes))
             }
-
             Text(
                 "Whisperモデルは1GBの作業データ制限には含めません。",
                 style = MaterialTheme.typography.bodySmall,
@@ -720,20 +549,15 @@ private fun OverviewCard(dashboard: DashboardSnapshot) {
 }
 
 @Composable
-private fun StorageMeter(label: String, value: String, progress: Float) {
+private fun Meter(label: String, value: String, progress: Float) {
     Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(label, style = MaterialTheme.typography.bodyMedium)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label)
             Text(value, style = MaterialTheme.typography.labelLarge)
         }
         LinearProgressIndicator(
             progress = { progress.coerceIn(0f, 1f) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(8.dp)
+            modifier = Modifier.fillMaxWidth().height(8.dp)
         )
     }
 }
@@ -742,61 +566,27 @@ private fun StorageMeter(label: String, value: String, progress: Float) {
 private fun Metric(label: String, value: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
 @Composable
-private fun TranscriptionSummaryCard(
-    dashboard: DashboardSnapshot,
-    onOpenHistory: () -> Unit
-) {
-    val modelProgress = if (WhisperModelManager.EXPECTED_BYTES > 0L) {
-        dashboard.modelBytes.toFloat() / WhisperModelManager.EXPECTED_BYTES.toFloat()
-    } else 0f
-
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer
-        )
-    ) {
-        Column(
-            modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+private fun TranscriptionCard(dashboard: DashboardSnapshot, onOpenHistory: () -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("ローカル文字起こし", style = MaterialTheme.typography.titleLarge)
-            Text(
-                "${LocalWhisperEngine.ENGINE_ID} / Whisper base",
-                style = MaterialTheme.typography.bodyMedium
+            Text("${LocalWhisperEngine.ENGINE_ID} / Whisper base")
+            StatusPill(
+                if (dashboard.modelReady) "モデル準備済み" else if (dashboard.modelBytes > 0L) "モデル取得中" else "モデル未準備",
+                if (dashboard.modelReady) StatusTone.SUCCESS else StatusTone.WAITING
             )
-
-            if (dashboard.modelReady) {
-                StatusPill("モデル準備済み", StatusTone.SUCCESS)
-            } else {
-                StatusPill(
-                    if (dashboard.modelBytes > 0L) "モデル取得中" else "モデル未準備",
-                    StatusTone.WAITING
+            if (!dashboard.modelReady && dashboard.modelBytes > 0L) {
+                LinearProgressIndicator(
+                    progress = { (dashboard.modelBytes.toFloat() / WhisperModelManager.EXPECTED_BYTES).coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth()
                 )
-                if (dashboard.modelBytes > 0L) {
-                    LinearProgressIndicator(
-                        progress = { modelProgress.coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text(
-                        "${formatMb(dashboard.modelBytes)} / ${formatMb(WhisperModelManager.EXPECTED_BYTES)}",
-                        style = MaterialTheme.typography.labelMedium
-                    )
-                }
             }
-
-            FilledTonalButton(
-                onClick = onOpenHistory,
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            FilledTonalButton(onClick = onOpenHistory, modifier = Modifier.fillMaxWidth()) {
                 Text("録音データと文字起こしを見る")
             }
         }
@@ -804,84 +594,56 @@ private fun TranscriptionSummaryCard(
 }
 
 @Composable
-private fun HistoryScreen(
-    records: List<SegmentRecord>,
-    onSelect: (SegmentRecord) -> Unit
-) {
+private fun HistoryScreen(records: List<SegmentRecord>, onSelect: (SegmentRecord) -> Unit) {
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(HistoryFilter.ALL) }
-
     val filtered = remember(records, query, filter) {
         records.filter { record ->
-            val filterMatch = when (filter) {
+            val statusOk = when (filter) {
                 HistoryFilter.ALL -> true
                 HistoryFilter.TRANSCRIBED -> record.hasTranscript
                 HistoryFilter.AUDIO -> record.audioAvailable
                 HistoryFilter.ATTENTION -> record.needsAttention
             }
-            val queryMatch = query.isBlank() ||
-                record.segmentId.contains(query, ignoreCase = true) ||
-                (record.fileName?.contains(query, ignoreCase = true) == true) ||
-                (record.transcriptText?.contains(query, ignoreCase = true) == true)
-            filterMatch && queryMatch
+            val queryOk = query.isBlank() ||
+                record.segmentId.contains(query, true) ||
+                record.fileName?.contains(query, true) == true ||
+                record.transcriptText?.contains(query, true) == true
+            statusOk && queryOk
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
+    Column(Modifier.fillMaxSize()) {
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
                 singleLine = true,
-                leadingIcon = {
-                    Icon(Icons.Filled.Search, contentDescription = null)
-                },
+                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 placeholder = { Text("文字起こし・segment IDを検索") },
                 modifier = Modifier.fillMaxWidth()
             )
-
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(end = 20.dp)
-            ) {
-                itemsIndexed(
-                    items = HistoryFilter.entries,
-                    key = { _, item -> item.name }
-                ) { _, item ->
-                    FilterChip(
-                        selected = filter == item,
-                        onClick = { filter = item },
-                        label = { Text(item.label) }
-                    )
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                itemsIndexed(HistoryFilter.entries) { _, item ->
+                    FilterChip(selected = filter == item, onClick = { filter = item }, label = { Text(item.label) })
                 }
             }
         }
-
         if (filtered.isEmpty()) {
-            EmptyHistory(filter = filter, query = query)
+            EmptyHistory(query, filter)
         } else {
             LazyColumn(
-                modifier = Modifier.fillMaxSize(),
+                Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                itemsIndexed(
-                    items = filtered,
-                    key = { _, item -> item.segmentId }
-                ) { index, record ->
+                itemsIndexed(filtered, key = { _, item -> item.segmentId }) { index, record ->
                     val day = formatDay(record.sortTimeMs)
-                    val previousDay = if (index > 0) formatDay(filtered[index - 1].sortTimeMs) else null
-                    if (day != previousDay) {
-                        Text(
-                            day,
-                            style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.padding(top = if (index == 0) 0.dp else 10.dp, bottom = 2.dp)
-                        )
+                    val previous = if (index == 0) null else formatDay(filtered[index - 1].sortTimeMs)
+                    if (day != previous) {
+                        Text(day, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = if (index == 0) 0.dp else 10.dp))
                     }
-                    SegmentCard(record = record, onClick = { onSelect(record) })
+                    SegmentCard(record) { onSelect(record) }
                 }
             }
         }
@@ -889,23 +651,19 @@ private fun HistoryScreen(
 }
 
 @Composable
-private fun EmptyHistory(filter: HistoryFilter, query: String) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+private fun EmptyHistory(query: String, filter: HistoryFilter) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
-            modifier = Modifier
-                .widthIn(max = 420.dp)
-                .padding(32.dp),
+            Modifier.widthIn(max = 420.dp).padding(32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                if (query.isBlank() && filter == HistoryFilter.ALL) "記録はまだありません"
-                else "条件に一致する記録がありません",
+                if (query.isBlank() && filter == HistoryFilter.ALL) "記録はまだありません" else "条件に一致する記録がありません",
                 style = MaterialTheme.typography.titleLarge
             )
             Text(
-                "録音セグメントが確定すると、ここに時刻・音声状態・文字起こし結果が表示されます。",
-                style = MaterialTheme.typography.bodyMedium,
+                "録音セグメントが確定すると、時刻・音声状態・文字起こし結果が表示されます。",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
@@ -914,68 +672,38 @@ private fun EmptyHistory(filter: HistoryFilter, query: String) {
 
 @Composable
 private fun SegmentCard(record: SegmentRecord, onClick: () -> Unit) {
-    Card(
-        onClick = onClick,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        )
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
+    Card(onClick = onClick, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        formatTimeRange(record),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        record.segmentId,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                Column(Modifier.weight(1f)) {
+                    Text(formatTimeRange(record), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(record.segmentId, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 StatusPill(recordStatusLabel(record), recordTone(record))
             }
-
             Text(
                 when {
-                    record.hasTranscript && record.transcriptText!!.isNotBlank() -> record.transcriptText
+                    record.hasTranscript && !record.transcriptText.isNullOrBlank() -> record.transcriptText!!
                     record.hasTranscript -> "文字起こし結果は空です（無音区間の可能性があります）"
                     record.status == "TRANSCRIBING" -> "端末内で文字起こし中です"
                     record.audioAvailable -> "音声は保存済みです。文字起こしを待っています"
                     else -> "文字起こし結果はまだありません"
                 },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis
             )
-
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    if (record.audioAvailable) {
-                        "音声あり ${SegmentHistoryRepository.formatBytes(record.fileSizeBytes)}"
-                    } else if (record.hasTranscript) {
-                        "音声削除済み"
-                    } else {
-                        "音声なし"
+                    when {
+                        record.audioAvailable -> "音声あり ${SegmentHistoryRepository.formatBytes(record.fileSizeBytes)}"
+                        record.hasTranscript -> "音声削除済み"
+                        else -> "音声なし"
                     },
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (record.reason != null) {
-                    Text(
-                        record.reason,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.error,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                if (!record.reason.isNullOrBlank()) {
+                    Text(record.reason, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error, maxLines = 1)
                 }
             }
         }
@@ -986,114 +714,73 @@ private enum class StatusTone { SUCCESS, WAITING, ERROR, NEUTRAL }
 
 @Composable
 private fun StatusPill(text: String, tone: StatusTone) {
-    val background = when (tone) {
+    val bg = when (tone) {
         StatusTone.SUCCESS -> MaterialTheme.colorScheme.primaryContainer
         StatusTone.WAITING -> MaterialTheme.colorScheme.tertiaryContainer
         StatusTone.ERROR -> MaterialTheme.colorScheme.errorContainer
         StatusTone.NEUTRAL -> MaterialTheme.colorScheme.surface
     }
-    val foreground = when (tone) {
+    val fg = when (tone) {
         StatusTone.SUCCESS -> MaterialTheme.colorScheme.onPrimaryContainer
         StatusTone.WAITING -> MaterialTheme.colorScheme.onTertiaryContainer
         StatusTone.ERROR -> MaterialTheme.colorScheme.onErrorContainer
         StatusTone.NEUTRAL -> MaterialTheme.colorScheme.onSurface
     }
-    Surface(color = background, contentColor = foreground, shape = CircleShape) {
-        Text(
-            text,
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-        )
+    Surface(color = bg, contentColor = fg, shape = CircleShape) {
+        Text(text, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
     }
 }
 
 @Composable
 private fun RecordDetailScreen(record: SegmentRecord) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                formatTimeRange(record),
-                                style = MaterialTheme.typography.headlineMedium
-                            )
-                            Text(
-                                formatDay(record.sortTimeMs),
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
-                            )
+                        Column(Modifier.weight(1f)) {
+                            Text(formatTimeRange(record), style = MaterialTheme.typography.headlineMedium)
+                            Text(formatDay(record.sortTimeMs), color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f))
                         }
                         StatusPill(recordStatusLabel(record), recordTone(record))
                     }
-                    Text(
-                        "segment ${record.segmentId}",
-                        style = MaterialTheme.typography.labelMedium
-                    )
+                    Text("segment ${record.segmentId}", style = MaterialTheme.typography.labelMedium)
                 }
             }
         }
-
-        if (record.audioAvailable && record.audioPath != null) {
-            item { AudioPlaybackCard(record) }
-        } else {
-            item {
+        item {
+            if (record.audioAvailable && record.audioPath != null) {
+                AudioPlaybackCard(record)
+            } else {
                 Card {
-                    Column(
-                        modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
+                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("録音データ", style = MaterialTheme.typography.titleLarge)
                         Text(
-                            if (record.hasTranscript) {
-                                "文字起こし結果を永続保存したため、元のM4A音声は仕様どおり削除済みです。"
-                            } else {
-                                "現在参照できる音声ファイルはありません。"
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
+                            if (record.hasTranscript) "文字起こし結果を永続保存したため、元のM4A音声は削除済みです。" else "現在参照できる音声ファイルはありません。",
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
             }
         }
-
         item { TranscriptCard(record) }
-
         item {
             Card {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("詳細", style = MaterialTheme.typography.titleLarge)
                     InfoRow("状態", record.status)
                     InfoRow("開始", formatDateTime(record.startedAtMs))
                     InfoRow("終了", formatDateTime(record.endedAtMs))
-                    InfoRow(
-                        "長さ",
-                        if (record.durationMs > 0L) formatDuration(record.durationMs) else "-"
-                    )
+                    InfoRow("長さ", if (record.durationMs > 0L) formatDuration(record.durationMs) else "-")
                     InfoRow("ファイル", record.fileName ?: "-")
                     InfoRow("サイズ", SegmentHistoryRepository.formatBytes(record.fileSizeBytes))
                     InfoRow("文字起こし", record.transcriptModel?.ifBlank { "-" } ?: "-")
-                    if (record.transcribedAtMs > 0L) {
-                        InfoRow("処理日時", formatDateTime(record.transcribedAtMs))
-                    }
-                    if (!record.reason.isNullOrBlank()) {
-                        InfoRow("理由", record.reason)
-                    }
+                    if (record.transcribedAtMs > 0L) InfoRow("処理日時", formatDateTime(record.transcribedAtMs))
+                    if (!record.reason.isNullOrBlank()) InfoRow("理由", record.reason)
                 }
             }
         }
@@ -1104,62 +791,38 @@ private fun RecordDetailScreen(record: SegmentRecord) {
 private fun AudioPlaybackCard(record: SegmentRecord) {
     val context = LocalContext.current
     var player by remember(record.audioPath) { mutableStateOf<MediaPlayer?>(null) }
-    var isPlaying by remember(record.audioPath) { mutableStateOf(false) }
+    var playing by remember(record.audioPath) { mutableStateOf(false) }
     var preparing by remember(record.audioPath) { mutableStateOf(false) }
 
     DisposableEffect(record.audioPath) {
         onDispose {
-            try {
-                player?.stop()
-            } catch (_: Exception) {
-            }
+            try { player?.stop() } catch (_: Exception) { }
             player?.release()
             player = null
         }
     }
 
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer
-        )
-    ) {
-        Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("録音データ", style = MaterialTheme.typography.titleLarge)
-            Text(
-                "${record.fileName ?: "M4A"}  •  ${SegmentHistoryRepository.formatBytes(record.fileSizeBytes)}",
-                style = MaterialTheme.typography.bodyMedium
-            )
-
+            Text("${record.fileName ?: "M4A"}  •  ${SegmentHistoryRepository.formatBytes(record.fileSizeBytes)}")
             FilledTonalButton(
                 onClick = {
-                    val existing = player
-                    if (existing == null) {
+                    val current = player
+                    if (current == null) {
                         try {
                             val created = MediaPlayer()
                             player = created
                             preparing = true
                             created.setDataSource(record.audioPath)
-                            created.setOnPreparedListener {
-                                preparing = false
-                                it.start()
-                                isPlaying = true
-                            }
-                            created.setOnCompletionListener {
-                                isPlaying = false
-                            }
+                            created.setOnPreparedListener { preparing = false; it.start(); playing = true }
+                            created.setOnCompletionListener { playing = false }
                             created.setOnErrorListener { mp, _, _ ->
                                 preparing = false
-                                isPlaying = false
+                                playing = false
                                 mp.release()
                                 player = null
-                                Toast.makeText(
-                                    context,
-                                    "音声を再生できませんでした",
-                                    Toast.LENGTH_SHORT
-                                ).show()
+                                Toast.makeText(context, "音声を再生できませんでした", Toast.LENGTH_SHORT).show()
                                 true
                             }
                             created.prepareAsync()
@@ -1167,41 +830,23 @@ private fun AudioPlaybackCard(record: SegmentRecord) {
                             preparing = false
                             player?.release()
                             player = null
-                            Toast.makeText(
-                                context,
-                                "音声を再生できませんでした",
-                                Toast.LENGTH_SHORT
-                            ).show()
+                            Toast.makeText(context, "音声を再生できませんでした", Toast.LENGTH_SHORT).show()
                         }
                     } else {
                         try {
-                            if (existing.isPlaying) {
-                                existing.pause()
-                                isPlaying = false
-                            } else {
-                                existing.start()
-                                isPlaying = true
-                            }
-                        } catch (_: Exception) {
-                            isPlaying = false
-                        }
+                            if (current.isPlaying) { current.pause(); playing = false }
+                            else { current.start(); playing = true }
+                        } catch (_: Exception) { playing = false }
                     }
                 },
                 enabled = !preparing,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(
-                    if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = null
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    when {
-                        preparing -> "準備中…"
-                        isPlaying -> "一時停止"
-                        else -> "音声を再生"
-                    }
-                )
+                if (!playing && !preparing) {
+                    Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(if (preparing) "準備中…" else if (playing) "一時停止" else "音声を再生")
             }
         }
     }
@@ -1210,36 +855,20 @@ private fun AudioPlaybackCard(record: SegmentRecord) {
 @Composable
 private fun TranscriptCard(record: SegmentRecord) {
     val context = LocalContext.current
-    val transcript = record.transcriptText
-
+    val text = record.transcriptText
     Card {
-        Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "文字起こし",
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.weight(1f)
-                )
-                if (transcript != null) {
-                    TextButton(
-                        onClick = {
-                            val clipboard =
-                                context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(
-                                ClipData.newPlainText("24hRecoder 文字起こし", transcript)
-                            )
-                            Toast.makeText(context, "文字起こしをコピーしました", Toast.LENGTH_SHORT).show()
-                        }
-                    ) {
-                        Text("コピー")
-                    }
+                Text("文字起こし", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                if (text != null) {
+                    TextButton(onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("24hRecoder 文字起こし", text))
+                        Toast.makeText(context, "文字起こしをコピーしました", Toast.LENGTH_SHORT).show()
+                    }) { Text("コピー") }
                 }
             }
-
-            if (transcript == null) {
+            if (text == null) {
                 Text(
                     when (record.status) {
                         "TRANSCRIBING" -> "文字起こし処理中です。"
@@ -1250,11 +879,7 @@ private fun TranscriptCard(record: SegmentRecord) {
                 )
             } else {
                 SelectionContainer {
-                    Text(
-                        if (transcript.isBlank()) "（文字起こし結果は空です）" else transcript,
-                        style = MaterialTheme.typography.bodyLarge,
-                        lineHeight = 26.sp
-                    )
+                    Text(if (text.isBlank()) "（文字起こし結果は空です）" else text, style = MaterialTheme.typography.bodyLarge, lineHeight = 26.sp)
                 }
             }
         }
@@ -1263,21 +888,9 @@ private fun TranscriptCard(record: SegmentRecord) {
 
 @Composable
 private fun InfoRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(88.dp)
-        )
-        Text(
-            value,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f)
-        )
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(88.dp))
+        Text(value, modifier = Modifier.weight(1f))
     }
 }
 
@@ -1289,64 +902,44 @@ private fun SettingsScreen(
     onDeleteModel: () -> Unit,
     onOpenSystemSettings: () -> Unit
 ) {
-    val modelProgress = dashboard.modelBytes.toFloat() /
-        WhisperModelManager.EXPECTED_BYTES.toFloat()
-
+    val context = LocalContext.current
+    val versionName = remember {
+        try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.4.0-debug" }
+        catch (_: Exception) { "0.4.0-debug" }
+    }
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
             Card {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Whisperモデル", style = MaterialTheme.typography.titleLarge)
-                    Text(
-                        "base / 多言語 / ${formatMb(WhisperModelManager.EXPECTED_BYTES)}",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    Text("base / 多言語 / ${formatMb(WhisperModelManager.EXPECTED_BYTES)}")
                     StatusPill(
-                        if (dashboard.modelReady) "準備済み"
-                        else if (dashboard.modelBytes > 0L) "取得中"
-                        else "未準備",
+                        if (dashboard.modelReady) "準備済み" else if (dashboard.modelBytes > 0L) "取得中" else "未準備",
                         if (dashboard.modelReady) StatusTone.SUCCESS else StatusTone.WAITING
                     )
-
                     if (!dashboard.modelReady && dashboard.modelBytes > 0L) {
                         LinearProgressIndicator(
-                            progress = { modelProgress.coerceIn(0f, 1f) },
+                            progress = { (dashboard.modelBytes.toFloat() / WhisperModelManager.EXPECTED_BYTES).coerceIn(0f, 1f) },
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
-
                     if (!dashboard.modelReady) {
-                        Button(
-                            onClick = onDownloadModel,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Whisper baseモデルをダウンロード")
-                        }
+                        Button(onClick = onDownloadModel, modifier = Modifier.fillMaxWidth()) { Text("Whisper baseモデルをダウンロード") }
                     }
-
-                    OutlinedButton(
-                        onClick = onRetryTranscription,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
+                    OutlinedButton(onClick = onRetryTranscription, modifier = Modifier.fillMaxWidth()) {
                         Icon(Icons.Filled.Refresh, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text("未処理音声を文字起こしへ再登録")
                     }
-
                     if (dashboard.modelBytes > 0L) {
                         OutlinedButton(
                             onClick = onDeleteModel,
                             modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = MaterialTheme.colorScheme.error
-                            )
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
                         ) {
                             Icon(Icons.Filled.Delete, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
@@ -1356,59 +949,30 @@ private fun SettingsScreen(
                 }
             }
         }
-
         item {
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer
-                )
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("プライバシー", style = MaterialTheme.typography.titleLarge)
-                    Text(
-                        "録音音声と文字起こし処理は端末内で完結します。外部APIへ音声を送信しません。初回のWhisperモデル取得時のみネット接続を使用します。",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Text(
-                        "モデル本体は1GBの作業データ制限の対象外です。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    Text("録音音声と文字起こしは端末内で完結します。外部APIへ音声を送信しません。初回のWhisperモデル取得時のみネット接続を使用します。")
+                    Text("モデル本体は1GBの作業データ制限の対象外です。", fontWeight = FontWeight.SemiBold)
                 }
             }
         }
-
         item {
             Card {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Android設定", style = MaterialTheme.typography.titleLarge)
-                    Text(
-                        "マイク権限、通知権限、バッテリー設定などはAndroidのアプリ情報画面で確認できます。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedButton(
-                        onClick = onOpenSystemSettings,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("アプリ設定を開く")
-                    }
+                    Text("マイク権限、通知権限、バッテリー設定などをAndroidのアプリ情報画面で確認できます。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedButton(onClick = onOpenSystemSettings, modifier = Modifier.fillMaxWidth()) { Text("アプリ設定を開く") }
                 }
             }
         }
-
         item {
             Text(
-                "端末再起動後はAndroidの制約により録音を自動開始しません。再起動後はホームから録音を再開してください。\n\n24hRecoder ${BuildConfig.VERSION_NAME}",
+                "端末再起動後はAndroidの制約により録音を自動開始しません。再起動後はホームから録音を再開してください。\n\n24hRecoder $versionName",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)
+                modifier = Modifier.padding(4.dp)
             )
         }
     }
@@ -1441,70 +1005,49 @@ private fun recordStatusLabel(record: SegmentRecord): String {
         "CORRUPT" -> "破損"
         "READY" -> "待機中"
         "DELETED" -> "削除済み"
-        else -> record.status.lowercase().replaceFirstChar { it.titlecase() }
+        else -> record.status
     }
 }
 
-private fun recordTone(record: SegmentRecord): StatusTone {
-    return when {
-        record.hasTranscript -> StatusTone.SUCCESS
-        record.status == "FAILED" || record.status == "CORRUPT" -> StatusTone.ERROR
-        record.status == "TRANSCRIBING" ||
-            record.status == "RETRY_WAIT" ||
-            record.status == "READY" -> StatusTone.WAITING
-        else -> StatusTone.NEUTRAL
-    }
+private fun recordTone(record: SegmentRecord) = when {
+    record.hasTranscript -> StatusTone.SUCCESS
+    record.status == "FAILED" || record.status == "CORRUPT" -> StatusTone.ERROR
+    record.status == "TRANSCRIBING" || record.status == "RETRY_WAIT" || record.status == "READY" -> StatusTone.WAITING
+    else -> StatusTone.NEUTRAL
 }
 
-private fun recordingStateLabel(state: String): String {
-    return when (state) {
-        "RECORDING" -> "録音中"
-        "STARTING" -> "録音を開始中"
-        "STOPPING" -> "録音を停止中"
-        "ERROR" -> "録音エラー"
-        else -> "録音停止中"
-    }
+private fun recordingStateLabel(state: String) = when (state) {
+    "RECORDING" -> "録音中"
+    "STARTING" -> "録音を開始中"
+    "STOPPING" -> "録音を停止中"
+    "ERROR" -> "録音エラー"
+    else -> "録音停止中"
 }
 
 private fun formatTimeRange(record: SegmentRecord): String {
     if (record.startedAtMs <= 0L) return "時刻不明"
-    val start = SimpleDateFormat("HH:mm", Locale.JAPAN).format(Date(record.startedAtMs))
-    if (record.endedAtMs <= 0L) return start
-    val end = SimpleDateFormat("HH:mm", Locale.JAPAN).format(Date(record.endedAtMs))
-    return "$start – $end"
+    val formatter = SimpleDateFormat("HH:mm", Locale.JAPAN)
+    val start = formatter.format(Date(record.startedAtMs))
+    val end = if (record.endedAtMs > 0L) formatter.format(Date(record.endedAtMs)) else null
+    return if (end == null) start else "$start – $end"
 }
 
-private fun formatDay(millis: Long): String {
-    if (millis <= 0L) return "日時不明"
-    return SimpleDateFormat("M月d日 (E)", Locale.JAPAN).format(Date(millis))
-}
+private fun formatDay(millis: Long): String =
+    if (millis <= 0L) "日時不明" else SimpleDateFormat("M月d日 (E)", Locale.JAPAN).format(Date(millis))
 
-private fun formatDateTime(millis: Long): String {
-    if (millis <= 0L) return "-"
-    return DateFormat.getDateTimeInstance(
-        DateFormat.SHORT,
-        DateFormat.MEDIUM,
-        Locale.JAPAN
-    ).format(Date(millis))
-}
+private fun formatDateTime(millis: Long): String =
+    if (millis <= 0L) "-" else DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM, Locale.JAPAN).format(Date(millis))
 
 private fun formatDuration(millis: Long): String {
-    val totalSeconds = (millis / 1000L).coerceAtLeast(0L)
-    val minutes = totalSeconds / 60L
-    val seconds = totalSeconds % 60L
-    return if (minutes > 0L) "${minutes}分${seconds}秒" else "${seconds}秒"
+    val seconds = (millis / 1000L).coerceAtLeast(0L)
+    return if (seconds >= 60L) "${seconds / 60L}分${seconds % 60L}秒" else "${seconds}秒"
 }
 
-private fun formatMb(bytes: Long): String {
-    return String.format(Locale.JAPAN, "%.1f MB", bytes / 1024.0 / 1024.0)
-}
+private fun formatMb(bytes: Long) = String.format(Locale.JAPAN, "%.1f MB", bytes / 1024.0 / 1024.0)
 
 private fun formatStorage(bytes: Long): String {
     if (bytes <= 0L) return "-"
     val gb = bytes / 1024.0 / 1024.0 / 1024.0
-    return if (gb >= 1.0) {
-        String.format(Locale.JAPAN, "%.1f GB", gb)
-    } else {
-        "${(bytes / 1024.0 / 1024.0).roundToInt()} MB"
-    }
+    return if (gb >= 1.0) String.format(Locale.JAPAN, "%.1f GB", gb)
+    else "${(bytes / 1024.0 / 1024.0).roundToInt()} MB"
 }
