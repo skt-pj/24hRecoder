@@ -30,7 +30,10 @@ public final class TranscriptionWorker extends Worker {
 
         File audioFile = new File(filePath);
         if (TranscriptionRepository.exists(context, segmentId)) {
-            deleteAudio(context, segmentId, audioFile);
+            // The transcript is already durable. Keep the source M4A so the History UI can
+            // play recent recordings. StoragePolicy will remove old transcribed audio first
+            // when the logical storage budget or device free-space reserve requires cleanup.
+            log(context, "TRANSCRIPT_ALREADY_SAVED_AUDIO_RETAINED", segmentId, audioFile, null, null);
             return Result.success();
         }
         if (!audioFile.isFile()) {
@@ -64,8 +67,8 @@ public final class TranscriptionWorker extends Worker {
             metrics.put("decodeMs", response.decodeMs);
             metrics.put("inferenceMs", response.inferenceMs);
             metrics.put("textChars", response.text.length());
+            metrics.put("audioRetained", true);
             log(context, "LOCAL_TRANSCRIPTION_SAVED", segmentId, audioFile, null, metrics);
-            deleteAudio(context, segmentId, audioFile);
             return Result.success();
         } catch (OutOfMemoryError oom) {
             SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),
@@ -82,22 +85,6 @@ public final class TranscriptionWorker extends Worker {
                     segmentId, audioFile,
                     error.getClass().getSimpleName() + ": " + safeMessage(error), null);
             return retry ? Result.retry() : Result.failure();
-        }
-    }
-
-    private static void deleteAudio(Context context, String segmentId, File audioFile) {
-        if (audioFile == null || !audioFile.exists()) {
-            return;
-        }
-        long size = audioFile.length();
-        long modified = audioFile.lastModified();
-        if (audioFile.delete()) {
-            SegmentRepository.append(context, segmentId, audioFile, modified,
-                    System.currentTimeMillis(), "DELETED", "TRANSCRIPT_DURABLY_SAVED");
-            log(context, "TRANSCRIBED_AUDIO_DELETED", segmentId, audioFile,
-                    "deletedBytes=" + size, null);
-        } else {
-            log(context, "TRANSCRIBED_AUDIO_DELETE_FAILED", segmentId, audioFile, null, null);
         }
     }
 
