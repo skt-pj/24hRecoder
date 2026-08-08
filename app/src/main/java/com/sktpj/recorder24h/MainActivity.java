@@ -9,11 +9,9 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
-import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -23,10 +21,10 @@ import com.sktpj.recorder24h.service.RecorderService;
 import com.sktpj.recorder24h.storage.RecorderStateStore;
 import com.sktpj.recorder24h.storage.RecordingIntentStore;
 import com.sktpj.recorder24h.storage.StoragePolicy;
-import com.sktpj.recorder24h.transcription.ApiKeyStore;
-import com.sktpj.recorder24h.transcription.OpenAiTranscriptionClient;
+import com.sktpj.recorder24h.transcription.LocalWhisperEngine;
 import com.sktpj.recorder24h.transcription.TranscriptionRepository;
 import com.sktpj.recorder24h.transcription.TranscriptionScheduler;
+import com.sktpj.recorder24h.transcription.WhisperModelManager;
 import com.sktpj.recorder24h.util.AppLogger;
 
 import org.json.JSONObject;
@@ -46,7 +44,6 @@ public final class MainActivity extends Activity {
     private TextView heartbeatText;
     private TextView detailText;
     private TextView transcriptionText;
-    private EditText apiKeyInput;
     private Button startButton;
     private Button stopButton;
     private boolean startAfterPermission;
@@ -64,7 +61,7 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(buildContent());
         AppLogger.event(this, "MAIN_ACTIVITY_CREATED");
-        if (ApiKeyStore.isConfigured(this)) {
+        if (WhisperModelManager.isReady(this)) {
             TranscriptionScheduler.enqueueExisting(this);
         }
         refreshStatus();
@@ -89,7 +86,8 @@ public final class MainActivity extends Activity {
         if (requestCode != REQUEST_PERMISSIONS) {
             return;
         }
-        if (startAfterPermission && checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+        if (startAfterPermission
+                && checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             startAfterPermission = false;
             startRecording();
         } else {
@@ -105,10 +103,9 @@ public final class MainActivity extends Activity {
         root.setPadding(pad, pad, pad, pad);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
 
-        TextView title = text("24hRecoder", 28, true);
-        root.addView(title, matchWrap());
+        root.addView(text("24hRecoder", 28, true), matchWrap());
 
-        TextView subtitle = text("Pixel 10a / Android 16  0.2.0-debug", 15, false);
+        TextView subtitle = text("Pixel 10a / Android 16  0.3.0-debug", 15, false);
         LinearLayout.LayoutParams subtitleParams = matchWrap();
         subtitleParams.setMargins(0, dp(8), 0, dp(24));
         root.addView(subtitle, subtitleParams);
@@ -141,54 +138,51 @@ public final class MainActivity extends Activity {
         stopParams.setMargins(0, dp(8), 0, dp(20));
         root.addView(stopButton, stopParams);
 
-        TextView transcriptionTitle = text("文字起こし", 20, true);
-        root.addView(transcriptionTitle, matchWrap());
+        root.addView(text("ローカル文字起こし", 20, true), matchWrap());
 
         transcriptionText = text("文字起こし: -", 14, false);
         LinearLayout.LayoutParams transcriptionParams = matchWrap();
         transcriptionParams.setMargins(0, dp(8), 0, dp(8));
         root.addView(transcriptionText, transcriptionParams);
 
-        apiKeyInput = new EditText(this);
-        apiKeyInput.setHint("OpenAI API key");
-        apiKeyInput.setSingleLine(true);
-        apiKeyInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        root.addView(apiKeyInput, matchWrap());
-
-        Button saveKeyButton = new Button(this);
-        saveKeyButton.setText("APIキーを保存");
-        saveKeyButton.setOnClickListener(v -> saveApiKey());
-        LinearLayout.LayoutParams keyButtonParams = matchWrap();
-        keyButtonParams.setMargins(0, dp(8), 0, 0);
-        root.addView(saveKeyButton, keyButtonParams);
-
-        Button clearKeyButton = new Button(this);
-        clearKeyButton.setText("APIキーを削除");
-        clearKeyButton.setOnClickListener(v -> {
-            ApiKeyStore.clear(this);
-            apiKeyInput.setText("");
-            AppLogger.event(this, "OPENAI_API_KEY_CLEARED");
+        Button downloadModelButton = new Button(this);
+        downloadModelButton.setText("Whisper baseモデルをダウンロード");
+        downloadModelButton.setOnClickListener(v -> {
+            WhisperModelManager.enqueueDownload(this);
+            AppLogger.event(this, "UI_WHISPER_MODEL_DOWNLOAD_REQUESTED");
+            Toast.makeText(this, "モデルのダウンロードをキューへ登録しました", Toast.LENGTH_SHORT).show();
             refreshStatus();
         });
-        root.addView(clearKeyButton, matchWrap());
+        root.addView(downloadModelButton, matchWrap());
 
         Button retryTranscriptionButton = new Button(this);
-        retryTranscriptionButton.setText("未処理音声を文字起こしキューへ登録");
+        retryTranscriptionButton.setText("未処理音声をローカル文字起こしへ登録");
         retryTranscriptionButton.setOnClickListener(v -> {
-            if (!ApiKeyStore.isConfigured(this)) {
-                Toast.makeText(this, "先にOpenAI APIキーを保存してください", Toast.LENGTH_SHORT).show();
+            if (!WhisperModelManager.isReady(this)) {
+                Toast.makeText(this, "先にWhisperモデルをダウンロードしてください", Toast.LENGTH_SHORT).show();
                 return;
             }
             int count = TranscriptionScheduler.enqueueExisting(this);
-            Toast.makeText(this, count + "件を確認しました", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, count + "件をキューへ確認しました", Toast.LENGTH_SHORT).show();
             refreshStatus();
         });
         LinearLayout.LayoutParams retryParams = matchWrap();
         retryParams.setMargins(0, dp(8), 0, 0);
         root.addView(retryTranscriptionButton, retryParams);
 
+        Button deleteModelButton = new Button(this);
+        deleteModelButton.setText("Whisperモデルを削除");
+        deleteModelButton.setOnClickListener(v -> {
+            boolean deleted = WhisperModelManager.deleteModel(this);
+            AppLogger.event(this, deleted ? "UI_WHISPER_MODEL_DELETED" : "UI_WHISPER_MODEL_DELETE_FAILED");
+            Toast.makeText(this, deleted ? "モデルを削除しました" : "モデルを削除できませんでした",
+                    Toast.LENGTH_SHORT).show();
+            refreshStatus();
+        });
+        root.addView(deleteModelButton, matchWrap());
+
         TextView privacyNotice = text(
-                "APIキーを設定すると、確定済みの5分音声をOpenAI APIへ送信します。API利用料金が発生する場合があります。キーはAndroid Keystoreで暗号化して端末内に保存し、ログには出力しません。文字起こしの永続保存に成功した音声だけを削除します。",
+                "文字起こしは端末内のwhisper.cppで実行し、録音音声を外部APIへ送信しません。初回のみWhisper baseモデルをインターネットから取得します。モデル本体は1GBの作業データ上限には含めません。文字起こし結果を永続保存できた音声だけを削除します。",
                 13,
                 false);
         LinearLayout.LayoutParams privacyParams = matchWrap();
@@ -215,25 +209,6 @@ public final class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.addView(root);
         return scroll;
-    }
-
-    private void saveApiKey() {
-        String value = apiKeyInput.getText().toString().trim();
-        if (value.isEmpty()) {
-            Toast.makeText(this, "APIキーを入力してください", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        try {
-            ApiKeyStore.save(this, value);
-            apiKeyInput.setText("");
-            AppLogger.event(this, "OPENAI_API_KEY_SAVED");
-            int count = TranscriptionScheduler.enqueueExisting(this);
-            Toast.makeText(this, "APIキーを保存しました。未処理 " + count + "件を確認しました", Toast.LENGTH_SHORT).show();
-        } catch (Exception e) {
-            AppLogger.event(this, "OPENAI_API_KEY_SAVE_FAILED");
-            Toast.makeText(this, "APIキーを安全に保存できませんでした", Toast.LENGTH_LONG).show();
-        }
-        refreshStatus();
     }
 
     private void requestStart() {
@@ -290,7 +265,7 @@ public final class MainActivity extends Activity {
         statusText.setText("状態: " + status);
         heartbeatText.setText("heartbeat: " + formatTime(heartbeatMs));
         storageText.setText(String.format(Locale.JAPAN,
-                "音声 %.1f MB / 600 MB   アプリデータ %.1f MB / 1 GB",
+                "音声 %.1f MB / 600 MB   作業データ %.1f MB / 1 GB",
                 mb(StoragePolicy.audioBytes(this)),
                 mb(StoragePolicy.appDataBytes(this))));
 
@@ -304,12 +279,16 @@ public final class MainActivity extends Activity {
         }
         detailText.setText(detail.toString());
 
-        boolean keyConfigured = ApiKeyStore.isConfigured(this);
-        transcriptionText.setText(
-                "OpenAI APIキー: " + (keyConfigured ? "設定済み" : "未設定")
-                        + "\nモデル: " + OpenAiTranscriptionClient.MODEL
-                        + "\n未処理音声: " + TranscriptionScheduler.pendingAudioCount(this) + "件"
-                        + "\n文字起こし保存済み: " + TranscriptionRepository.count(this) + "件");
+        boolean modelReady = WhisperModelManager.isReady(this);
+        long modelBytes = WhisperModelManager.downloadedBytes(this);
+        transcriptionText.setText(String.format(Locale.JAPAN,
+                "方式: %s\nモデル: base / %s\nモデル状態: %s (%.1f MB)\n未処理音声: %d件\n文字起こし保存済み: %d件",
+                LocalWhisperEngine.ENGINE_ID,
+                "1GB作業データ上限の対象外",
+                modelReady ? "準備済み" : "未準備",
+                mb(modelBytes),
+                TranscriptionScheduler.pendingAudioCount(this),
+                TranscriptionRepository.count(this)));
 
         boolean active = "STARTING".equals(status) || "RECORDING".equals(status) || "STOPPING".equals(status);
         startButton.setEnabled(!active);
