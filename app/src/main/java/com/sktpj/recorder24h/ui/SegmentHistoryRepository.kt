@@ -62,12 +62,18 @@ object SegmentHistoryRepository {
             val audio = builder.audioFile?.takeIf { it.isFile }
             val started = builder.recordedStartMs.takeIf { it > 0L } ?: builder.fallbackStartMs
             val ended = builder.recordedEndMs
-            val sortTime = listOf(
-                started,
-                builder.transcribedAtMs,
-                audio?.lastModified() ?: 0L,
-                builder.latestEventMs
-            ).maxOrNull() ?: 0L
+            // A history item represents when audio was captured, not when a later
+            // transcription/retry happened. Only fall back to processing/file time
+            // for legacy or orphaned records that have no capture timestamp.
+            val sortTime = if (started > 0L) {
+                started
+            } else {
+                listOf(
+                    builder.transcribedAtMs,
+                    audio?.lastModified() ?: 0L,
+                    builder.latestEventMs
+                ).maxOrNull() ?: 0L
+            }
 
             SegmentRecord(
                 segmentId = builder.segmentId,
