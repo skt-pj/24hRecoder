@@ -1,6 +1,6 @@
 # 24hRecoder
 
-Android 16 / Pixel 10aを初期基準端末とした24時間録音・文字起こしアプリです。
+Android 16 / Pixel 10aを初期基準端末とした24時間録音アプリです。
 
 ## 現在の実装
 
@@ -15,24 +15,24 @@ Android 16 / Pixel 10aを初期基準端末とした24時間録音・文字起�
 - 600 MB音声上限と古い音声のローリング削除
 - `AudioRecordingCallback`による入力silenced検出ログ
 - 再起動後の自動録音開始は行わず、再開通知のみ表示
-- OpenAI Audio Transcriptions APIによる5分セグメント文字起こし
-- `gpt-4o-mini-transcribe`を初期文字起こしモデルとして使用
-- WorkManagerによるネットワーク待ち・再試行・重複排除
-- OpenAI APIキーをAndroid Keystoreで暗号化して端末内保存
-- 文字起こしJSONを永続保存してから元音声を削除
 - JSON Lines形式のイベントログ
+- `whisper.cpp v1.9.1`をAndroid NDKで組み込んだ完全ローカル文字起こし
+- 多言語Whisper `base`モデルを使用
+- 5分M4AをAndroid MediaCodecでPCMへ復号し、端末内で推論
+- WorkManagerで文字起こしを録音処理から分離し、低バッテリー時は延期
+- 文字起こし結果をfsyncで永続保存してから元音声を削除
 
-## 文字起こし
+## ローカルWhisperモデル
 
-アプリ画面でOpenAI APIキーを入力して保存すると、未処理のM4Aと以後確定する5分セグメントを文字起こしキューへ登録します。
+初回のみアプリ画面から`ggml-base.bin`をダウンロードします。取得元はwhisper.cppが案内しているHugging Faceの`ggerganov/whisper.cpp`モデル配布先です。ダウンロード後はSHA-1を検証します。
 
-文字起こし結果はアプリ専用領域の`files/transcripts/<segmentId>.json`へ保存します。保存成功前に元音声は削除しません。通信失敗、HTTP 429、5xxはWorkManagerで再試行します。401/403などの恒久エラー時は音声を保持します。
+モデルは`noBackupFilesDir/whisper/`へ保存し、24hRecoderの「作業データ1GB」論理上限には含めません。ただし端末の実空き容量監視からは除外しません。
 
-APIキーはソースコード・APKへ埋め込みません。入力したキーはAndroid Keystoreで暗号化して保存します。
+文字起こし時に録音音声をOpenAI等の外部文字起こしAPIへ送信しません。モデル取得完了後は文字起こし自体にネットワーク接続は不要です。
 
 ## ビルド
 
-Android SDK API 36、JDK 17、Gradle 8.13、Android Gradle Plugin 8.13.2を使用します。
+Android SDK API 36、JDK 17、Gradle 8.13、Android Gradle Plugin 8.13.2、NDK 27.0.12077973、CMake 3.22.1を使用します。ネイティブビルド時に`whisper.cpp v1.9.1`のソースを取得してarm64-v8a向けにビルドします。
 
 ```bash
 gradle :app:assembleDebug
@@ -40,9 +40,14 @@ gradle :app:assembleDebug
 
 APK: `app/build/outputs/apk/debug/app-debug.apk`
 
-## 現在未実装
+## 現在のバージョン
 
-- LLMによる会話履歴化
-- 1日のノート生成
-- マインドマップ / アクションアイテム生成
-- 端末内Whisper
+- versionName: `0.3.0-debug`
+- versionCode: `3`
+- minSdk: `29`
+- targetSdk: `36`
+- ABI: `arm64-v8a`
+
+## 注意
+
+Pixel 10a実機での5分音声の推論時間、24時間録音との同時運用時の電池消費・温度・メモリ使用量は実測が必要です。ローカル文字起こしが失敗しても録音処理を停止させず、元音声は保持します。
