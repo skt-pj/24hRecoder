@@ -3,6 +3,7 @@ package com.sktpj.recorder24h.storage;
 import android.content.Context;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -19,10 +20,25 @@ public final class RecordingIntentStore {
             if (!file.exists()) {
                 return false;
             }
-            return "1".equals(Files.readString(file.toPath(), StandardCharsets.UTF_8).trim());
+            return "1".equals(readUtf8(file).trim());
         } catch (Exception e) {
             return false;
         }
+    }
+
+    private static String readUtf8(File file) throws Exception {
+        byte[] buffer = new byte[(int) file.length()];
+        int offset = 0;
+        try (FileInputStream in = new FileInputStream(file)) {
+            while (offset < buffer.length) {
+                int read = in.read(buffer, offset, buffer.length - offset);
+                if (read < 0) {
+                    break;
+                }
+                offset += read;
+            }
+        }
+        return new String(buffer, 0, offset, StandardCharsets.UTF_8);
     }
 
     public static void setRequested(Context context, boolean requested) {

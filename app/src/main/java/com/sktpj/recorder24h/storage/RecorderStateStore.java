@@ -5,6 +5,7 @@ import android.content.Context;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -21,10 +22,25 @@ public final class RecorderStateStore {
             if (!file.exists()) {
                 return defaultState();
             }
-            return new JSONObject(Files.readString(file.toPath(), StandardCharsets.UTF_8));
+            return new JSONObject(readUtf8(file));
         } catch (Exception e) {
             return defaultState();
         }
+    }
+
+    private static String readUtf8(File file) throws Exception {
+        byte[] buffer = new byte[(int) file.length()];
+        int offset = 0;
+        try (FileInputStream in = new FileInputStream(file)) {
+            while (offset < buffer.length) {
+                int read = in.read(buffer, offset, buffer.length - offset);
+                if (read < 0) {
+                    break;
+                }
+                offset += read;
+            }
+        }
+        return new String(buffer, 0, offset, StandardCharsets.UTF_8);
     }
 
     public static void write(Context context, String state, String segmentId, String error) {
