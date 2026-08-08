@@ -2,6 +2,7 @@ package com.sktpj.recorder24h.storage;
 
 import android.content.Context;
 
+import com.sktpj.recorder24h.transcription.TranscriptionRepository;
 import com.sktpj.recorder24h.util.AppLogger;
 
 import org.json.JSONObject;
@@ -52,7 +53,12 @@ public final class StoragePolicy {
             return;
         }
 
-        files.sort(Comparator.comparingLong(File::lastModified));
+        // Preserve recent recordings for playback. Under pressure, delete the oldest audio
+        // that already has a durable transcript before considering untranscribed audio.
+        files.sort(Comparator
+                .comparingInt((File file) -> isTranscribed(context, file) ? 0 : 1)
+                .thenComparingLong(File::lastModified));
+
         for (File file : files) {
             if (audioBytes <= AUDIO_CLEANUP_TARGET_BYTES
                     && appBytes <= (LOGICAL_APP_LIMIT_BYTES - EMERGENCY_RESERVE_BYTES)
@@ -60,12 +66,23 @@ public final class StoragePolicy {
                 break;
             }
 
+            String segmentId = extractSegmentId(file.getName());
+            boolean transcribed = TranscriptionRepository.exists(context, segmentId);
             long size = file.length();
+            long modified = file.lastModified();
             if (file.delete()) {
                 audioBytes -= size;
                 appBytes -= size;
                 usable = context.getFilesDir().getUsableSpace();
-                logDataLoss(context, file, size, audioBytes, appBytes, usable);
+                if (transcribed) {
+                    SegmentRepository.append(context, segmentId, file, modified,
+                            System.currentTimeMillis(), "DELETED",
+                            "STORAGE_PRESSURE_TRANSCRIBED_RETENTION");
+                    logTranscribedEviction(context, file, segmentId, size,
+                            audioBytes, appBytes, usable);
+                } else {
+                    logDataLoss(context, file, segmentId, size, audioBytes, appBytes, usable);
+                }
             }
         }
     }
@@ -92,6 +109,10 @@ public final class StoragePolicy {
             } catch (Exception ignored) {
             }
         }
+    }
+
+    private static boolean isTranscribed(Context context, File file) {
+        return TranscriptionRepository.exists(context, extractSegmentId(file.getName()));
     }
 
     private static List<File> finalizedAudioFiles(Context context) {
@@ -131,11 +152,29 @@ public final class StoragePolicy {
         return "unknown";
     }
 
-    private static void logDataLoss(Context context, File file, long size, long audioBytes,
-                                    long appBytes, long usable) {
+    private static void logTranscribedEviction(Context context, File file, String segmentId,
+                                               long size, long audioBytes, long appBytes,
+                                               long usable) {
         try {
             JSONObject d = new JSONObject();
             d.put("file", file.getName());
+            d.put("segmentId", segmentId);
+            d.put("deletedBytes", size);
+            d.put("audioBytesAfter", audioBytes);
+            d.put("appBytesAfter", appBytes);
+            d.put("usableBytesAfter", usable);
+            d.put("reason", "STORAGE_PRESSURE_TRANSCRIBED_RETENTION");
+            AppLogger.event(context, "TRANSCRIBED_AUDIO_EVICTED", d);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static void logDataLoss(Context context, File file, String segmentId, long size,
+                                    long audioBytes, long appBytes, long usable) {
+        try {
+            JSONObject d = new JSONObject();
+            d.put("file", file.getName());
+            d.put("segmentId", segmentId);
             d.put("deletedBytes", size);
             d.put("audioBytesAfter", audioBytes);
             d.put("appBytesAfter", appBytes);
