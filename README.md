@@ -49,6 +49,16 @@ Android 16 / Pixel 10aを初期基準端末とした24時間録音アプリで�
 
 文字起こし時に録音音声をOpenAI等の外部文字起こしAPIへ送信しません。モデル取得完了後は文字起こし自体にネットワーク接続は不要です。
 
+## APK署名・バージョン管理
+
+debug APKのapplicationIdは`com.sktpj.recorder24h.debug`で固定します。`versionCode`はリリースごとに必ず単調増加させます。
+
+0.4.0以前はGitHub Actionsの一時debug keystoreに依存していたため、CI runごとに署名鍵が変わり、Android上で上書き更新できませんでした。0.4.1-debug以降はGradleからdebug自動署名を外し、GitHub ActionsでAOSPの固定testkeyを使用して署名します。これにより0.4.1-debug以降のCI成果物同士は同じ証明書で更新できます。
+
+このtestkeyは公開された開発・テスト用鍵であり、production releaseには絶対に使用しません。正式配布時は専用の非公開release鍵へ切り替えます。
+
+既に0.4.0以前のランダムdebug鍵でインストール済みのAPKは、対応する秘密鍵が残っていないため0.4.1-debugへ直接更新できません。一度だけアンインストールして0.4.1-debugを新規インストールする必要があります。そのアンインストールではアプリ内部データが削除されるため、必要な録音・文字起こしデータがある場合は事前退避が必要です。
+
 ## ビルド
 
 Android SDK API 36、JDK 17、Gradle 8.13、Android Gradle Plugin 8.13.2、Kotlin 2.3.21、Compose BOM 2026.06.00、NDK 27.0.12077973、CMake 3.22.1を使用します。ネイティブビルド時に`whisper.cpp v1.9.1`のソースを取得してarm64-v8a向けにビルドします。
@@ -57,12 +67,12 @@ Android SDK API 36、JDK 17、Gradle 8.13、Android Gradle Plugin 8.13.2、Kotli
 gradle :app:assembleDebug
 ```
 
-APK: `app/build/outputs/apk/debug/app-debug.apk`
+ローカルの`assembleDebug`出力は署名前APKです。配布用debug APKはGitHub Actionsで固定testkeyを適用し、`app/build/outputs/apk/debug/app-debug.apk`としてアップロードします。
 
 ## 現在のバージョン
 
-- versionName: `0.4.0-debug`
-- versionCode: `4`
+- versionName: `0.4.1-debug`
+- versionCode: `5`
 - minSdk: `29`
 - targetSdk: `36`
 - ABI: `arm64-v8a`
