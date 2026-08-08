@@ -31,10 +31,29 @@ jobs:
         run: |
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "ndk;27.0.12077973" "cmake;3.22.1"
+          "$SDKMANAGER" "ndk;27.0.12077973" "cmake;3.22.1" "build-tools;36.0.0"
 
-      - name: Build debug APK
+      - name: Build unsigned debug APK
         run: gradle --stacktrace :app:assembleDebug
+
+      - name: Apply stable development signature
+        run: |
+          set -euo pipefail
+          mkdir -p .ci-signing
+          curl -fsSL "https://android.googlesource.com/platform/build/+/ddec2f0/target/product/security/testkey.pk8?format=TEXT" | base64 --decode > .ci-signing/testkey.pk8
+          curl -fsSL "https://android.googlesource.com/platform/build/+/ddec2f0/target/product/security/testkey.x509.pem?format=TEXT" | base64 --decode > .ci-signing/testkey.x509.pem
+
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          UNSIGNED_APK="app/build/outputs/apk/debug/app-debug-unsigned.apk"
+          SIGNED_APK="app/build/outputs/apk/debug/app-debug.apk"
+
+          test -f "$UNSIGNED_APK"
+          "$APKSIGNER" sign \
+            --key .ci-signing/testkey.pk8 \
+            --cert .ci-signing/testkey.x509.pem \
+            --out "$SIGNED_APK" \
+            "$UNSIGNED_APK"
+          "$APKSIGNER" verify --verbose --print-certs "$SIGNED_APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
