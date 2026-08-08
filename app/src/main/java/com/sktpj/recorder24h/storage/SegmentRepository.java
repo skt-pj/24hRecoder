@@ -2,6 +2,8 @@ package com.sktpj.recorder24h.storage;
 
 import android.content.Context;
 
+import com.sktpj.recorder24h.transcription.TranscriptionScheduler;
+
 import org.json.JSONObject;
 
 import java.io.File;
@@ -16,6 +18,12 @@ public final class SegmentRepository {
 
     public static void append(Context context, String segmentId, File file, long startedAtMs,
                               long endedAtMs, String status, String reason) {
+        boolean newlyReady = "READY".equals(status)
+                && reason == null
+                && file != null
+                && file.isFile()
+                && file.getName().endsWith(".m4a");
+
         synchronized (LOCK) {
             try {
                 File dir = new File(context.getFilesDir(), "metadata");
@@ -38,7 +46,12 @@ public final class SegmentRepository {
                     out.getFD().sync();
                 }
             } catch (Exception ignored) {
+                return;
             }
+        }
+
+        if (newlyReady) {
+            TranscriptionScheduler.notifySegmentReady(context, segmentId, file);
         }
     }
 }
