@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit;
 public final class TranscriptionScheduler {
     public static final String EXTRA_SEGMENT_ID = "segmentId";
     public static final String EXTRA_FILE_PATH = "filePath";
+    public static final String EXTRA_FORCE_RETRANSCRIBE = "forceRetranscribe";
     static final String ACTION_SEGMENT_READY = "com.sktpj.recorder24h.action.SEGMENT_READY";
 
     private TranscriptionScheduler() {
@@ -38,19 +39,29 @@ public final class TranscriptionScheduler {
     }
 
     public static void enqueue(Context context, String segmentId, File file) {
+        enqueueInternal(context, segmentId, file, false);
+    }
+
+    public static boolean enqueueForceRetranscription(Context context, String segmentId, File file) {
+        return enqueueInternal(context, segmentId, file, true);
+    }
+
+    private static boolean enqueueInternal(Context context, String segmentId, File file,
+                                           boolean forceRetranscribe) {
         if (segmentId == null || segmentId.isEmpty() || file == null || !file.isFile()) {
-            return;
+            return false;
         }
-        if (TranscriptionRepository.isCurrentEngine(context, segmentId, LocalWhisperEngine.ENGINE_ID)) {
+        if (!forceRetranscribe &&
+                TranscriptionRepository.isCurrentEngine(context, segmentId, LocalWhisperEngine.ENGINE_ID)) {
             log(context, "TRANSCRIPT_CURRENT_ENGINE_AUDIO_RETAINED", segmentId, file, null);
-            return;
+            return false;
         }
         if (!WhisperModelManager.isReady(context)) {
             WhisperModelManager.enqueueDownload(context);
             String reason = WhisperModelManager.isAsrReady(context)
                     ? "SILERO_VAD_MODEL_MISSING" : "LOCAL_MODEL_MISSING";
             log(context, "TRANSCRIPTION_WAITING_FOR_LOCAL_MODELS", segmentId, file, reason);
-            return;
+            return false;
         }
 
         Constraints constraints = new Constraints.Builder()
@@ -59,6 +70,7 @@ public final class TranscriptionScheduler {
         Data input = new Data.Builder()
                 .putString(EXTRA_SEGMENT_ID, segmentId)
                 .putString(EXTRA_FILE_PATH, file.getAbsolutePath())
+                .putBoolean(EXTRA_FORCE_RETRANSCRIBE, forceRetranscribe)
                 .build();
         OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(TranscriptionWorker.class)
                 .setInputData(input)
@@ -66,14 +78,20 @@ public final class TranscriptionScheduler {
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .addTag("transcription")
                 .addTag("segment:" + segmentId)
+                .addTag(forceRetranscribe ? "manual-retranscription" : "automatic-transcription")
                 .build();
         WorkManager.getInstance(context.getApplicationContext()).enqueueUniqueWork(
-                uniqueWorkName(segmentId),
+                forceRetranscribe ? forceWorkName(segmentId) : uniqueWorkName(segmentId),
                 ExistingWorkPolicy.KEEP,
                 request);
-        log(context, TranscriptionRepository.exists(context, segmentId)
-                        ? "LOCAL_RETRANSCRIPTION_ENQUEUED" : "LOCAL_TRANSCRIPTION_ENQUEUED",
-                segmentId, file, null);
+        if (forceRetranscribe) {
+            log(context, "MANUAL_RETRANSCRIPTION_ENQUEUED", segmentId, file, null);
+        } else {
+            log(context, TranscriptionRepository.exists(context, segmentId)
+                            ? "LOCAL_RETRANSCRIPTION_ENQUEUED" : "LOCAL_TRANSCRIPTION_ENQUEUED",
+                    segmentId, file, null);
+        }
+        return true;
     }
 
     public static int enqueueExisting(Context context) {
@@ -130,6 +148,10 @@ public final class TranscriptionScheduler {
 
     private static String uniqueWorkName(String segmentId) {
         return "transcribe:" + segmentId;
+    }
+
+    private static String forceWorkName(String segmentId) {
+        return "manual-retranscribe:" + segmentId;
     }
 
     static void log(Context context, String event, String segmentId, File file, String message) {
