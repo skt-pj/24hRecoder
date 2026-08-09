@@ -18,7 +18,9 @@ jobs:
           ref: work/manual-retranscription-status-v0.4.10
           fetch-depth: 0
       - name: Apply v0.4.10 changes
-        run: python3 .github/patch-v0410.py
+        run: |
+          sed -i 's/- 現在のdebug APK: `0.4.8-debug` \/ versionCode 12/- 現在のdebug APK: `0.4.9-debug` \/ versionCode 13/' README.md
+          python3 .github/patch-v0410.py
       - name: Commit patched source
         run: |
           git config user.name github-actions[bot]
