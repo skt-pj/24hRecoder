@@ -36,6 +36,36 @@ jobs:
       - name: Build unsigned debug APK
         run: gradle --stacktrace :app:assembleDebug
 
+      - name: Verify optimized Whisper native build
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob
+          import json
+          import sys
+
+          paths = glob.glob('app/.cxx/**/compile_commands.json', recursive=True)
+          if not paths:
+              print('compile_commands.json was not generated', file=sys.stderr)
+              sys.exit(1)
+          commands = []
+          for path in paths:
+              with open(path, encoding='utf-8') as handle:
+                  commands.extend(json.load(handle))
+          whisper_commands = [
+              row.get('command', '')
+              for row in commands
+              if 'whisper' in row.get('file', '').lower() or 'ggml' in row.get('file', '').lower()
+          ]
+          if not whisper_commands:
+              print('No whisper.cpp/ggml compile commands found', file=sys.stderr)
+              sys.exit(1)
+          if any('-O3' not in command for command in whisper_commands):
+              print('At least one whisper.cpp/ggml source is missing -O3', file=sys.stderr)
+              sys.exit(1)
+          print(f'Verified -O3 on {len(whisper_commands)} whisper.cpp/ggml compile commands')
+          PY
+
       - name: Apply stable development signature
         run: |
           set -euo pipefail
