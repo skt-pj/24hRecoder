@@ -16,7 +16,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -53,6 +55,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
@@ -373,21 +377,7 @@ private fun RecorderApp(
                                 val removed = TranscriptionScheduler.removeFromQueue(context, record.segmentId, file)
                                 if (removed) {
                                     refresh++
-                                    Toast.makeText(context, "キューから外しました。音声は残します", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            onAdd = { record ->
-                                val audioPath = record.audioPath
-                                val added = audioPath != null && TranscriptionScheduler.enqueueForceRetranscription(
-                                    context, record.segmentId, java.io.File(audioPath)
-                                )
-                                if (added) {
-                                    refresh++
-                                    Toast.makeText(context, "文字起こしキューに追加しました", Toast.LENGTH_SHORT).show()
-                                } else if (!WhisperModelManager.isReady(context)) {
-                                    Toast.makeText(context, "large-v3 Q5 / VADモデルが未準備です", Toast.LENGTH_LONG).show()
-                                } else {
-                                    Toast.makeText(context, "キューに追加できませんでした", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "キューから削除しました", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         )
@@ -628,251 +618,102 @@ private fun TranscriptionCard(dashboard: DashboardSnapshot, onOpenHistory: () ->
 private fun QueueScreen(
     records: List<SegmentRecord>,
     onSelect: (SegmentRecord) -> Unit,
-    onRemove: (SegmentRecord) -> Unit,
-    onAdd: (SegmentRecord) -> Unit
+    onRemove: (SegmentRecord) -> Unit
 ) {
-    val running = remember(records) {
-        records.filter { it.status == "TRANSCRIBING" }.sortedBy { it.stateChangedAtMs }
+    val queued = remember(records) {
+        records
+            .filter { it.status == "QUEUED" || it.status == "RETRY_WAIT" }
+            .sortedBy {
+                if (it.queueEnqueuedAtMs > 0L) it.queueEnqueuedAtMs else it.stateChangedAtMs
+            }
     }
-    val waiting = remember(records) {
-        records.filter { it.status == "QUEUED" }.sortedBy {
-            if (it.queueEnqueuedAtMs > 0L) it.queueEnqueuedAtMs else it.stateChangedAtMs
+
+    if (queued.isEmpty()) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("キューは空です", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-    }
-    val retry = remember(records) {
-        records.filter { it.status == "RETRY_WAIT" }.sortedBy { it.stateChangedAtMs }
-    }
-    val failed = remember(records) {
-        records.filter { it.status == "FAILED" && it.audioAvailable }.sortedByDescending { it.stateChangedAtMs }
-    }
-    val unqueued = remember(records) {
-        records.filter { it.status == "READY" && it.audioAvailable }
-            .sortedByDescending { it.sortTimeMs }
+        return
     }
 
     LazyColumn(
         Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        contentPadding = PaddingValues(vertical = 4.dp)
     ) {
-        item {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("現在のキュー", style = MaterialTheme.typography.titleLarge)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Metric("実行中", "${running.size}件")
-                        Metric("待機", "${waiting.size}件")
-                        Metric("再試行", "${retry.size}件")
-                    }
-                    Text(
-                        "カードをタップすると、その音声の記録詳細を開きます。追加元（自動/ユーザー）は状態ではなく補助情報として表示します。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.78f)
-                    )
-                }
-            }
-        }
-
-        if (running.isNotEmpty()) {
-            item { QueueSectionHeader("実行中", "Whisper large-v3 Q5が現在処理している音声") }
-            itemsIndexed(running, key = { _, item -> "running:${item.segmentId}" }) { _, record ->
-                QueueRecordCard(record, onOpen = { onSelect(record) })
-            }
-        }
-
-        if (waiting.isNotEmpty()) {
-            item { QueueSectionHeader("待機中", "上から登録時刻の古い順。状態理由を省略せず表示") }
-            itemsIndexed(waiting, key = { _, item -> "waiting:${item.segmentId}" }) { index, record ->
-                QueueRecordCard(
-                    record,
-                    position = index + 1,
-                    onOpen = { onSelect(record) },
-                    actionLabel = "キューから外す",
-                    onAction = { onRemove(record) }
-                )
-            }
-        }
-
-        if (retry.isNotEmpty()) {
-            item { QueueSectionHeader("再試行待ち", "前回処理が失敗し、WorkManagerの再試行を待っている音声") }
-            itemsIndexed(retry, key = { _, item -> "retry:${item.segmentId}" }) { _, record ->
-                QueueRecordCard(
-                    record,
-                    onOpen = { onSelect(record) },
-                    actionLabel = "キューから外す",
-                    onAction = { onRemove(record) }
-                )
-            }
-        }
-
-        if (running.isEmpty() && waiting.isEmpty() && retry.isEmpty()) {
-            item {
-                Card {
-                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("キューは空です", style = MaterialTheme.typography.titleLarge)
-                        Text("保存済み音声は下の「キュー外の音声」から追加できます。", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
-        }
-
-        if (failed.isNotEmpty()) {
-            item { QueueSectionHeader("失敗・要確認", "キューからは外れています。音声詳細を開いて原因を確認できます") }
-            itemsIndexed(failed, key = { _, item -> "failed:${item.segmentId}" }) { _, record ->
-                QueueRecordCard(
-                    record,
-                    onOpen = { onSelect(record) },
-                    actionLabel = "キューに追加",
-                    onAction = { onAdd(record) }
-                )
-            }
-        }
-
-        if (unqueued.isNotEmpty()) {
-            item { QueueSectionHeader("キュー外の音声", "音声は残っていますが、現在キューには入っていません") }
-            itemsIndexed(unqueued, key = { _, item -> "ready:${item.segmentId}" }) { _, record ->
-                QueueRecordCard(
-                    record,
-                    onOpen = { onSelect(record) },
-                    actionLabel = "キューに追加",
-                    onAction = { onAdd(record) }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun QueueSectionHeader(title: String, description: String) {
-    Column(Modifier.padding(top = 8.dp, bottom = 2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun QueueRecordCard(
-    record: SegmentRecord,
-    position: Int? = null,
-    onOpen: () -> Unit,
-    actionLabel: String? = null,
-    onAction: (() -> Unit)? = null
-) {
-    Card(
-        onClick = onOpen,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (position != null) {
-                    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
-                        Text(
-                            position.toString(),
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        )
-                    }
-                    Spacer(Modifier.width(10.dp))
-                }
-                Column(Modifier.weight(1f)) {
-                    Text(formatTimeRange(record), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text(formatDay(record.sortTimeMs), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                StatusPill(queueStateLabel(record), queueStateTone(record))
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(queueSourceLabel(record), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
-                Text("•", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(
-                    if (record.audioAvailable) SegmentHistoryRepository.formatBytes(record.fileSizeBytes) else "音声なし",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            Text(
-                queueStateDetail(record),
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (record.status == "FAILED") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+        itemsIndexed(queued, key = { _, item -> item.segmentId }) { _, record ->
+            QueueRow(
+                record = record,
+                onOpen = { onSelect(record) },
+                onRemove = { onRemove(record) }
             )
-
-            if (record.queueEnqueuedAtMs > 0L && record.status in setOf("QUEUED", "TRANSCRIBING", "RETRY_WAIT")) {
-                Text(
-                    "キュー登録 ${formatDateTime(record.queueEnqueuedAtMs)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            if (record.stateChangedAtMs > 0L) {
-                Text(
-                    "状態更新 ${formatDateTime(record.stateChangedAtMs)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            if (actionLabel != null && onAction != null) {
-                HorizontalDivider()
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onAction) {
-                        if (actionLabel.contains("外す")) {
-                            Icon(Icons.Filled.Delete, contentDescription = null)
-                            Spacer(Modifier.width(6.dp))
-                        } else {
-                            Icon(Icons.Filled.Refresh, contentDescription = null)
-                            Spacer(Modifier.width(6.dp))
-                        }
-                        Text(actionLabel)
-                    }
-                }
-            } else {
-                Text(
-                    "タップして音声・会話ログを開く",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
+            HorizontalDivider()
         }
     }
 }
 
-private fun queueSourceLabel(record: SegmentRecord): String = when {
-    record.status == "READY" -> "キュー外"
-    record.reason.orEmpty().startsWith("MANUAL_") -> "ユーザー追加"
-    else -> "自動追加"
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun QueueRow(
+    record: SegmentRecord,
+    onOpen: () -> Unit,
+    onRemove: () -> Unit
+) {
+    var menuExpanded by remember(record.segmentId) { mutableStateOf(false) }
+
+    Box {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = onOpen,
+                    onLongClick = { menuExpanded = true }
+                )
+                .padding(horizontal = 18.dp, vertical = 15.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                formatQueueDateTime(record),
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                queueSourceLabel(record),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
+
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text("キューから削除") },
+                leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+                onClick = {
+                    menuExpanded = false
+                    onRemove()
+                }
+            )
+        }
+    }
 }
 
-private fun queueStateLabel(record: SegmentRecord): String = when (record.status) {
-    "QUEUED" -> if (record.reason.orEmpty().endsWith("SLOT_WAIT")) "Whisper枠待ち" else "Worker開始待ち"
-    "TRANSCRIBING" -> "実行中"
-    "RETRY_WAIT" -> "再試行待ち"
-    "FAILED" -> "失敗"
-    "READY" -> "キュー外"
-    else -> record.status
-}
+private fun queueSourceLabel(record: SegmentRecord): String =
+    if (record.reason.orEmpty().startsWith("MANUAL_")) "ユーザー追加" else "自動追加"
 
-private fun queueStateTone(record: SegmentRecord): StatusTone = when (record.status) {
-    "FAILED" -> StatusTone.ERROR
-    "TRANSCRIBING", "QUEUED", "RETRY_WAIT" -> StatusTone.WAITING
-    else -> StatusTone.NEUTRAL
-}
-
-private fun queueStateDetail(record: SegmentRecord): String = when {
-    record.status == "QUEUED" && record.reason.orEmpty().endsWith("SLOT_WAIT") ->
-        "Workerは起動済みです。他のWhisper処理またはモデル比較がLocalWhisperEngineの排他枠を使用しているため待機しています。"
-    record.status == "QUEUED" && record.reason.orEmpty().endsWith("WORK_ENQUEUED") ->
-        "WorkManagerへ登録済みですがWorkerはまだ開始していません。現行実装で明示している制約はbattery-not-lowです。OSスケジューラ待ちとの区別はまだ計測していません。"
-    record.status == "TRANSCRIBING" ->
-        "Whisper実行枠を取得済みです。M4A復号・前処理・VAD・large-v3 Q5推論・保存の処理中です。"
-    record.status == "RETRY_WAIT" ->
-        "前回処理で例外が発生しました。最大3回まで指数バックオフで再試行します。"
-    record.status == "FAILED" ->
-        "文字起こし処理は終了しています。理由: ${record.reason ?: "詳細不明"}"
-    record.status == "READY" ->
-        "音声は保存されていますが、現在の文字起こしキューには登録されていません。"
-    else -> record.reason ?: record.status
+private fun formatQueueDateTime(record: SegmentRecord): String {
+    if (record.startedAtMs <= 0L) return "日時不明"
+    val day = SimpleDateFormat("M/d", Locale.JAPAN).format(Date(record.startedAtMs))
+    val time = SimpleDateFormat("HH:mm", Locale.JAPAN)
+    val start = time.format(Date(record.startedAtMs))
+    return if (record.endedAtMs > record.startedAtMs) {
+        "$day $start–${time.format(Date(record.endedAtMs))}"
+    } else {
+        "$day $start"
+    }
 }
 
 @Composable

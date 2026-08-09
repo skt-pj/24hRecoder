@@ -13,8 +13,8 @@ android {
         applicationId 'com.sktpj.recorder24h'
         minSdk 29
         targetSdk 36
-        versionCode 15
-        versionName '0.4.11'
+        versionCode 16
+        versionName '0.4.12'
         // Canonical local transcription model: Whisper large-v3 Q5.
         // 0.4.11 exposes queued/running/retry work and orders waiting items by enqueue time.
 
