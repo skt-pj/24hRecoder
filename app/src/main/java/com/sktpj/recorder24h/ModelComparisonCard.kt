@@ -7,10 +7,8 @@ import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -53,7 +51,7 @@ fun ModelComparisonCard(record: SegmentRecord) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val specs = remember { WhisperModelManager.comparisonModels().toList() }
-    var tick by remember(record.segmentId) { mutableIntStateOf(0) }
+    var pollTick by remember(record.segmentId) { mutableIntStateOf(0) }
     var comparison by remember(record.segmentId) {
         mutableStateOf(ModelComparisonRepository.read(context, record.segmentId))
     }
@@ -70,14 +68,19 @@ fun ModelComparisonCard(record: SegmentRecord) {
             comparison = withContext(Dispatchers.IO) {
                 ModelComparisonRepository.read(context, record.segmentId)
             }
-            tick++
+            pollTick++
             delay(1_000L)
         }
     }
 
+    // Reading pollTick makes model download progress/readiness refresh even while no comparison
+    // result exists yet.
+    val refreshKey = pollTick
     val audioFile = record.audioPath?.let(::File)
     val selectedSpecs = specs.filter { selectedIds.contains(it.id) }
-    val missingSelected = selectedSpecs.filterNot { WhisperModelManager.isComparisonReady(context, it.id) }
+    val missingSelected = selectedSpecs.filterNot {
+        refreshKey >= 0 && WhisperModelManager.isComparisonReady(context, it.id)
+    }
     val running = comparison?.optString("status") == "RUNNING"
 
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
@@ -89,7 +92,7 @@ fun ModelComparisonCard(record: SegmentRecord) {
             )
 
             specs.forEach { spec ->
-                val ready = WhisperModelManager.isComparisonReady(context, spec.id)
+                val ready = refreshKey >= 0 && WhisperModelManager.isComparisonReady(context, spec.id)
                 val bytes = WhisperModelManager.downloadedBytesForModel(context, spec.id)
                 val selected = selectedIds.contains(spec.id)
                 Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surface) {
@@ -135,6 +138,7 @@ fun ModelComparisonCard(record: SegmentRecord) {
                             }
                             OutlinedButton(onClick = {
                                 WhisperModelManager.enqueueModelDownload(context, spec.id)
+                                selectedIds = selectedIds + spec.id
                                 Toast.makeText(context, "${spec.label}の取得を開始します", Toast.LENGTH_SHORT).show()
                             }, modifier = Modifier.fillMaxWidth()) {
                                 Text("${spec.label}をダウンロード")
