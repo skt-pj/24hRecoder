@@ -8,6 +8,7 @@ import androidx.work.Constraints;
 import androidx.work.Data;
 import androidx.work.ExistingWorkPolicy;
 import androidx.work.OneTimeWorkRequest;
+import androidx.work.OutOfQuotaPolicy;
 import androidx.work.WorkManager;
 
 import com.sktpj.recorder24h.storage.SegmentRepository;
@@ -43,7 +44,34 @@ public final class TranscriptionScheduler {
         enqueueInternal(context, segmentId, file, false, ExistingWorkPolicy.KEEP);
     }
 
+    /**
+     * Explicit user requests do not wait behind WorkManager/JobScheduler in the normal path.
+     * The request is persisted as QUEUED, any old scheduled copy is cancelled, and a
+     * mediaProcessing foreground service drains the queue immediately while the app is visible.
+     * WorkManager is only used as a fallback if Android refuses the direct FGS start.
+     */
     public static boolean enqueueForceRetranscription(Context context, String segmentId, File file) {
+        if (segmentId == null || segmentId.isEmpty() || file == null || !file.isFile()) {
+            return false;
+        }
+        if (!WhisperModelManager.isReady(context)) {
+            WhisperModelManager.enqueueDownload(context);
+            String reason = WhisperModelManager.isAsrReady(context)
+                    ? "SILERO_VAD_MODEL_MISSING" : "LOCAL_MODEL_MISSING";
+            log(context, "TRANSCRIPTION_WAITING_FOR_LOCAL_MODELS", segmentId, file, reason);
+            return false;
+        }
+
+        WorkManager.getInstance(context.getApplicationContext()).cancelUniqueWork(uniqueWorkName(segmentId));
+        SegmentRepository.appendWithoutNotify(context, segmentId, file, 0L,
+                System.currentTimeMillis(), "QUEUED", "MANUAL_DIRECT_QUEUE_ENQUEUED");
+        log(context, "MANUAL_RETRANSCRIPTION_DIRECT_ENQUEUED", segmentId, file, null);
+
+        if (TranscriptionQueueService.kick(context)) {
+            return true;
+        }
+
+        log(context, "MANUAL_RETRANSCRIPTION_DIRECT_FALLBACK_WORKMANAGER", segmentId, file, null);
         return enqueueInternal(context, segmentId, file, true, ExistingWorkPolicy.REPLACE);
     }
 
@@ -88,9 +116,14 @@ public final class TranscriptionScheduler {
             return false;
         }
 
-        Constraints constraints = new Constraints.Builder()
-                .setRequiresBatteryNotLow(true)
-                .build();
+        Constraints.Builder constraintBuilder = new Constraints.Builder();
+        // Automatic background work yields to recording when Android considers the battery low.
+        // Explicit user requests never inherit this constraint.
+        if (!forceRetranscribe) {
+            constraintBuilder.setRequiresBatteryNotLow(true);
+        }
+        Constraints constraints = constraintBuilder.build();
+
         Data input = new Data.Builder()
                 .putString(EXTRA_SEGMENT_ID, segmentId)
                 .putString(EXTRA_FILE_PATH, file.getAbsolutePath())
@@ -98,14 +131,17 @@ public final class TranscriptionScheduler {
                 .putInt(TranscriptionResetManager.EXTRA_GENERATION,
                         TranscriptionResetManager.currentGeneration(context))
                 .build();
-        OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(TranscriptionWorker.class)
+        OneTimeWorkRequest.Builder requestBuilder = new OneTimeWorkRequest.Builder(TranscriptionWorker.class)
                 .setInputData(input)
                 .setConstraints(constraints)
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .addTag("transcription")
                 .addTag("segment:" + segmentId)
-                .addTag(forceRetranscribe ? "manual-retranscription" : "automatic-transcription")
-                .build();
+                .addTag(forceRetranscribe ? "manual-retranscription" : "automatic-transcription");
+        if (forceRetranscribe) {
+            requestBuilder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST);
+        }
+        OneTimeWorkRequest request = requestBuilder.build();
         WorkManager.getInstance(context.getApplicationContext()).enqueueUniqueWork(
                 uniqueWorkName(segmentId),
                 workPolicy,
@@ -205,7 +241,7 @@ public final class TranscriptionScheduler {
         return fileName.substring(underscore + 1, suffix);
     }
 
-    private static String uniqueWorkName(String segmentId) {
+    static String uniqueWorkName(String segmentId) {
         return "transcribe:" + segmentId;
     }
 
