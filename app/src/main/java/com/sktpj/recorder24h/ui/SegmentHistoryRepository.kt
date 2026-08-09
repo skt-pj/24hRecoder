@@ -25,6 +25,7 @@ data class SegmentRecord(
     val status: String,
     val reason: String?,
     val stateChangedAtMs: Long,
+    val queueEnqueuedAtMs: Long,
     val audioPath: String?,
     val audioAvailable: Boolean,
     val transcriptText: String?,
@@ -51,6 +52,7 @@ object SegmentHistoryRepository {
         var recordedEndMs: Long = 0L,
         var fallbackStartMs: Long = 0L,
         var latestEventMs: Long = 0L,
+        var queueEnqueuedAtMs: Long = 0L,
         var status: String = "READY",
         var reason: String? = null,
         var transcriptText: String? = null,
@@ -91,6 +93,7 @@ object SegmentHistoryRepository {
                 status = builder.status,
                 reason = builder.reason,
                 stateChangedAtMs = builder.latestEventMs,
+                queueEnqueuedAtMs = builder.queueEnqueuedAtMs,
                 audioPath = audio?.absolutePath,
                 audioAvailable = audio != null,
                 transcriptText = builder.transcriptText,
@@ -147,6 +150,9 @@ object SegmentHistoryRepository {
                             }
 
                             builder.latestEventMs = maxOf(builder.latestEventMs, end)
+                            if (rawReason?.endsWith("WORK_ENQUEUED") == true && end > 0L) {
+                                builder.queueEnqueuedAtMs = end
+                            }
                             builder.status = status
                             builder.reason = reason
                         } catch (_: Exception) {

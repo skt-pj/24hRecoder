@@ -47,7 +47,6 @@ import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -433,7 +432,7 @@ private fun sectionTitle(section: AppSection) = when (section) {
 private fun SectionIcon(section: AppSection) {
     val icon = when (section) {
         AppSection.HOME -> Icons.Filled.Home
-        AppSection.QUEUE -> Icons.Filled.Schedule
+        AppSection.QUEUE -> Icons.Filled.Refresh
         AppSection.HISTORY -> Icons.Filled.List
         AppSection.SETTINGS -> Icons.Filled.Settings
     }
@@ -636,7 +635,9 @@ private fun QueueScreen(
         records.filter { it.status == "TRANSCRIBING" }.sortedBy { it.stateChangedAtMs }
     }
     val waiting = remember(records) {
-        records.filter { it.status == "QUEUED" }.sortedBy { it.stateChangedAtMs }
+        records.filter { it.status == "QUEUED" }.sortedBy {
+            if (it.queueEnqueuedAtMs > 0L) it.queueEnqueuedAtMs else it.stateChangedAtMs
+        }
     }
     val retry = remember(records) {
         records.filter { it.status == "RETRY_WAIT" }.sortedBy { it.stateChangedAtMs }
@@ -797,6 +798,13 @@ private fun QueueRecordCard(
                 color = if (record.status == "FAILED") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
             )
 
+            if (record.queueEnqueuedAtMs > 0L && record.status in setOf("QUEUED", "TRANSCRIBING", "RETRY_WAIT")) {
+                Text(
+                    "キュー登録 ${formatDateTime(record.queueEnqueuedAtMs)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             if (record.stateChangedAtMs > 0L) {
                 Text(
                     "状態更新 ${formatDateTime(record.stateChangedAtMs)}",
@@ -830,8 +838,11 @@ private fun QueueRecordCard(
     }
 }
 
-private fun queueSourceLabel(record: SegmentRecord): String =
-    if (record.reason.orEmpty().startsWith("MANUAL_")) "ユーザー追加" else "自動追加"
+private fun queueSourceLabel(record: SegmentRecord): String = when {
+    record.status == "READY" -> "キュー外"
+    record.reason.orEmpty().startsWith("MANUAL_") -> "ユーザー追加"
+    else -> "自動追加"
+}
 
 private fun queueStateLabel(record: SegmentRecord): String = when (record.status) {
     "QUEUED" -> if (record.reason.orEmpty().endsWith("SLOT_WAIT")) "Whisper枠待ち" else "Worker開始待ち"
