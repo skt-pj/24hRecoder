@@ -1,4 +1,5 @@
 #include <jni.h>
+#include <sstream>
 #include <string>
 
 #include "whisper.h"
@@ -10,10 +11,36 @@ void throw_runtime(JNIEnv * env, const char * message) {
         env->ThrowNew(cls, message);
     }
 }
+
+std::string json_escape(const char * value) {
+    std::string out;
+    if (value == nullptr) return out;
+    for (const unsigned char ch : std::string(value)) {
+        switch (ch) {
+            case '\\': out += "\\\\"; break;
+            case '"': out += "\\\""; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (ch < 0x20) {
+                    const char * hex = "0123456789abcdef";
+                    out += "\\u00";
+                    out += hex[(ch >> 4) & 0x0f];
+                    out += hex[ch & 0x0f];
+                } else {
+                    out += static_cast<char>(ch);
+                }
+        }
+    }
+    return out;
+}
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribe(
+Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribeDetailed(
         JNIEnv * env,
         jclass,
         jstring model_path,
@@ -70,10 +97,6 @@ Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribe(
     params.print_realtime = false;
     params.print_timestamps = false;
     params.language = lang;
-
-    // Conservative decoding guardrails for long-lived ambient recording. The important change is
-    // VAD: only speech detected by Silero is passed to Whisper, instead of forcing Whisper to
-    // invent text for long stretches of silence and household noise.
     params.suppress_blank = true;
     params.suppress_nst = true;
     params.temperature = 0.0f;
@@ -104,17 +127,25 @@ Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribe(
     }
 
     std::string text;
+    std::ostringstream json;
+    json << "{\"segments\":[";
     const int segment_count = whisper_full_n_segments(ctx);
     for (int i = 0; i < segment_count; ++i) {
         const char * segment_text = whisper_full_get_segment_text(ctx, i);
-        if (segment_text != nullptr) {
-            text += segment_text;
-        }
+        const int64_t t0 = whisper_full_get_segment_t0(ctx, i);
+        const int64_t t1 = whisper_full_get_segment_t1(ctx, i);
+        if (segment_text != nullptr) text += segment_text;
+        if (i > 0) json << ',';
+        json << "{\"startMs\":" << (t0 * 10)
+             << ",\"endMs\":" << (t1 * 10)
+             << ",\"text\":\"" << json_escape(segment_text) << "\"}";
     }
+    json << "],\"text\":\"" << json_escape(text.c_str()) << "\"}";
 
+    const std::string output = json.str();
     whisper_free(ctx);
     env->ReleaseStringUTFChars(language, lang);
     env->ReleaseStringUTFChars(vad_model_path, vad_model);
     env->ReleaseStringUTFChars(model_path, model);
-    return env->NewStringUTF(text.c_str());
+    return env->NewStringUTF(output.c_str());
 }
