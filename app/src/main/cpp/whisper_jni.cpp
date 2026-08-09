@@ -59,7 +59,7 @@ Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribe(
     params.n_threads = threads > 0 ? threads : 1;
     params.translate = false;
     params.no_context = true;
-    params.no_timestamps = false;
+    params.no_timestamps = true;
     params.single_segment = false;
     params.print_special = false;
     params.print_progress = false;
