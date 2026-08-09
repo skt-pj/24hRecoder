@@ -102,7 +102,7 @@ public final class TranscriptionWorker extends Worker {
             long queueWaitMs = Math.max(0L, startedAt - queuedAt);
             String transcribingReason = forceRetranscribe
                     ? "MANUAL_RETRANSCRIBING"
-                    : replacingOldTranscript ? "RETRANSCRIBING_WITH_VAD" : null;
+                    : replacingOldTranscript ? "RETRANSCRIBING_WITH_AUDIO_FRONTEND" : null;
             SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(), startedAt,
                     "TRANSCRIBING", transcribingReason);
             JSONObject startedMetrics = forceMetrics(forceRetranscribe);
@@ -110,6 +110,7 @@ public final class TranscriptionWorker extends Worker {
                 startedMetrics.put("queueWaitMs", queueWaitMs);
                 startedMetrics.put("vadModel", WhisperModelManager.VAD_MODEL_ID);
                 startedMetrics.put("vadEnabled", true);
+                startedMetrics.put("audioFrontend", "adaptive-gain-v1");
                 startedMetrics.put("replacingOldTranscript", replacingOldTranscript);
             } catch (Exception ignored) {
             }
@@ -129,12 +130,27 @@ public final class TranscriptionWorker extends Worker {
                 metrics.put("sampleCount", response.sampleCount);
                 metrics.put("threads", response.threads);
                 metrics.put("decodeMs", response.decodeMs);
+                metrics.put("preprocessMs", response.preprocessMs);
                 metrics.put("inferenceMs", response.inferenceMs);
                 metrics.put("queueWaitMs", queueWaitMs);
                 metrics.put("textChars", response.text.length());
+
+                metrics.put("inputRms", response.inputRms);
+                metrics.put("inputPeak", response.inputPeak);
+                metrics.put("inputClippedFraction", response.inputClippedFraction);
                 metrics.put("audioRms", response.rms);
                 metrics.put("audioPeak", response.peak);
                 metrics.put("clippedFraction", response.clippedFraction);
+                metrics.put("dcOffset", response.dcOffset);
+                metrics.put("estimatedNoiseRms", response.estimatedNoiseRms);
+                metrics.put("estimatedSpeechRms", response.estimatedSpeechRms);
+                metrics.put("snrProxyDb", response.snrProxyDb);
+                metrics.put("appliedGainDb", response.appliedGainDb);
+                metrics.put("activeFrameFraction", response.activeFrameFraction);
+                metrics.put("limitedSampleFraction", response.limitedSampleFraction);
+                metrics.put("boostSuppressedForLowSnr", response.boostSuppressedForLowSnr);
+                metrics.put("audioFrontend", "adaptive-gain-v1");
+
                 metrics.put("vadModel", WhisperModelManager.VAD_MODEL_ID);
                 metrics.put("vadEnabled", true);
                 metrics.put("replacedOldTranscript", replacingOldTranscript);
