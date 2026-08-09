@@ -83,7 +83,9 @@ public final class ModelComparisonRepository {
         JSONObject comparison = read(context, segmentId);
         if (comparison != null) {
             out.append("=== comparison ===\n");
-            out.append(comparison.toString(2)).append("\n\n");
+            // JSONObject#toString(int) declares JSONException on Android; compact serialization is
+            // sufficient for clipboard diagnostics and cannot fail for an already parsed object.
+            out.append(comparison.toString()).append("\n\n");
         } else {
             out.append("=== comparison ===\n(no comparison result)\n\n");
         }
