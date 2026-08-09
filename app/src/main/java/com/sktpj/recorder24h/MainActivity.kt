@@ -280,6 +280,14 @@ private fun RecorderApp(
     var dashboard by remember { mutableStateOf(readDashboard(context)) }
 
     LaunchedEffect(Unit) {
+        val hasQueuedTranscription = withContext(Dispatchers.IO) {
+            SegmentHistoryRepository.load(context).any {
+                it.status == "QUEUED" || it.status == "RETRY_WAIT"
+            }
+        }
+        if (hasQueuedTranscription) {
+            com.sktpj.recorder24h.transcription.TranscriptionQueueService.kick(context)
+        }
         while (true) {
             dashboard = withContext(Dispatchers.IO) { readDashboard(context) }
             delay(2_000L)
