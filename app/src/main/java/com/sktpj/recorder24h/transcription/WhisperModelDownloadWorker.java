@@ -10,6 +10,7 @@ import com.sktpj.recorder24h.util.AppLogger;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.util.concurrent.TimeUnit;
 
 public final class WhisperModelDownloadWorker extends Worker {
     public WhisperModelDownloadWorker(Context context, WorkerParameters params) {
@@ -35,6 +36,29 @@ public final class WhisperModelDownloadWorker extends Worker {
             return Result.success();
         }
 
+        // small/Kotoba are explicitly requested comparison assets and can be ~500 MiB. Promote
+        // those user-triggered transfers to WorkManager's foreground dataSync service so a slow
+        // network is not constrained by the normal short Worker execution window. The standard
+        // base/VAD bootstrap keeps the existing background behavior because it may be scheduled by
+        // MY_PACKAGE_REPLACED without a visible user action.
+        if (!WhisperModelManager.MODEL_BASE.equals(modelId)) {
+            try {
+                setForegroundAsync(TranscriptionForegroundInfo.modelDownload(context, spec))
+                        .get(15, TimeUnit.SECONDS);
+            } catch (Exception foregroundError) {
+                try {
+                    JSONObject d = new JSONObject();
+                    d.put("modelId", modelId);
+                    d.put("error", foregroundError.getClass().getSimpleName());
+                    d.put("message", foregroundError.getMessage() == null
+                            ? JSONObject.NULL : foregroundError.getMessage());
+                    AppLogger.event(context, "WHISPER_MODEL_FOREGROUND_FAILED", d);
+                } catch (Exception ignored) {
+                }
+                return Result.failure();
+            }
+        }
+
         JSONObject started = new JSONObject();
         try {
             started.put("modelId", modelId);
@@ -45,7 +69,12 @@ public final class WhisperModelDownloadWorker extends Worker {
         AppLogger.event(context, "WHISPER_MODEL_DOWNLOAD_STARTED", started);
 
         try {
-            File model = WhisperModelManager.downloadModel(context, modelId);
+            // All models share the same VAD file. Serialize downloads inside this process to avoid
+            // two Workers replacing the common .part/final files concurrently on a fresh install.
+            File model;
+            synchronized (WhisperModelManager.class) {
+                model = WhisperModelManager.downloadModel(context, modelId);
+            }
             JSONObject details = new JSONObject();
             details.put("modelId", modelId);
             details.put("label", spec.label);
