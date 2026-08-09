@@ -19,25 +19,51 @@ public final class WhisperModelDownloadWorker extends Worker {
     @Override
     public Result doWork() {
         Context context = getApplicationContext();
-        if (WhisperModelManager.isReady(context)) {
-            TranscriptionScheduler.enqueueExisting(context);
+        String modelId = getInputData().getString(WhisperModelManager.EXTRA_MODEL_ID);
+        if (modelId == null || modelId.isEmpty()) {
+            modelId = WhisperModelManager.MODEL_BASE;
+        }
+        WhisperModelManager.ModelSpec spec = WhisperModelManager.modelSpec(modelId);
+        if (spec == null) {
+            return Result.failure();
+        }
+
+        if (WhisperModelManager.isComparisonReady(context, modelId)) {
+            if (WhisperModelManager.MODEL_BASE.equals(modelId)) {
+                TranscriptionScheduler.enqueueExisting(context);
+            }
             return Result.success();
         }
-        AppLogger.event(context, "WHISPER_MODEL_DOWNLOAD_STARTED");
+
+        JSONObject started = new JSONObject();
         try {
-            File model = WhisperModelManager.download(context);
+            started.put("modelId", modelId);
+            started.put("label", spec.label);
+            started.put("expectedBytes", spec.expectedBytes);
+        } catch (Exception ignored) {
+        }
+        AppLogger.event(context, "WHISPER_MODEL_DOWNLOAD_STARTED", started);
+
+        try {
+            File model = WhisperModelManager.downloadModel(context, modelId);
             JSONObject details = new JSONObject();
-            details.put("model", WhisperModelManager.MODEL_ID);
+            details.put("modelId", modelId);
+            details.put("label", spec.label);
             details.put("asrBytes", model.length());
+            details.put("asrVerified", WhisperModelManager.verifyModel(context, modelId));
             details.put("vadModel", WhisperModelManager.VAD_MODEL_ID);
             details.put("vadBytes", WhisperModelManager.vadModelFile(context).length());
             details.put("vadSha256Verified", WhisperModelManager.verifyVadModel(context));
             AppLogger.event(context, "WHISPER_MODEL_READY", details);
-            TranscriptionScheduler.enqueueExisting(context);
+            if (WhisperModelManager.MODEL_BASE.equals(modelId)) {
+                TranscriptionScheduler.enqueueExisting(context);
+            }
             return Result.success();
         } catch (Exception e) {
             try {
                 JSONObject details = new JSONObject();
+                details.put("modelId", modelId);
+                details.put("label", spec.label);
                 details.put("error", e.getClass().getSimpleName());
                 details.put("message", e.getMessage() == null ? JSONObject.NULL : e.getMessage());
                 AppLogger.event(context, "WHISPER_MODEL_DOWNLOAD_RETRY", details);
