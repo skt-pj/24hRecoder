@@ -5,7 +5,9 @@ import android.content.Context;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 
 public final class TranscriptionRepository {
@@ -29,6 +31,28 @@ public final class TranscriptionRepository {
 
     public static boolean exists(Context context, String segmentId) {
         return fileFor(context, segmentId).isFile();
+    }
+
+    public static boolean isCurrentEngine(Context context, String segmentId, String engineId) {
+        File file = fileFor(context, segmentId);
+        if (!file.isFile()) {
+            return false;
+        }
+        try (FileInputStream input = new FileInputStream(file);
+             InputStreamReader reader = new InputStreamReader(input, StandardCharsets.UTF_8)) {
+            StringBuilder json = new StringBuilder((int) Math.min(file.length(), 64 * 1024L));
+            char[] buffer = new char[4096];
+            int read;
+            while ((read = reader.read(buffer)) >= 0) {
+                if (read > 0) {
+                    json.append(buffer, 0, read);
+                }
+            }
+            JSONObject row = new JSONObject(json.toString());
+            return engineId.equals(row.optString("model", ""));
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     public static void save(Context context, String segmentId, File audioFile, String model, String text)
