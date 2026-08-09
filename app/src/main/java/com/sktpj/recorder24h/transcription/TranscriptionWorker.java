@@ -30,11 +30,18 @@ public final class TranscriptionWorker extends Worker {
 
         File audioFile = new File(filePath);
         int attempt = getRunAttemptCount() + 1;
-        if (TranscriptionRepository.exists(context, segmentId)) {
-            log(context, "TRANSCRIPT_ALREADY_SAVED_AUDIO_RETAINED", segmentId, audioFile, null, null, attempt);
+        if (TranscriptionRepository.isCurrentEngine(context, segmentId, LocalWhisperEngine.ENGINE_ID)) {
+            log(context, "TRANSCRIPT_CURRENT_ENGINE_AUDIO_RETAINED", segmentId, audioFile, null, null, attempt);
             return Result.success();
         }
         if (!audioFile.isFile()) {
+            // If an older transcript exists but its source audio has already been evicted, preserve the
+            // old transcript rather than marking the segment as failed or deleting useful text.
+            if (TranscriptionRepository.exists(context, segmentId)) {
+                log(context, "RETRANSCRIPTION_SOURCE_MISSING_OLD_TRANSCRIPT_RETAINED",
+                        segmentId, audioFile, null, null, attempt);
+                return Result.success();
+            }
             log(context, "TRANSCRIPTION_SOURCE_MISSING", segmentId, audioFile, null, null, attempt);
             SegmentRepository.append(context, segmentId, audioFile, 0L, System.currentTimeMillis(),
                     "FAILED", "SOURCE_AUDIO_MISSING");
@@ -51,10 +58,12 @@ public final class TranscriptionWorker extends Worker {
             return Result.failure();
         }
 
+        boolean replacingOldTranscript = TranscriptionRepository.exists(context, segmentId);
         long queuedAt = System.currentTimeMillis();
         SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(), queuedAt,
-                "QUEUED", "LOCAL_TRANSCRIPTION_SLOT_WAIT");
-        log(context, "LOCAL_TRANSCRIPTION_QUEUED", segmentId, audioFile, null, null, attempt);
+                "QUEUED", replacingOldTranscript ? "LOCAL_RETRANSCRIPTION_SLOT_WAIT" : "LOCAL_TRANSCRIPTION_SLOT_WAIT");
+        log(context, replacingOldTranscript ? "LOCAL_RETRANSCRIPTION_QUEUED" : "LOCAL_TRANSCRIPTION_QUEUED",
+                segmentId, audioFile, null, null, attempt);
 
         synchronized (LocalWhisperEngine.class) {
             if (isStopped()) {
@@ -62,12 +71,17 @@ public final class TranscriptionWorker extends Worker {
                         null, null, attempt);
                 return Result.failure();
             }
-            if (TranscriptionRepository.exists(context, segmentId)) {
-                log(context, "TRANSCRIPT_ALREADY_SAVED_AFTER_QUEUE", segmentId, audioFile,
+            if (TranscriptionRepository.isCurrentEngine(context, segmentId, LocalWhisperEngine.ENGINE_ID)) {
+                log(context, "TRANSCRIPT_CURRENT_ENGINE_AFTER_QUEUE", segmentId, audioFile,
                         null, null, attempt);
                 return Result.success();
             }
             if (!audioFile.isFile()) {
+                if (TranscriptionRepository.exists(context, segmentId)) {
+                    log(context, "RETRANSCRIPTION_SOURCE_MISSING_AFTER_QUEUE_OLD_TRANSCRIPT_RETAINED",
+                            segmentId, audioFile, null, null, attempt);
+                    return Result.success();
+                }
                 SegmentRepository.append(context, segmentId, audioFile, 0L, System.currentTimeMillis(),
                         "FAILED", "SOURCE_AUDIO_MISSING");
                 log(context, "TRANSCRIPTION_SOURCE_MISSING_AFTER_QUEUE", segmentId, audioFile,
@@ -78,19 +92,22 @@ public final class TranscriptionWorker extends Worker {
             long startedAt = System.currentTimeMillis();
             long queueWaitMs = Math.max(0L, startedAt - queuedAt);
             SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(), startedAt,
-                    "TRANSCRIBING", null);
+                    "TRANSCRIBING", replacingOldTranscript ? "RETRANSCRIBING_WITH_VAD" : null);
             JSONObject startedMetrics = new JSONObject();
             try {
                 startedMetrics.put("queueWaitMs", queueWaitMs);
                 startedMetrics.put("vadModel", WhisperModelManager.VAD_MODEL_ID);
                 startedMetrics.put("vadEnabled", true);
+                startedMetrics.put("replacingOldTranscript", replacingOldTranscript);
             } catch (Exception ignored) {
             }
-            log(context, "LOCAL_TRANSCRIPTION_STARTED", segmentId, audioFile, null,
-                    startedMetrics, attempt);
+            log(context, replacingOldTranscript ? "LOCAL_RETRANSCRIPTION_STARTED" : "LOCAL_TRANSCRIPTION_STARTED",
+                    segmentId, audioFile, null, startedMetrics, attempt);
 
             try {
                 LocalWhisperEngine.Response response = LocalWhisperEngine.transcribe(context, audioFile);
+                // save() writes a temp file, fsyncs it, then atomically replaces the previous result.
+                // Therefore a failed re-transcription never destroys the old durable transcript.
                 TranscriptionRepository.save(context, segmentId, audioFile,
                         LocalWhisperEngine.ENGINE_ID, response.text);
                 SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),
@@ -108,10 +125,14 @@ public final class TranscriptionWorker extends Worker {
                 metrics.put("clippedFraction", response.clippedFraction);
                 metrics.put("vadModel", WhisperModelManager.VAD_MODEL_ID);
                 metrics.put("vadEnabled", true);
+                metrics.put("replacedOldTranscript", replacingOldTranscript);
                 metrics.put("audioRetained", true);
-                log(context, "LOCAL_TRANSCRIPTION_SAVED", segmentId, audioFile, null, metrics, attempt);
+                log(context, replacingOldTranscript ? "LOCAL_RETRANSCRIPTION_SAVED" : "LOCAL_TRANSCRIPTION_SAVED",
+                        segmentId, audioFile, null, metrics, attempt);
                 return Result.success();
             } catch (OutOfMemoryError oom) {
+                // Preserve an older transcript if present. The journal still records the failed attempt,
+                // but the durable JSON is not removed.
                 SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),
                         System.currentTimeMillis(), "FAILED", "LOCAL_TRANSCRIPTION_OOM");
                 log(context, "LOCAL_TRANSCRIPTION_OOM", segmentId, audioFile,
