@@ -24,7 +24,9 @@ import java.util.concurrent.TimeUnit;
 public final class WhisperModelManager {
     public static final String MODEL_BASE = "base";
     public static final String MODEL_SMALL = "small";
+    public static final String MODEL_MEDIUM_Q5 = "medium-q5";
     public static final String MODEL_KOTOBA_V2_Q5 = "kotoba-v2-q5";
+    public static final String MODEL_LARGE_V3_Q5 = "large-v3-q5";
 
     // Standard automatic transcription remains multilingual Whisper base. Model comparison is
     // deliberately separate so experiments never replace the user's canonical transcript unless
@@ -64,7 +66,7 @@ public final class WhisperModelManager {
             new ModelSpec(
                     MODEL_SMALL,
                     "Whisper small",
-                    "多言語・高精度寄り",
+                    "多言語・baseより上位",
                     "ggml-small.bin",
                     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
                     487_601_967L,
@@ -72,15 +74,35 @@ public final class WhisperModelManager {
                     "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
                     false),
             new ModelSpec(
+                    MODEL_MEDIUM_Q5,
+                    "Whisper medium Q5",
+                    "多言語・medium量子化・精度優先候補",
+                    "ggml-medium-q5_0.bin",
+                    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin",
+                    539_212_467L,
+                    "SHA-256",
+                    "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f",
+                    false),
+            new ModelSpec(
                     MODEL_KOTOBA_V2_Q5,
                     "Kotoba-Whisper v2.0 Q5",
-                    "日本語特化・量子化",
+                    "日本語特化・量子化・長音声デバッグ対象",
                     "ggml-kotoba-whisper-v2.0-q5_0.bin",
                     "https://huggingface.co/kotoba-tech/kotoba-whisper-v2.0-ggml/resolve/main/ggml-kotoba-whisper-v2.0-q5_0.bin",
                     537_819_875L,
                     "SHA-256",
                     "4a3b92192b5d3578ff854a5876213e2e27af0c2d357492c2d14271e82c303658",
-                    true)
+                    true),
+            new ModelSpec(
+                    MODEL_LARGE_V3_Q5,
+                    "Whisper large-v3 Q5",
+                    "多言語・large-v3量子化・最高精度候補",
+                    "ggml-large-v3-q5_0.bin",
+                    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin",
+                    1_081_140_203L,
+                    "SHA-256",
+                    "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1",
+                    false)
     };
 
     private WhisperModelManager() {
@@ -233,7 +255,7 @@ public final class WhisperModelManager {
         connection.setConnectTimeout(30_000);
         connection.setReadTimeout(30_000);
         connection.setInstanceFollowRedirects(true);
-        connection.setRequestProperty("User-Agent", "24hRecoder/0.4.6");
+        connection.setRequestProperty("User-Agent", "24hRecoder/0.4.7");
         connection.connect();
         int code = connection.getResponseCode();
         if (code < 200 || code >= 300) {
@@ -314,7 +336,9 @@ public final class WhisperModelManager {
     public static boolean deleteModel(Context context) {
         boolean ok = deleteWithPart(modelFile(context, MODEL_BASE));
         ok = deleteWithPart(modelFile(context, MODEL_SMALL)) && ok;
+        ok = deleteWithPart(modelFile(context, MODEL_MEDIUM_Q5)) && ok;
         ok = deleteWithPart(modelFile(context, MODEL_KOTOBA_V2_Q5)) && ok;
+        ok = deleteWithPart(modelFile(context, MODEL_LARGE_V3_Q5)) && ok;
         ok = deleteWithPart(vadModelFile(context)) && ok;
         return ok;
     }
