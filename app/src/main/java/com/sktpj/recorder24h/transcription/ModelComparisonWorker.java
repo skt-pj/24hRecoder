@@ -13,6 +13,7 @@ import org.json.JSONObject;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 public final class ModelComparisonWorker extends Worker {
     public ModelComparisonWorker(Context context, WorkerParameters params) {
@@ -34,6 +35,26 @@ public final class ModelComparisonWorker extends Worker {
         }
         String[] modelIds = parseModels(modelCsv);
         if (modelIds.length == 0) {
+            return Result.failure();
+        }
+
+        // A five-minute recording compared with small and Kotoba can legitimately take longer than
+        // a normal WorkManager Worker window. This comparison is explicitly user-requested, so use
+        // WorkManager's long-running foreground path with the mediaProcessing service type.
+        try {
+            setForegroundAsync(TranscriptionForegroundInfo.comparison(
+                    context, segmentId, "選択した音声認識モデルを比較しています"))
+                    .get(15, TimeUnit.SECONDS);
+        } catch (Exception foregroundError) {
+            try {
+                JSONObject d = new JSONObject();
+                d.put("segmentId", segmentId);
+                d.put("error", foregroundError.getClass().getSimpleName());
+                d.put("message", foregroundError.getMessage() == null
+                        ? JSONObject.NULL : foregroundError.getMessage());
+                AppLogger.event(context, "MODEL_COMPARISON_FOREGROUND_FAILED", d);
+            } catch (Exception ignored) {
+            }
             return Result.failure();
         }
 
