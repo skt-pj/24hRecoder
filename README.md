@@ -4,6 +4,7 @@ Android 16 / Pixel 10aを初期基準端末とした24時間録音アプリで�
 
 ## 現在の実装
 
+- 現在のdebug APK: `0.4.8-debug` / versionCode 12
 - microphone Foreground Serviceによるバックグラウンド録音
 - 録音Serviceを`:recorder`専用プロセスに分離
 - AudioRecord: mono / 16 kHz / PCM 16bit

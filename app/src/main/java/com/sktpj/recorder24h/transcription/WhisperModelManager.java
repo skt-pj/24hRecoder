@@ -37,6 +37,8 @@ public final class WhisperModelManager {
     public static final long ASR_EXPECTED_BYTES = 1_081_140_203L;
     public static final String ASR_EXPECTED_SHA256 =
             "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1";
+    private static final String BASE_EXPECTED_SHA256 =
+            "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe";
 
     public static final String VAD_MODEL_ID = "silero-v6.2.0";
     public static final String VAD_MODEL_FILE_NAME = "ggml-silero-v6.2.0.bin";
@@ -56,12 +58,12 @@ public final class WhisperModelManager {
             new ModelSpec(
                     MODEL_BASE,
                     "Whisper base",
-                    "多言語・標準",
+                    "多言語・比較用・旧標準",
                     "ggml-base.bin",
                     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
                     147_951_465L,
                     "SHA-256",
-                    ASR_EXPECTED_SHA256,
+                    BASE_EXPECTED_SHA256,
                     false),
             new ModelSpec(
                     MODEL_SMALL,
@@ -96,7 +98,7 @@ public final class WhisperModelManager {
             new ModelSpec(
                     MODEL_LARGE_V3_Q5,
                     "Whisper large-v3 Q5",
-                    "多言語・large-v3量子化・最高精度候補",
+                    "多言語・large-v3量子化・標準モデル",
                     "ggml-large-v3-q5_0.bin",
                     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin",
                     1_081_140_203L,
@@ -344,7 +346,7 @@ public final class WhisperModelManager {
     }
 
     public static boolean deleteComparisonModel(Context context, String modelId) {
-        if (MODEL_BASE.equals(modelId)) {
+        if (MODEL_DEFAULT.equals(modelId)) {
             return false;
         }
         ModelSpec spec = modelSpec(modelId);

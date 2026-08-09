@@ -56,11 +56,7 @@ fun ModelComparisonCard(record: SegmentRecord) {
         mutableStateOf(ModelComparisonRepository.read(context, record.segmentId))
     }
     var selectedIds by remember(record.segmentId) {
-        val defaultId = WhisperModelManager.MODEL_DEFAULT
-        mutableStateOf(
-            if (WhisperModelManager.isComparisonReady(context, defaultId)) setOf(defaultId)
-            else emptySet()
-        )
+        mutableStateOf(setOf(WhisperModelManager.MODEL_DEFAULT))
     }
 
     LaunchedEffect(record.segmentId) {
@@ -119,7 +115,7 @@ fun ModelComparisonCard(record: SegmentRecord) {
                         }
                         if (ready) {
                             Text("準備済み", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
-                            if (spec.id != WhisperModelManager.MODEL_BASE) {
+                            if (spec.id != WhisperModelManager.MODEL_DEFAULT) {
                                 TextButton(onClick = {
                                     val ok = WhisperModelManager.deleteComparisonModel(context, spec.id)
                                     if (ok) {
