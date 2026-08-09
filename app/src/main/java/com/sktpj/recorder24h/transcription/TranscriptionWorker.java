@@ -29,62 +29,96 @@ public final class TranscriptionWorker extends Worker {
         }
 
         File audioFile = new File(filePath);
+        int attempt = getRunAttemptCount() + 1;
         if (TranscriptionRepository.exists(context, segmentId)) {
-            // The transcript is already durable. Keep the source M4A so the History UI can
-            // play recent recordings. StoragePolicy will remove old transcribed audio first
-            // when the logical storage budget or device free-space reserve requires cleanup.
-            log(context, "TRANSCRIPT_ALREADY_SAVED_AUDIO_RETAINED", segmentId, audioFile, null, null);
+            log(context, "TRANSCRIPT_ALREADY_SAVED_AUDIO_RETAINED", segmentId, audioFile, null, null, attempt);
             return Result.success();
         }
         if (!audioFile.isFile()) {
-            log(context, "TRANSCRIPTION_SOURCE_MISSING", segmentId, audioFile, null, null);
+            log(context, "TRANSCRIPTION_SOURCE_MISSING", segmentId, audioFile, null, null, attempt);
             SegmentRepository.append(context, segmentId, audioFile, 0L, System.currentTimeMillis(),
                     "FAILED", "SOURCE_AUDIO_MISSING");
             return Result.failure();
         }
         if (!WhisperModelManager.isReady(context)) {
-            log(context, "TRANSCRIPTION_WAITING_FOR_LOCAL_MODEL", segmentId, audioFile, null, null);
+            log(context, "TRANSCRIPTION_WAITING_FOR_LOCAL_MODEL", segmentId, audioFile, null, null, attempt);
             SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),
                     System.currentTimeMillis(), "READY", "LOCAL_MODEL_MISSING");
             return Result.failure();
         }
 
-        long startedAt = System.currentTimeMillis();
-        SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(), startedAt,
-                "TRANSCRIBING", null);
-        log(context, "LOCAL_TRANSCRIPTION_STARTED", segmentId, audioFile, null, null);
+        long queuedAt = System.currentTimeMillis();
+        SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(), queuedAt,
+                "QUEUED", "LOCAL_TRANSCRIPTION_SLOT_WAIT");
+        log(context, "LOCAL_TRANSCRIPTION_QUEUED", segmentId, audioFile, null, null, attempt);
 
-        try {
-            LocalWhisperEngine.Response response = LocalWhisperEngine.transcribe(context, audioFile);
-            TranscriptionRepository.save(context, segmentId, audioFile,
-                    LocalWhisperEngine.ENGINE_ID, response.text);
-            SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),
-                    System.currentTimeMillis(), "TRANSCRIBED", null);
+        // WorkManager may start several Workers concurrently. LocalWhisperEngine is intentionally
+        // single-inference, so acquire its class monitor before publishing TRANSCRIBING. This keeps
+        // queued segments from being incorrectly shown as if they were all actively running.
+        synchronized (LocalWhisperEngine.class) {
+            if (isStopped()) {
+                log(context, "LOCAL_TRANSCRIPTION_STOPPED_BEFORE_START", segmentId, audioFile,
+                        null, null, attempt);
+                return Result.failure();
+            }
+            if (TranscriptionRepository.exists(context, segmentId)) {
+                log(context, "TRANSCRIPT_ALREADY_SAVED_AFTER_QUEUE", segmentId, audioFile,
+                        null, null, attempt);
+                return Result.success();
+            }
+            if (!audioFile.isFile()) {
+                SegmentRepository.append(context, segmentId, audioFile, 0L, System.currentTimeMillis(),
+                        "FAILED", "SOURCE_AUDIO_MISSING");
+                log(context, "TRANSCRIPTION_SOURCE_MISSING_AFTER_QUEUE", segmentId, audioFile,
+                        null, null, attempt);
+                return Result.failure();
+            }
 
-            JSONObject metrics = new JSONObject();
-            metrics.put("sampleCount", response.sampleCount);
-            metrics.put("threads", response.threads);
-            metrics.put("decodeMs", response.decodeMs);
-            metrics.put("inferenceMs", response.inferenceMs);
-            metrics.put("textChars", response.text.length());
-            metrics.put("audioRetained", true);
-            log(context, "LOCAL_TRANSCRIPTION_SAVED", segmentId, audioFile, null, metrics);
-            return Result.success();
-        } catch (OutOfMemoryError oom) {
-            SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),
-                    System.currentTimeMillis(), "FAILED", "LOCAL_TRANSCRIPTION_OOM");
-            log(context, "LOCAL_TRANSCRIPTION_OOM", segmentId, audioFile,
-                    oom.getClass().getSimpleName(), null);
-            return Result.failure();
-        } catch (Exception error) {
-            boolean retry = getRunAttemptCount() + 1 < MAX_ATTEMPTS;
-            SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),
-                    System.currentTimeMillis(), retry ? "RETRY_WAIT" : "FAILED",
-                    retry ? "LOCAL_TRANSCRIPTION_RETRY" : "LOCAL_TRANSCRIPTION_FAILED");
-            log(context, retry ? "LOCAL_TRANSCRIPTION_RETRY" : "LOCAL_TRANSCRIPTION_FAILED",
-                    segmentId, audioFile,
-                    error.getClass().getSimpleName() + ": " + safeMessage(error), null);
-            return retry ? Result.retry() : Result.failure();
+            long startedAt = System.currentTimeMillis();
+            long queueWaitMs = Math.max(0L, startedAt - queuedAt);
+            SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(), startedAt,
+                    "TRANSCRIBING", null);
+            JSONObject startedMetrics = new JSONObject();
+            try {
+                startedMetrics.put("queueWaitMs", queueWaitMs);
+            } catch (Exception ignored) {
+            }
+            log(context, "LOCAL_TRANSCRIPTION_STARTED", segmentId, audioFile, null,
+                    startedMetrics, attempt);
+
+            try {
+                LocalWhisperEngine.Response response = LocalWhisperEngine.transcribe(context, audioFile);
+                TranscriptionRepository.save(context, segmentId, audioFile,
+                        LocalWhisperEngine.ENGINE_ID, response.text);
+                SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),
+                        System.currentTimeMillis(), "TRANSCRIBED", null);
+
+                JSONObject metrics = new JSONObject();
+                metrics.put("sampleCount", response.sampleCount);
+                metrics.put("threads", response.threads);
+                metrics.put("decodeMs", response.decodeMs);
+                metrics.put("inferenceMs", response.inferenceMs);
+                metrics.put("queueWaitMs", queueWaitMs);
+                metrics.put("textChars", response.text.length());
+                metrics.put("audioRetained", true);
+                log(context, "LOCAL_TRANSCRIPTION_SAVED", segmentId, audioFile, null, metrics, attempt);
+                return Result.success();
+            } catch (OutOfMemoryError oom) {
+                SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),
+                        System.currentTimeMillis(), "FAILED", "LOCAL_TRANSCRIPTION_OOM");
+                log(context, "LOCAL_TRANSCRIPTION_OOM", segmentId, audioFile,
+                        oom.getClass().getSimpleName(), null, attempt);
+                return Result.failure();
+            } catch (Exception error) {
+                boolean retry = getRunAttemptCount() + 1 < MAX_ATTEMPTS;
+                SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),
+                        System.currentTimeMillis(), retry ? "RETRY_WAIT" : "FAILED",
+                        retry ? "LOCAL_TRANSCRIPTION_RETRY" : "LOCAL_TRANSCRIPTION_FAILED");
+                log(context, retry ? "LOCAL_TRANSCRIPTION_RETRY" : "LOCAL_TRANSCRIPTION_FAILED",
+                        segmentId, audioFile,
+                        error.getClass().getSimpleName() + ": " + safeMessage(error), null, attempt);
+                return retry ? Result.retry() : Result.failure();
+            }
         }
     }
 
@@ -97,13 +131,13 @@ public final class TranscriptionWorker extends Worker {
     }
 
     private static void log(Context context, String event, String segmentId, File file,
-                            String message, JSONObject extra) {
+                            String message, JSONObject extra, int attempt) {
         try {
             JSONObject details = extra == null ? new JSONObject() : extra;
             details.put("segmentId", segmentId);
             details.put("file", file == null ? JSONObject.NULL : file.getName());
             details.put("engine", LocalWhisperEngine.ENGINE_ID);
-            details.put("attempt", 1);
+            details.put("attempt", attempt);
             if (message != null) {
                 details.put("message", message.length() > 500 ? message.substring(0, 500) : message);
             }
