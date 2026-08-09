@@ -1,0 +1,405 @@
+name: Patch v0.4.9 transcript timeline reset
+
+on:
+  push:
+    branches:
+      - work/transcript-timeline-reset-v0.4.9
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message == 'Add v0.4.9 transcript timeline reset patch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/transcript-timeline-reset-v0.4.9
+          fetch-depth: 0
+      - name: Apply v0.4.9 changes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              s = p.read_text()
+              actual = s.count(old)
+              if actual != count:
+                  raise SystemExit(f"{path}: expected {count} occurrence(s), found {actual}: {old[:160]!r}")
+              p.write_text(s.replace(old, new, count))
+
+          # Persist decoder time segments in canonical transcript JSON.
+          path = 'app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionRepository.java'
+          replace(path, 'import org.json.JSONObject;\n', 'import org.json.JSONArray;\nimport org.json.JSONObject;\n')
+          replace(path,
+              '    public static void save(Context context, String segmentId, File audioFile, String model, String text)\n            throws Exception {\n        synchronized (LOCK) {',
+              '    public static void save(Context context, String segmentId, File audioFile, String model, String text)\n            throws Exception {\n        save(context, segmentId, audioFile, model, text, null);\n    }\n\n    public static void save(Context context, String segmentId, File audioFile, String model, String text,\n                            JSONArray segments) throws Exception {\n        synchronized (LOCK) {')
+          replace(path,
+              '            JSONObject row = new JSONObject();\n            row.put("segmentId", segmentId);',
+              '            JSONObject row = new JSONObject();\n            row.put("schemaVersion", 2);\n            row.put("segmentId", segmentId);')
+          replace(path,
+              '            row.put("text", text == null ? "" : text);\n',
+              '            row.put("text", text == null ? "" : text);\n            row.put("segments", segments == null ? new JSONArray() : new JSONArray(segments.toString()));\n')
+
+          # Segment journal supports state-only resets without triggering the ready broadcast.
+          path = 'app/src/main/java/com/sktpj/recorder24h/storage/SegmentRepository.java'
+          replace(path,
+              '    public static void append(Context context, String segmentId, File file, long startedAtMs,\n                              long endedAtMs, String status, String reason) {\n        boolean newlyReady = "READY".equals(status)',
+              '    public static void append(Context context, String segmentId, File file, long startedAtMs,\n                              long endedAtMs, String status, String reason) {\n        appendInternal(context, segmentId, file, startedAtMs, endedAtMs, status, reason, true);\n    }\n\n    public static void appendWithoutNotify(Context context, String segmentId, File file, long startedAtMs,\n                                           long endedAtMs, String status, String reason) {\n        appendInternal(context, segmentId, file, startedAtMs, endedAtMs, status, reason, false);\n    }\n\n    private static void appendInternal(Context context, String segmentId, File file, long startedAtMs,\n                                       long endedAtMs, String status, String reason, boolean notifyReady) {\n        boolean newlyReady = notifyReady && "READY".equals(status)')
+
+          # Clean reset generation: prevents already-running old Workers from writing stale results back.
+          reset_manager = r'''package com.sktpj.recorder24h.transcription;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+
+import androidx.work.WorkManager;
+
+import com.sktpj.recorder24h.storage.SegmentRepository;
+import com.sktpj.recorder24h.storage.StoragePolicy;
+import com.sktpj.recorder24h.util.AppLogger;
+
+import org.json.JSONObject;
+
+import java.io.File;
+
+public final class TranscriptionResetManager {
+    public static final String EXTRA_GENERATION = "transcriptionGeneration";
+
+    private static final String PREFS = "transcription-reset";
+    private static final String KEY_GENERATION = "generation";
+    private static final String KEY_RESET_VERSION = "resetVersion";
+    private static final int V049_RESET_VERSION = 1;
+
+    private TranscriptionResetManager() {
+    }
+
+    public static int currentGeneration(Context context) {
+        return prefs(context).getInt(KEY_GENERATION, 0);
+    }
+
+    public static boolean isCurrentGeneration(Context context, int generation) {
+        return currentGeneration(context) == generation;
+    }
+
+    public static synchronized boolean applyV049ResetIfNeeded(Context context) {
+        Context app = context.getApplicationContext();
+        SharedPreferences prefs = prefs(app);
+        if (prefs.getInt(KEY_RESET_VERSION, 0) >= V049_RESET_VERSION) {
+            return false;
+        }
+
+        // Change generation first. Workers that were created by 0.4.8 or earlier either carry
+        // generation 0 or the previous generation and are no longer allowed to persist output.
+        int nextGeneration = prefs.getInt(KEY_GENERATION, 0) + 1;
+        if (!prefs.edit().putInt(KEY_GENERATION, nextGeneration).commit()) {
+            return false;
+        }
+
+        WorkManager workManager = WorkManager.getInstance(app);
+        workManager.cancelAllWorkByTag("transcription");
+        workManager.cancelAllWorkByTag("model-comparison");
+
+        int transcriptFiles = deleteContents(new File(app.getFilesDir(), "transcripts"));
+        int comparisonFiles = deleteContents(new File(app.getFilesDir(), "model_comparisons"));
+
+        int audioCount = 0;
+        File[] audioFiles = StoragePolicy.getAudioDir(app)
+                .listFiles((dir, name) -> name.endsWith(".m4a"));
+        if (audioFiles != null) {
+            long resetAt = System.currentTimeMillis();
+            for (File audioFile : audioFiles) {
+                String segmentId = TranscriptionScheduler.extractSegmentId(audioFile.getName());
+                if (segmentId == null) {
+                    continue;
+                }
+                // Keep the original M4A. A zero start time means this reset row changes only the
+                // latest processing state; the original recording-time row remains authoritative.
+                SegmentRepository.appendWithoutNotify(app, segmentId, audioFile, 0L, resetAt,
+                        "READY", null);
+                audioCount++;
+            }
+        }
+
+        prefs.edit().putInt(KEY_RESET_VERSION, V049_RESET_VERSION).commit();
+
+        try {
+            JSONObject details = new JSONObject();
+            details.put("generation", nextGeneration);
+            details.put("deletedTranscriptFiles", transcriptFiles);
+            details.put("deletedComparisonFiles", comparisonFiles);
+            details.put("retainedAudioFiles", audioCount);
+            details.put("audioDeleted", false);
+            AppLogger.event(app, "V049_TRANSCRIPTION_STATE_RESET", details);
+        } catch (Exception ignored) {
+        }
+        return true;
+    }
+
+    private static SharedPreferences prefs(Context context) {
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    private static int deleteContents(File dir) {
+        if (!dir.isDirectory()) {
+            return 0;
+        }
+        int deleted = 0;
+        File[] files = dir.listFiles();
+        if (files == null) {
+            return 0;
+        }
+        for (File file : files) {
+            if (file.isDirectory()) {
+                deleted += deleteContents(file);
+                //noinspection ResultOfMethodCallIgnored
+                file.delete();
+            } else if (file.delete()) {
+                deleted++;
+            }
+        }
+        return deleted;
+    }
+}
+'''
+          Path('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionResetManager.java').write_text(reset_manager)
+
+          # Carry reset generation on automatic/manual transcription work, and support a clean REPLACE requeue.
+          path = 'app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionScheduler.java'
+          replace(path,
+              '    public static void enqueue(Context context, String segmentId, File file) {\n        enqueueInternal(context, segmentId, file, false);\n    }\n\n    public static boolean enqueueForceRetranscription(Context context, String segmentId, File file) {\n        return enqueueInternal(context, segmentId, file, true);\n    }\n\n    private static boolean enqueueInternal(Context context, String segmentId, File file,\n                                           boolean forceRetranscribe) {',
+              '    public static void enqueue(Context context, String segmentId, File file) {\n        enqueueInternal(context, segmentId, file, false, ExistingWorkPolicy.KEEP);\n    }\n\n    public static boolean enqueueForceRetranscription(Context context, String segmentId, File file) {\n        return enqueueInternal(context, segmentId, file, true, ExistingWorkPolicy.KEEP);\n    }\n\n    private static boolean enqueueAfterReset(Context context, String segmentId, File file) {\n        return enqueueInternal(context, segmentId, file, false, ExistingWorkPolicy.REPLACE);\n    }\n\n    private static boolean enqueueInternal(Context context, String segmentId, File file,\n                                           boolean forceRetranscribe, ExistingWorkPolicy workPolicy) {')
+          replace(path,
+              '                .putBoolean(EXTRA_FORCE_RETRANSCRIBE, forceRetranscribe)\n                .build();',
+              '                .putBoolean(EXTRA_FORCE_RETRANSCRIBE, forceRetranscribe)\n                .putInt(TranscriptionResetManager.EXTRA_GENERATION,\n                        TranscriptionResetManager.currentGeneration(context))\n                .build();')
+          replace(path,
+              '                ExistingWorkPolicy.KEEP,\n                request);',
+              '                workPolicy,\n                request);')
+          marker = '    public static int pendingAudioCount(Context context) {'
+          s = Path(path).read_text()
+          if marker not in s:
+              raise SystemExit('TranscriptionScheduler pending marker missing')
+          method = r'''    public static int enqueueExistingAfterReset(Context context) {
+        if (!WhisperModelManager.isReady(context)) {
+            WhisperModelManager.enqueueDownload(context);
+            return 0;
+        }
+        File[] files = StoragePolicy.getAudioDir(context)
+                .listFiles((dir, name) -> name.endsWith(".m4a"));
+        if (files == null) {
+            return 0;
+        }
+        int count = 0;
+        for (File file : files) {
+            String segmentId = extractSegmentId(file.getName());
+            if (segmentId == null) {
+                continue;
+            }
+            if (enqueueAfterReset(context, segmentId, file)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+'''
+          Path(path).write_text(s.replace(marker, method + marker, 1))
+
+          # Canonical worker: store timestamps and reject results from the pre-reset generation.
+          path = 'app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionWorker.java'
+          replace(path,
+              '        boolean forceRetranscribe = getInputData()\n                .getBoolean(TranscriptionScheduler.EXTRA_FORCE_RETRANSCRIBE, false);\n        if (segmentId == null',
+              '        boolean forceRetranscribe = getInputData()\n                .getBoolean(TranscriptionScheduler.EXTRA_FORCE_RETRANSCRIBE, false);\n        int workGeneration = getInputData().getInt(TranscriptionResetManager.EXTRA_GENERATION, 0);\n        if (!TranscriptionResetManager.isCurrentGeneration(context, workGeneration)) {\n            return Result.success();\n        }\n        if (segmentId == null')
+          replace(path,
+              '                LocalWhisperEngine.Response response = LocalWhisperEngine.transcribe(context, audioFile);\n                TranscriptionRepository.save(context, segmentId, audioFile,\n                        LocalWhisperEngine.ENGINE_ID, response.text);\n                SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),\n                        System.currentTimeMillis(), "TRANSCRIBED", null);',
+              '                LocalWhisperEngine.Response response = LocalWhisperEngine.transcribe(context, audioFile);\n                synchronized (TranscriptionResetManager.class) {\n                    if (!TranscriptionResetManager.isCurrentGeneration(context, workGeneration)) {\n                        SegmentRepository.appendWithoutNotify(context, segmentId, audioFile, 0L,\n                                System.currentTimeMillis(), "READY", null);\n                        log(context, "TRANSCRIPTION_RESULT_DISCARDED_AFTER_RESET", segmentId, audioFile,\n                                null, forceMetrics(forceRetranscribe), attempt);\n                        return Result.success();\n                    }\n                    TranscriptionRepository.save(context, segmentId, audioFile,\n                            LocalWhisperEngine.ENGINE_ID, response.text, response.segments);\n                    SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),\n                            System.currentTimeMillis(), "TRANSCRIBED", null);\n                }')
+          replace(path,
+              '            } catch (OutOfMemoryError oom) {\n                SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),',
+              '            } catch (OutOfMemoryError oom) {\n                if (!TranscriptionResetManager.isCurrentGeneration(context, workGeneration)) {\n                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile, 0L,\n                            System.currentTimeMillis(), "READY", null);\n                    return Result.success();\n                }\n                SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),')
+          replace(path,
+              '            } catch (Exception error) {\n                boolean retry = getRunAttemptCount() + 1 < MAX_ATTEMPTS;',
+              '            } catch (Exception error) {\n                if (!TranscriptionResetManager.isCurrentGeneration(context, workGeneration)) {\n                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile, 0L,\n                            System.currentTimeMillis(), "READY", null);\n                    return Result.success();\n                }\n                boolean retry = getRunAttemptCount() + 1 < MAX_ATTEMPTS;')
+
+          # Comparison jobs carry the same generation so long-running old comparisons cannot restore deleted results.
+          path = 'app/src/main/java/com/sktpj/recorder24h/transcription/ModelComparisonScheduler.java'
+          replace(path,
+              '                .putString(EXTRA_MODEL_IDS, joined)\n                .build();',
+              '                .putString(EXTRA_MODEL_IDS, joined)\n                .putInt(TranscriptionResetManager.EXTRA_GENERATION,\n                        TranscriptionResetManager.currentGeneration(context))\n                .build();')
+
+          path = 'app/src/main/java/com/sktpj/recorder24h/transcription/ModelComparisonWorker.java'
+          replace(path,
+              '        Context context = getApplicationContext();\n        String segmentId = getInputData().getString(ModelComparisonScheduler.EXTRA_SEGMENT_ID);',
+              '        Context context = getApplicationContext();\n        int workGeneration = getInputData().getInt(TranscriptionResetManager.EXTRA_GENERATION, 0);\n        if (!TranscriptionResetManager.isCurrentGeneration(context, workGeneration)) {\n            return Result.success();\n        }\n        String segmentId = getInputData().getString(ModelComparisonScheduler.EXTRA_SEGMENT_ID);')
+          s = Path(path).read_text()
+          occurrences = s.count('ModelComparisonRepository.save(context, segmentId, root);')
+          if occurrences < 5:
+              raise SystemExit(f'ModelComparisonWorker save occurrences unexpectedly low: {occurrences}')
+          s = s.replace('ModelComparisonRepository.save(context, segmentId, root);',
+                        'saveIfCurrent(context, segmentId, root, workGeneration);')
+          marker = '    private static JSONArray decoderDiagnostics(JSONArray segments) {'
+          helper = r'''    private static void saveIfCurrent(Context context, String segmentId, JSONObject root,
+                                      int workGeneration) throws Exception {
+        synchronized (TranscriptionResetManager.class) {
+            if (!TranscriptionResetManager.isCurrentGeneration(context, workGeneration)) {
+                throw new IllegalStateException("STALE_TRANSCRIPTION_GENERATION");
+            }
+            ModelComparisonRepository.save(context, segmentId, root);
+        }
+    }
+
+'''
+          if marker not in s:
+              raise SystemExit('ModelComparisonWorker helper marker missing')
+          Path(path).write_text(s.replace(marker, helper + marker, 1))
+
+          # History model reads the newly persisted time-coded decoder chunks.
+          path = 'app/src/main/java/com/sktpj/recorder24h/ui/SegmentHistoryRepository.kt'
+          replace(path,
+              'data class SegmentRecord(\n',
+              'data class TranscriptChunk(\n    val startMs: Long,\n    val endMs: Long,\n    val text: String\n)\n\ndata class SegmentRecord(\n')
+          replace(path,
+              '    val transcriptText: String?,\n    val transcriptModel: String?,',
+              '    val transcriptText: String?,\n    val transcriptChunks: List<TranscriptChunk>,\n    val transcriptModel: String?,')
+          replace(path,
+              '        var transcriptText: String? = null,\n        var transcriptModel: String? = null,',
+              '        var transcriptText: String? = null,\n        var transcriptChunks: List<TranscriptChunk> = emptyList(),\n        var transcriptModel: String? = null,')
+          replace(path,
+              '                transcriptText = builder.transcriptText,\n                transcriptModel = builder.transcriptModel,',
+              '                transcriptText = builder.transcriptText,\n                transcriptChunks = builder.transcriptChunks,\n                transcriptModel = builder.transcriptModel,')
+          replace(path,
+              '                builder.transcriptText = row.optString("text", "")\n                builder.transcriptModel = row.optString("model", "")',
+              '                builder.transcriptText = row.optString("text", "")\n                val chunks = mutableListOf<TranscriptChunk>()\n                row.optJSONArray("segments")?.let { segments ->\n                    for (index in 0 until segments.length()) {\n                        val segment = segments.optJSONObject(index) ?: continue\n                        val chunkText = segment.optString("text", "").trim()\n                        val startMs = segment.optLong("startMs", -1L)\n                        val endMs = segment.optLong("endMs", -1L)\n                        if (chunkText.isNotBlank() && startMs >= 0L && endMs >= startMs) {\n                            chunks += TranscriptChunk(startMs, endMs, chunkText)\n                        }\n                    }\n                }\n                builder.transcriptChunks = chunks\n                builder.transcriptModel = row.optString("model", "")')
+
+          # Main UI: perform one-time reset before requeue, and render/copy time-separated conversation logs.
+          path = 'app/src/main/java/com/sktpj/recorder24h/MainActivity.kt'
+          replace(path,
+              'import com.sktpj.recorder24h.transcription.TranscriptionRepository\nimport com.sktpj.recorder24h.transcription.TranscriptionScheduler\n',
+              'import com.sktpj.recorder24h.transcription.TranscriptionRepository\nimport com.sktpj.recorder24h.transcription.TranscriptionResetManager\nimport com.sktpj.recorder24h.transcription.TranscriptionScheduler\n')
+          replace(path,
+              '        AppLogger.event(this, "MAIN_ACTIVITY_CREATED")\n        if (WhisperModelManager.isReady(this)) {\n            TranscriptionScheduler.enqueueExisting(this)\n        }',
+              '        AppLogger.event(this, "MAIN_ACTIVITY_CREATED")\n        val resetApplied = TranscriptionResetManager.applyV049ResetIfNeeded(this)\n        if (WhisperModelManager.isReady(this)) {\n            if (resetApplied) TranscriptionScheduler.enqueueExistingAfterReset(this)\n            else TranscriptionScheduler.enqueueExisting(this)\n        }')
+          replace(path,
+              '            Text("${LocalWhisperEngine.ENGINE_ID} / Whisper base")',
+              '            Text("${LocalWhisperEngine.ENGINE_ID} / Whisper large-v3 Q5")')
+          replace(path,
+              '                Text("文字起こし", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))',
+              '                Text("会話ログ", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))')
+          replace(path,
+              '                        clipboard.setPrimaryClip(ClipData.newPlainText("24hRecoder 文字起こし", text))',
+              '                        clipboard.setPrimaryClip(ClipData.newPlainText("24hRecoder 会話ログ", transcriptClipboardText(record)))')
+          replace(path,
+              '                SelectionContainer {\n                    Text(if (text.isBlank()) "（文字起こし結果は空です）" else text, style = MaterialTheme.typography.bodyLarge, lineHeight = 26.sp)\n                }',
+              '''                if (record.transcriptChunks.isNotEmpty()) {
+                    Text(
+                        "録音時刻ごとに区切って表示しています。長い無音がある場合は区間の間隔も表示します。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    record.transcriptChunks.forEachIndexed { index, chunk ->
+                        if (index > 0) {
+                            val previous = record.transcriptChunks[index - 1]
+                            val gapMs = chunk.startMs - previous.endMs
+                            if (gapMs >= 5_000L) {
+                                Text(
+                                    "— ${formatDuration(gapMs)} 空き —",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                                )
+                            }
+                        }
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(7.dp)
+                            ) {
+                                Text(
+                                    transcriptChunkTimeLabel(record, chunk.startMs, chunk.endMs),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                SelectionContainer {
+                                    Text(chunk.text, style = MaterialTheme.typography.bodyLarge, lineHeight = 26.sp)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    SelectionContainer {
+                        Text(if (text.isBlank()) "（文字起こし結果は空です）" else text, style = MaterialTheme.typography.bodyLarge, lineHeight = 26.sp)
+                    }
+                    if (text.isNotBlank()) {
+                        Text(
+                            "この結果には時刻区間データがありません。0.4.9で再文字起こしした結果から時刻区切り表示になります。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }''')
+          replace(path, 'versionName ?: "0.4.8-debug"', 'versionName ?: "0.4.9-debug"')
+          replace(path, 'catch (_: Exception) { "0.4.8-debug" }', 'catch (_: Exception) { "0.4.9-debug" }')
+
+          marker = '@Composable\nprivate fun InfoRow(label: String, value: String) {'
+          s = Path(path).read_text()
+          if marker not in s:
+              raise SystemExit('MainActivity InfoRow marker missing')
+          helpers = r'''private fun transcriptClipboardText(record: SegmentRecord): String {
+    val fallback = record.transcriptText.orEmpty()
+    if (record.transcriptChunks.isEmpty()) return fallback
+    return record.transcriptChunks.joinToString("\n\n") { chunk ->
+        "${transcriptChunkTimeLabel(record, chunk.startMs, chunk.endMs)}\n${chunk.text}"
+    }
+}
+
+private fun transcriptChunkTimeLabel(record: SegmentRecord, startOffsetMs: Long, endOffsetMs: Long): String {
+    if (record.startedAtMs > 0L) {
+        val formatter = SimpleDateFormat("HH:mm:ss", Locale.JAPAN)
+        val start = formatter.format(Date(record.startedAtMs + startOffsetMs))
+        val end = formatter.format(Date(record.startedAtMs + endOffsetMs))
+        return "$start – $end"
+    }
+    return "+${formatTranscriptOffset(startOffsetMs)} – +${formatTranscriptOffset(endOffsetMs)}"
+}
+
+private fun formatTranscriptOffset(ms: Long): String {
+    val totalSeconds = (ms.coerceAtLeast(0L) / 1000L)
+    val minutes = totalSeconds / 60L
+    val seconds = totalSeconds % 60L
+    return String.format(Locale.JAPAN, "%02d:%02d", minutes, seconds)
+}
+
+'''
+          Path(path).write_text(s.replace(marker, helpers + marker, 1))
+
+          # Version bump.
+          path = 'app/build.gradle'
+          replace(path,
+              "        versionCode 12\n        versionName '0.4.8'",
+              "        versionCode 13\n        versionName '0.4.9'")
+
+          # README release note.
+          path = 'README.md'
+          s = Path(path).read_text()
+          marker = '## 文字起こしキュー\n'
+          note = '''### 0.4.9: 時刻区切り会話ログと文字起こし状態のクリーンリセット\n\n0.4.9-debugでは通常文字起こしJSONにWhisperデコーダの`startMs`/`endMs`/区間本文を保存し、記録詳細の「会話ログ」を録音時刻（HH:mm:ss）ごとのカードに分けて表示します。5秒以上の無音・非出力ギャップは区間間に「空き」として表示し、コピー結果にも時刻を含めます。\n\nまた0.4.9への初回起動時に、過去の`files/transcripts/`と`files/model_comparisons/`を一度だけ削除し、保持中の`.m4a`音声は削除せず全件をREADYへ戻します。既存の文字起こし・比較WorkManagerはキャンセルし、reset generationを更新するため、リセット前から実行中だったWorkerが終了後に古い結果や異常な状態を書き戻すことを防ぎます。large-v3 Q5 + ASR Audio Front-End + Silero VADが準備済みなら、保持音声はREPLACE方針でクリーンに再登録します。\n\n'''
+          if '### 0.4.9: 時刻区切り会話ログと文字起こし状態のクリーンリセット' not in s:
+              if marker not in s:
+                  raise SystemExit('README marker missing')
+              Path(path).write_text(s.replace(marker, note + marker, 1))
+
+          PY
+
+          git rm .github/workflows/patch-v049.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app README.md
+          git commit -m "Add timestamped conversation logs and reset transcription state"
+          git push origin HEAD:work/transcript-timeline-reset-v0.4.9
