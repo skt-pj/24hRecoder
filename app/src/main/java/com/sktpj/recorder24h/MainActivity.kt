@@ -856,6 +856,42 @@ private fun AudioPlaybackCard(record: SegmentRecord) {
 private fun TranscriptCard(record: SegmentRecord) {
     val context = LocalContext.current
     val text = record.transcriptText
+    var confirmRetranscribe by remember(record.segmentId) { mutableStateOf(false) }
+    val retranscriptionActive = record.hasTranscript && record.status in setOf("QUEUED", "TRANSCRIBING", "RETRY_WAIT")
+    val canRetranscribe = record.audioAvailable && record.audioPath != null
+
+    if (confirmRetranscribe) {
+        AlertDialog(
+            onDismissRequest = { confirmRetranscribe = false },
+            title = { Text("この音声を再文字起こししますか？") },
+            text = {
+                Text("保存済みの音声を現在のWhisper + VAD設定で再処理します。現在の文字起こしは、新しい結果の保存に成功するまで保持します。")
+            },
+            confirmButton = {
+                Button(onClick = {
+                    confirmRetranscribe = false
+                    val audioPath = record.audioPath
+                    val queued = audioPath != null && TranscriptionScheduler.enqueueForceRetranscription(
+                        context,
+                        record.segmentId,
+                        java.io.File(audioPath)
+                    )
+                    if (queued) {
+                        AppLogger.event(context, "UI_MANUAL_RETRANSCRIPTION_REQUESTED")
+                        Toast.makeText(context, "再文字起こしを登録しました", Toast.LENGTH_SHORT).show()
+                    } else if (!WhisperModelManager.isReady(context)) {
+                        Toast.makeText(context, "モデルを準備中です。準備後にもう一度実行してください", Toast.LENGTH_LONG).show()
+                    } else {
+                        Toast.makeText(context, "再文字起こしを登録できませんでした", Toast.LENGTH_SHORT).show()
+                    }
+                }) { Text("再文字起こし") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRetranscribe = false }) { Text("キャンセル") }
+            }
+        )
+    }
+
     Card {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -872,15 +908,45 @@ private fun TranscriptCard(record: SegmentRecord) {
                 Text(
                     when (record.status) {
                         "TRANSCRIBING" -> "文字起こし処理中です。"
-                        "FAILED" -> "文字起こしに失敗しました。音声が残っている場合は設定画面から再登録できます。"
+                        "FAILED" -> "文字起こしに失敗しました。元音声が残っていればこの画面から再実行できます。"
                         else -> "文字起こし結果はまだありません。"
                     },
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
+                if (retranscriptionActive) {
+                    Text(
+                        "再文字起こし中も現在の結果を表示しています。新しい結果が正常保存された時点で置き換わります。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 SelectionContainer {
                     Text(if (text.isBlank()) "（文字起こし結果は空です）" else text, style = MaterialTheme.typography.bodyLarge, lineHeight = 26.sp)
                 }
+            }
+
+            if (canRetranscribe) {
+                FilledTonalButton(
+                    onClick = { confirmRetranscribe = true },
+                    enabled = record.status !in setOf("QUEUED", "TRANSCRIBING"),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.Refresh, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (retranscriptionActive) "再文字起こし中…" else "この音声を再文字起こし")
+                }
+                Text(
+                    "処理済みの文字起こしでも、元M4Aが残っていれば何度でも再実行できます。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else if (record.hasTranscript) {
+                Text(
+                    "元音声が削除済みのため、この記録は再文字起こしできません。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
@@ -933,7 +999,7 @@ private fun SettingsScreen(
                     OutlinedButton(onClick = onRetryTranscription, modifier = Modifier.fillMaxWidth()) {
                         Icon(Icons.Filled.Refresh, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text("未処理音声を文字起こしへ再登録")
+                        Text("未処理・旧方式の音声を再登録")
                     }
                     if (dashboard.modelBytes > 0L) {
                         OutlinedButton(
@@ -997,22 +1063,32 @@ private fun readDashboard(context: Context): DashboardSnapshot {
 }
 
 private fun recordStatusLabel(record: SegmentRecord): String {
-    if (record.hasTranscript) return "文字起こし済み"
+    if (record.hasTranscript) {
+        return when (record.status) {
+            "QUEUED", "READY" -> "再文字起こし待ち"
+            "TRANSCRIBING" -> "再文字起こし中"
+            "RETRY_WAIT" -> "再文字起こし再試行待ち"
+            "FAILED" -> "再文字起こし失敗"
+            else -> "文字起こし済み"
+        }
+    }
     return when (record.status) {
+        "QUEUED", "READY" -> "待機中"
         "TRANSCRIBING" -> "文字起こし中"
         "RETRY_WAIT" -> "再試行待ち"
         "FAILED" -> "失敗"
         "CORRUPT" -> "破損"
-        "READY" -> "待機中"
         "DELETED" -> "削除済み"
         else -> record.status
     }
 }
 
 private fun recordTone(record: SegmentRecord) = when {
+    record.hasTranscript && record.status in setOf("QUEUED", "READY", "TRANSCRIBING", "RETRY_WAIT") -> StatusTone.WAITING
+    record.hasTranscript && record.status == "FAILED" -> StatusTone.ERROR
     record.hasTranscript -> StatusTone.SUCCESS
     record.status == "FAILED" || record.status == "CORRUPT" -> StatusTone.ERROR
-    record.status == "TRANSCRIBING" || record.status == "RETRY_WAIT" || record.status == "READY" -> StatusTone.WAITING
+    record.status == "QUEUED" || record.status == "TRANSCRIBING" || record.status == "RETRY_WAIT" || record.status == "READY" -> StatusTone.WAITING
     else -> StatusTone.NEUTRAL
 }
 
