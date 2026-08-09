@@ -64,6 +64,12 @@ VADモデルは`ggml-silero-v6.2.0.bin`を使用し、取得時に885,098 bytes�
 
 同じ実録音では、正しいtimebaseに直すとVADは約16.59〜73.84秒に6区間を検出し、base/small/medium Q5/large-v3 Q5は最終VAD付近まで出力する一方、Kotoba-Whisper v2.0 Q5は約21.62秒で出力が止まることが分かります。Kotobaの長音声経路は比較診断対象として残し、標準モデルにはしません。
 
+### 0.4.9: 時刻区切り会話ログと文字起こし状態のクリーンリセット
+
+0.4.9-debugでは通常文字起こしJSONにWhisperデコーダの`startMs`/`endMs`/区間本文を保存し、記録詳細の「会話ログ」を録音時刻（HH:mm:ss）ごとのカードに分けて表示します。5秒以上の無音・非出力ギャップは区間間に「空き」として表示し、コピー結果にも時刻を含めます。
+
+また0.4.9への初回起動時に、過去の`files/transcripts/`と`files/model_comparisons/`を一度だけ削除し、保持中の`.m4a`音声は削除せず全件をREADYへ戻します。既存の文字起こし・比較WorkManagerはキャンセルし、reset generationを更新するため、リセット前から実行中だったWorkerが終了後に古い結果や異常な状態を書き戻すことを防ぎます。large-v3 Q5 + ASR Audio Front-End + Silero VADが準備済みなら、保持音声はREPLACE方針でクリーンに再登録します。
+
 ## 文字起こしキュー
 
 WorkManagerは複数の`TranscriptionWorker`を同時に開始する場合がありますが、whisper.cppの実推論は1件ずつ実行します。0.4.1以前は各WorkerがWhisperの排他ロックを取得する前に`TRANSCRIBING`を書き込んでいたため、実際には順番待ちのセグメントまで全件「文字起こし中」と表示されていました。

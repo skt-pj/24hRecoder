@@ -18,7 +18,17 @@ public final class SegmentRepository {
 
     public static void append(Context context, String segmentId, File file, long startedAtMs,
                               long endedAtMs, String status, String reason) {
-        boolean newlyReady = "READY".equals(status)
+        appendInternal(context, segmentId, file, startedAtMs, endedAtMs, status, reason, true);
+    }
+
+    public static void appendWithoutNotify(Context context, String segmentId, File file, long startedAtMs,
+                                           long endedAtMs, String status, String reason) {
+        appendInternal(context, segmentId, file, startedAtMs, endedAtMs, status, reason, false);
+    }
+
+    private static void appendInternal(Context context, String segmentId, File file, long startedAtMs,
+                                       long endedAtMs, String status, String reason, boolean notifyReady) {
+        boolean newlyReady = notifyReady && "READY".equals(status)
                 && reason == null
                 && file != null
                 && file.isFile()

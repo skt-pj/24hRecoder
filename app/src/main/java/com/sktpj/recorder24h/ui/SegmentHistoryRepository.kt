@@ -9,6 +9,12 @@ import java.io.FileInputStream
 import java.io.InputStreamReader
 import java.util.Locale
 
+data class TranscriptChunk(
+    val startMs: Long,
+    val endMs: Long,
+    val text: String
+)
+
 data class SegmentRecord(
     val segmentId: String,
     val fileName: String?,
@@ -21,6 +27,7 @@ data class SegmentRecord(
     val audioPath: String?,
     val audioAvailable: Boolean,
     val transcriptText: String?,
+    val transcriptChunks: List<TranscriptChunk>,
     val transcriptModel: String?,
     val transcribedAtMs: Long
 ) {
@@ -46,6 +53,7 @@ object SegmentHistoryRepository {
         var status: String = "READY",
         var reason: String? = null,
         var transcriptText: String? = null,
+        var transcriptChunks: List<TranscriptChunk> = emptyList(),
         var transcriptModel: String? = null,
         var transcribedAtMs: Long = 0L,
         var audioFile: File? = null
@@ -84,6 +92,7 @@ object SegmentHistoryRepository {
                 audioPath = audio?.absolutePath,
                 audioAvailable = audio != null,
                 transcriptText = builder.transcriptText,
+                transcriptChunks = builder.transcriptChunks,
                 transcriptModel = builder.transcriptModel,
                 transcribedAtMs = builder.transcribedAtMs
             )
@@ -159,6 +168,19 @@ object SegmentHistoryRepository {
                 if (segmentId.isBlank()) return@forEach
                 val builder = builders.getOrPut(segmentId) { Builder(segmentId) }
                 builder.transcriptText = row.optString("text", "")
+                val chunks = mutableListOf<TranscriptChunk>()
+                row.optJSONArray("segments")?.let { segments ->
+                    for (index in 0 until segments.length()) {
+                        val segment = segments.optJSONObject(index) ?: continue
+                        val chunkText = segment.optString("text", "").trim()
+                        val startMs = segment.optLong("startMs", -1L)
+                        val endMs = segment.optLong("endMs", -1L)
+                        if (chunkText.isNotBlank() && startMs >= 0L && endMs >= startMs) {
+                            chunks += TranscriptChunk(startMs, endMs, chunkText)
+                        }
+                    }
+                }
+                builder.transcriptChunks = chunks
                 builder.transcriptModel = row.optString("model", "")
                 builder.transcribedAtMs = row.optLong("transcribedAtMs", file.lastModified())
                 if (!row.isNull("audioFile")) {

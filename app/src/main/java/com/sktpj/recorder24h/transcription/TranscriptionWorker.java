@@ -26,6 +26,10 @@ public final class TranscriptionWorker extends Worker {
         String filePath = getInputData().getString(TranscriptionScheduler.EXTRA_FILE_PATH);
         boolean forceRetranscribe = getInputData()
                 .getBoolean(TranscriptionScheduler.EXTRA_FORCE_RETRANSCRIBE, false);
+        int workGeneration = getInputData().getInt(TranscriptionResetManager.EXTRA_GENERATION, 0);
+        if (!TranscriptionResetManager.isCurrentGeneration(context, workGeneration)) {
+            return Result.success();
+        }
         if (segmentId == null || segmentId.isEmpty() || filePath == null || filePath.isEmpty()) {
             return Result.failure();
         }
@@ -121,10 +125,19 @@ public final class TranscriptionWorker extends Worker {
 
             try {
                 LocalWhisperEngine.Response response = LocalWhisperEngine.transcribe(context, audioFile);
-                TranscriptionRepository.save(context, segmentId, audioFile,
-                        LocalWhisperEngine.ENGINE_ID, response.text);
-                SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),
-                        System.currentTimeMillis(), "TRANSCRIBED", null);
+                synchronized (TranscriptionResetManager.class) {
+                    if (!TranscriptionResetManager.isCurrentGeneration(context, workGeneration)) {
+                        SegmentRepository.appendWithoutNotify(context, segmentId, audioFile, 0L,
+                                System.currentTimeMillis(), "READY", null);
+                        log(context, "TRANSCRIPTION_RESULT_DISCARDED_AFTER_RESET", segmentId, audioFile,
+                                null, forceMetrics(forceRetranscribe), attempt);
+                        return Result.success();
+                    }
+                    TranscriptionRepository.save(context, segmentId, audioFile,
+                            LocalWhisperEngine.ENGINE_ID, response.text, response.segments);
+                    SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),
+                            System.currentTimeMillis(), "TRANSCRIBED", null);
+                }
 
                 JSONObject metrics = forceMetrics(forceRetranscribe);
                 metrics.put("sampleCount", response.sampleCount);
@@ -166,6 +179,11 @@ public final class TranscriptionWorker extends Worker {
                         segmentId, audioFile, null, metrics, attempt);
                 return Result.success();
             } catch (OutOfMemoryError oom) {
+                if (!TranscriptionResetManager.isCurrentGeneration(context, workGeneration)) {
+                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile, 0L,
+                            System.currentTimeMillis(), "READY", null);
+                    return Result.success();
+                }
                 SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),
                         System.currentTimeMillis(), "FAILED", "LOCAL_TRANSCRIPTION_OOM");
                 log(context, forceRetranscribe ? "MANUAL_RETRANSCRIPTION_OOM" : "LOCAL_TRANSCRIPTION_OOM",
@@ -173,6 +191,11 @@ public final class TranscriptionWorker extends Worker {
                         forceMetrics(forceRetranscribe), attempt);
                 return Result.failure();
             } catch (Exception error) {
+                if (!TranscriptionResetManager.isCurrentGeneration(context, workGeneration)) {
+                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile, 0L,
+                            System.currentTimeMillis(), "READY", null);
+                    return Result.success();
+                }
                 boolean retry = getRunAttemptCount() + 1 < MAX_ATTEMPTS;
                 SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),
                         System.currentTimeMillis(), retry ? "RETRY_WAIT" : "FAILED",

@@ -13,8 +13,8 @@ android {
         applicationId 'com.sktpj.recorder24h'
         minSdk 29
         targetSdk 36
-        versionCode 12
-        versionName '0.4.8'
+        versionCode 13
+        versionName '0.4.9'
         // Canonical local transcription model: Whisper large-v3 Q5.
 
         ndk {

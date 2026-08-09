@@ -2,6 +2,7 @@ package com.sktpj.recorder24h.transcription;
 
 import android.content.Context;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
@@ -57,16 +58,23 @@ public final class TranscriptionRepository {
 
     public static void save(Context context, String segmentId, File audioFile, String model, String text)
             throws Exception {
+        save(context, segmentId, audioFile, model, text, null);
+    }
+
+    public static void save(Context context, String segmentId, File audioFile, String model, String text,
+                            JSONArray segments) throws Exception {
         synchronized (LOCK) {
             File target = fileFor(context, segmentId);
             File temp = new File(target.getParentFile(), target.getName() + ".tmp");
 
             JSONObject row = new JSONObject();
+            row.put("schemaVersion", 2);
             row.put("segmentId", segmentId);
             row.put("audioFile", audioFile == null ? JSONObject.NULL : audioFile.getName());
             row.put("model", model);
             row.put("transcribedAtMs", System.currentTimeMillis());
             row.put("text", text == null ? "" : text);
+            row.put("segments", segments == null ? new JSONArray() : new JSONArray(segments.toString()));
 
             byte[] bytes = row.toString().getBytes(StandardCharsets.UTF_8);
             try (FileOutputStream out = new FileOutputStream(temp, false)) {

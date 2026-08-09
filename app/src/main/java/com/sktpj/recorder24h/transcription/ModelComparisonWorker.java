@@ -25,6 +25,10 @@ public final class ModelComparisonWorker extends Worker {
     @Override
     public Result doWork() {
         Context context = getApplicationContext();
+        int workGeneration = getInputData().getInt(TranscriptionResetManager.EXTRA_GENERATION, 0);
+        if (!TranscriptionResetManager.isCurrentGeneration(context, workGeneration)) {
+            return Result.success();
+        }
         String segmentId = getInputData().getString(ModelComparisonScheduler.EXTRA_SEGMENT_ID);
         String filePath = getInputData().getString(ModelComparisonScheduler.EXTRA_FILE_PATH);
         String modelCsv = getInputData().getString(ModelComparisonScheduler.EXTRA_MODEL_IDS);
@@ -74,7 +78,7 @@ public final class ModelComparisonWorker extends Worker {
             for (String id : modelIds) requested.put(id);
             root.put("requestedModels", requested);
             root.put("results", results);
-            ModelComparisonRepository.save(context, segmentId, root);
+            saveIfCurrent(context, segmentId, root, workGeneration);
         } catch (Exception e) {
             return Result.failure();
         }
@@ -109,7 +113,7 @@ public final class ModelComparisonWorker extends Worker {
                 root.put("vadSpeechMs", vad.totalSpeechMs);
                 root.put("vadLastEndMs", vad.lastEndMs);
                 root.put("vadDetectMs", vad.vadDetectMs);
-                ModelComparisonRepository.save(context, segmentId, root);
+                saveIfCurrent(context, segmentId, root, workGeneration);
 
                 JSONObject vadLog = new JSONObject();
                 vadLog.put("segmentId", segmentId);
@@ -136,13 +140,13 @@ public final class ModelComparisonWorker extends Worker {
                     row.put("status", "RUNNING");
                     row.put("startedAtMs", System.currentTimeMillis());
                     results.put(row);
-                    ModelComparisonRepository.save(context, segmentId, root);
+                    saveIfCurrent(context, segmentId, root, workGeneration);
 
                     if (spec == null || !WhisperModelManager.isComparisonReady(context, modelId)) {
                         row.put("status", "MODEL_MISSING");
                         row.put("error", "MODEL_NOT_READY");
                         allSuccess = false;
-                        ModelComparisonRepository.save(context, segmentId, root);
+                        saveIfCurrent(context, segmentId, root, workGeneration);
                         continue;
                     }
 
@@ -238,14 +242,14 @@ public final class ModelComparisonWorker extends Worker {
                         log.put("message", safe(error.getMessage()));
                         AppLogger.event(context, "MODEL_COMPARISON_MODEL_FAILED", log);
                     }
-                    ModelComparisonRepository.save(context, segmentId, root);
+                    saveIfCurrent(context, segmentId, root, workGeneration);
                 }
             }
 
             root.put("finishedAtMs", System.currentTimeMillis());
             root.put("elapsedMs", System.currentTimeMillis() - startedAt);
             root.put("status", allSuccess ? "COMPLETED" : anySuccess ? "PARTIAL" : "FAILED");
-            ModelComparisonRepository.save(context, segmentId, root);
+            saveIfCurrent(context, segmentId, root, workGeneration);
             JSONObject finished = new JSONObject();
             finished.put("segmentId", segmentId);
             finished.put("status", root.optString("status"));
@@ -261,7 +265,7 @@ public final class ModelComparisonWorker extends Worker {
                 root.put("status", "FAILED");
                 root.put("error", error.getClass().getSimpleName());
                 root.put("message", safe(error.getMessage()));
-                ModelComparisonRepository.save(context, segmentId, root);
+                saveIfCurrent(context, segmentId, root, workGeneration);
                 JSONObject log = new JSONObject();
                 log.put("segmentId", segmentId);
                 log.put("error", error.getClass().getSimpleName());
@@ -270,6 +274,16 @@ public final class ModelComparisonWorker extends Worker {
             } catch (Exception ignored) {
             }
             return Result.failure();
+        }
+    }
+
+    private static void saveIfCurrent(Context context, String segmentId, JSONObject root,
+                                      int workGeneration) throws Exception {
+        synchronized (TranscriptionResetManager.class) {
+            if (!TranscriptionResetManager.isCurrentGeneration(context, workGeneration)) {
+                throw new IllegalStateException("STALE_TRANSCRIPTION_GENERATION");
+            }
+            ModelComparisonRepository.save(context, segmentId, root);
         }
     }
 

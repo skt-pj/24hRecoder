@@ -40,6 +40,8 @@ public final class ModelComparisonScheduler {
                 .putString(EXTRA_SEGMENT_ID, segmentId)
                 .putString(EXTRA_FILE_PATH, audioFile.getAbsolutePath())
                 .putString(EXTRA_MODEL_IDS, joined)
+                .putInt(TranscriptionResetManager.EXTRA_GENERATION,
+                        TranscriptionResetManager.currentGeneration(context))
                 .build();
         Constraints constraints = new Constraints.Builder().setRequiresBatteryNotLow(true).build();
         OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(ModelComparisonWorker.class)

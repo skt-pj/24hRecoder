@@ -39,15 +39,19 @@ public final class TranscriptionScheduler {
     }
 
     public static void enqueue(Context context, String segmentId, File file) {
-        enqueueInternal(context, segmentId, file, false);
+        enqueueInternal(context, segmentId, file, false, ExistingWorkPolicy.KEEP);
     }
 
     public static boolean enqueueForceRetranscription(Context context, String segmentId, File file) {
-        return enqueueInternal(context, segmentId, file, true);
+        return enqueueInternal(context, segmentId, file, true, ExistingWorkPolicy.KEEP);
+    }
+
+    private static boolean enqueueAfterReset(Context context, String segmentId, File file) {
+        return enqueueInternal(context, segmentId, file, false, ExistingWorkPolicy.REPLACE);
     }
 
     private static boolean enqueueInternal(Context context, String segmentId, File file,
-                                           boolean forceRetranscribe) {
+                                           boolean forceRetranscribe, ExistingWorkPolicy workPolicy) {
         if (segmentId == null || segmentId.isEmpty() || file == null || !file.isFile()) {
             return false;
         }
@@ -71,6 +75,8 @@ public final class TranscriptionScheduler {
                 .putString(EXTRA_SEGMENT_ID, segmentId)
                 .putString(EXTRA_FILE_PATH, file.getAbsolutePath())
                 .putBoolean(EXTRA_FORCE_RETRANSCRIBE, forceRetranscribe)
+                .putInt(TranscriptionResetManager.EXTRA_GENERATION,
+                        TranscriptionResetManager.currentGeneration(context))
                 .build();
         OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(TranscriptionWorker.class)
                 .setInputData(input)
@@ -82,7 +88,7 @@ public final class TranscriptionScheduler {
                 .build();
         WorkManager.getInstance(context.getApplicationContext()).enqueueUniqueWork(
                 forceRetranscribe ? forceWorkName(segmentId) : uniqueWorkName(segmentId),
-                ExistingWorkPolicy.KEEP,
+                workPolicy,
                 request);
         if (forceRetranscribe) {
             log(context, "MANUAL_RETRANSCRIPTION_ENQUEUED", segmentId, file, null);
@@ -113,6 +119,29 @@ public final class TranscriptionScheduler {
             }
             enqueue(context, segmentId, file);
             count++;
+        }
+        return count;
+    }
+
+    public static int enqueueExistingAfterReset(Context context) {
+        if (!WhisperModelManager.isReady(context)) {
+            WhisperModelManager.enqueueDownload(context);
+            return 0;
+        }
+        File[] files = StoragePolicy.getAudioDir(context)
+                .listFiles((dir, name) -> name.endsWith(".m4a"));
+        if (files == null) {
+            return 0;
+        }
+        int count = 0;
+        for (File file : files) {
+            String segmentId = extractSegmentId(file.getName());
+            if (segmentId == null) {
+                continue;
+            }
+            if (enqueueAfterReset(context, segmentId, file)) {
+                count++;
+            }
         }
         return count;
     }

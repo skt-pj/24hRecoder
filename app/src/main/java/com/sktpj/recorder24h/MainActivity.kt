@@ -100,6 +100,7 @@ import com.sktpj.recorder24h.storage.RecordingIntentStore
 import com.sktpj.recorder24h.storage.StoragePolicy
 import com.sktpj.recorder24h.transcription.LocalWhisperEngine
 import com.sktpj.recorder24h.transcription.TranscriptionRepository
+import com.sktpj.recorder24h.transcription.TranscriptionResetManager
 import com.sktpj.recorder24h.transcription.TranscriptionScheduler
 import com.sktpj.recorder24h.transcription.WhisperModelManager
 import com.sktpj.recorder24h.ui.SegmentHistoryRepository
@@ -126,8 +127,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         AppLogger.event(this, "MAIN_ACTIVITY_CREATED")
+        val resetApplied = TranscriptionResetManager.applyV049ResetIfNeeded(this)
         if (WhisperModelManager.isReady(this)) {
-            TranscriptionScheduler.enqueueExisting(this)
+            if (resetApplied) TranscriptionScheduler.enqueueExistingAfterReset(this)
+            else TranscriptionScheduler.enqueueExisting(this)
         }
         setContent {
             RecorderTheme {
@@ -575,7 +578,7 @@ private fun TranscriptionCard(dashboard: DashboardSnapshot, onOpenHistory: () ->
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("ローカル文字起こし", style = MaterialTheme.typography.titleLarge)
-            Text("${LocalWhisperEngine.ENGINE_ID} / Whisper base")
+            Text("${LocalWhisperEngine.ENGINE_ID} / Whisper large-v3 Q5")
             StatusPill(
                 if (dashboard.modelReady) "モデル準備済み" else if (dashboard.modelBytes > 0L) "モデル取得中" else "モデル未準備",
                 if (dashboard.modelReady) StatusTone.SUCCESS else StatusTone.WAITING
@@ -896,11 +899,11 @@ private fun TranscriptCard(record: SegmentRecord) {
     Card {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("文字起こし", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                Text("会話ログ", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                 if (text != null) {
                     TextButton(onClick = {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("24hRecoder 文字起こし", text))
+                        clipboard.setPrimaryClip(ClipData.newPlainText("24hRecoder 会話ログ", transcriptClipboardText(record)))
                         Toast.makeText(context, "文字起こしをコピーしました", Toast.LENGTH_SHORT).show()
                     }) { Text("コピー") }
                 }
@@ -922,8 +925,54 @@ private fun TranscriptCard(record: SegmentRecord) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                SelectionContainer {
-                    Text(if (text.isBlank()) "（文字起こし結果は空です）" else text, style = MaterialTheme.typography.bodyLarge, lineHeight = 26.sp)
+                if (record.transcriptChunks.isNotEmpty()) {
+                    Text(
+                        "録音時刻ごとに区切って表示しています。長い無音がある場合は区間の間隔も表示します。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    record.transcriptChunks.forEachIndexed { index, chunk ->
+                        if (index > 0) {
+                            val previous = record.transcriptChunks[index - 1]
+                            val gapMs = chunk.startMs - previous.endMs
+                            if (gapMs >= 5_000L) {
+                                Text(
+                                    "— ${formatDuration(gapMs)} 空き —",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                                )
+                            }
+                        }
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                                Text(
+                                    transcriptChunkTimeLabel(record, chunk.startMs, chunk.endMs),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                SelectionContainer {
+                                    Text(chunk.text, style = MaterialTheme.typography.bodyLarge, lineHeight = 26.sp)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    SelectionContainer {
+                        Text(if (text.isBlank()) "（文字起こし結果は空です）" else text, style = MaterialTheme.typography.bodyLarge, lineHeight = 26.sp)
+                    }
+                    if (text.isNotBlank()) {
+                        Text(
+                            "この結果には時刻区間データがありません。0.4.9で再文字起こしした結果から時刻区切り表示になります。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 
@@ -953,6 +1002,31 @@ private fun TranscriptCard(record: SegmentRecord) {
     }
 }
 
+private fun transcriptClipboardText(record: SegmentRecord): String {
+    val fallback = record.transcriptText.orEmpty()
+    if (record.transcriptChunks.isEmpty()) return fallback
+    return record.transcriptChunks.joinToString("\n\n") { chunk ->
+        "${transcriptChunkTimeLabel(record, chunk.startMs, chunk.endMs)}\n${chunk.text}"
+    }
+}
+
+private fun transcriptChunkTimeLabel(record: SegmentRecord, startOffsetMs: Long, endOffsetMs: Long): String {
+    if (record.startedAtMs > 0L) {
+        val formatter = SimpleDateFormat("HH:mm:ss", Locale.JAPAN)
+        val start = formatter.format(Date(record.startedAtMs + startOffsetMs))
+        val end = formatter.format(Date(record.startedAtMs + endOffsetMs))
+        return "$start – $end"
+    }
+    return "+${formatTranscriptOffset(startOffsetMs)} – +${formatTranscriptOffset(endOffsetMs)}"
+}
+
+private fun formatTranscriptOffset(ms: Long): String {
+    val totalSeconds = (ms.coerceAtLeast(0L) / 1000L)
+    val minutes = totalSeconds / 60L
+    val seconds = totalSeconds % 60L
+    return String.format(Locale.JAPAN, "%02d:%02d", minutes, seconds)
+}
+
 @Composable
 private fun InfoRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -971,8 +1045,8 @@ private fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val versionName = remember {
-        try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.4.8-debug" }
-        catch (_: Exception) { "0.4.8-debug" }
+        try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.4.9-debug" }
+        catch (_: Exception) { "0.4.9-debug" }
     }
     LazyColumn(
         Modifier.fillMaxSize(),
