@@ -28,7 +28,10 @@ public final class WhisperModelDownloadWorker extends Worker {
             File model = WhisperModelManager.download(context);
             JSONObject details = new JSONObject();
             details.put("model", WhisperModelManager.MODEL_ID);
-            details.put("bytes", model.length());
+            details.put("asrBytes", model.length());
+            details.put("vadModel", WhisperModelManager.VAD_MODEL_ID);
+            details.put("vadBytes", WhisperModelManager.vadModelFile(context).length());
+            details.put("vadSha256Verified", WhisperModelManager.verifyVadModel(context));
             AppLogger.event(context, "WHISPER_MODEL_READY", details);
             TranscriptionScheduler.enqueueExisting(context);
             return Result.success();
