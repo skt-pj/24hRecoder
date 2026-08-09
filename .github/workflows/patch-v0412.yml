@@ -1,0 +1,30 @@
+name: Patch v0.4.12 queue UI
+
+on:
+  push:
+    branches: ["work/queue-simple-v0.4.12"]
+    paths:
+      - ".github/patch-v0412.py"
+      - ".github/workflows/patch-v0412.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/queue-simple-v0.4.12
+      - name: Apply v0.4.12 queue simplification
+        run: python .github/patch-v0412.py
+      - name: Remove one-shot patch files
+        run: rm .github/patch-v0412.py .github/workflows/patch-v0412.yml
+      - name: Commit patched source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Simplify transcription queue UI"
+          git push origin HEAD:work/queue-simple-v0.4.12
