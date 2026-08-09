@@ -17,7 +17,7 @@ Android 16 / Pixel 10aを初期基準端末とした24時間録音アプリで�
 - 再起動後の自動録音開始は行わず、再開通知のみ表示
 - JSON Lines形式のイベントログ
 - `whisper.cpp v1.9.1`をAndroid NDKで組み込んだ完全ローカル文字起こし
-- 多言語Whisper `base`モデルを使用
+- 多言語Whisper `large-v3 Q5`モデルを標準文字起こしに使用
 - M4A復号後にDCオフセット除去・ロバスト音量推定・適応ゲイン・スムーズリミッタを適用
 - Silero VAD v6.2.0で音声区間を抽出し、非発話区間のWhisperハルシネーションを抑制
 - 5分M4AをAndroid MediaCodecでPCMへ復号し、端末内で推論
@@ -49,13 +49,19 @@ Android 16 / Pixel 10aを初期基準端末とした24時間録音アプリで�
 
 ゲイン後のピークは-2.5dBFSを超えた部分だけ滑らかに圧縮し、-1dBFSへ漸近するリミッタを通します。強いノイズ除去やEQは常時適用せず、音声のスペクトルを必要以上に変えない方針です。その後にSilero VADとWhisperを実行します。
 
-VADモデルは`ggml-silero-v6.2.0.bin`を使用し、取得時に885,098 bytesとSHA-256 `2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987`を検証します。Whisper baseと同じく`noBackupFilesDir/whisper/`へ保存し、作業データ1GBの論理上限には含めません。
+VADモデルは`ggml-silero-v6.2.0.bin`を使用し、取得時に885,098 bytesとSHA-256 `2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987`を検証します。標準ASRのWhisper large-v3 Q5と同じく`noBackupFilesDir/whisper/`へ保存し、モデル本体は作業データ1GBの論理上限には含めません。
 
-エンジンIDは`whisper.cpp-v1.9.1/base+frontend-v1+silero-v6.2.0`とします。旧エンジンで文字起こし済みでも元M4Aが残っているセグメントは現行エンジンの再処理対象になります。既存JSONは新しい文字起こしのtemp書き込み・fsync・renameが成功するまで保持し、失敗時に過去の結果を失わないようにします。元M4Aが既に容量管理で削除済みの場合は再文字起こしできないため、旧結果をそのまま保持します。
+0.4.8-debugでは標準文字起こしをWhisper large-v3 Q5へ変更し、エンジンIDを`whisper.cpp-v1.9.1/large-v3-q5_0+frontend-v1+silero-v6.2.0`とします。旧エンジンで文字起こし済みでも元M4Aが残っているセグメントは現行エンジンの再処理対象になります。既存JSONは新しい文字起こしのtemp書き込み・fsync・renameが成功するまで保持し、失敗時に過去の結果を失わないようにします。元M4Aが既に容量管理で削除済みの場合は再文字起こしできないため、旧結果をそのまま保持します。
 
 0.4.4-debug以降では自動移行とは別に、現在のエンジンですでに処理済みの記録をユーザー操作で強制再実行できます。記録詳細の「この音声を再文字起こし」を押すと確認ダイアログを表示し、同じsegmentIdの保存済みM4Aを現在の前処理 + Whisper + VAD設定で再処理します。Workerは手動再実行フラグがある場合、現在のエンジンで処理済みでもスキップしません。再処理に失敗しても既存の文字起こしJSONは削除せず、新しい結果の永続保存に成功した時だけ置換します。
 
 文字起こし完了ログには`inputRms`、`inputPeak`、`inputClippedFraction`、`audioRms`、`audioPeak`、`clippedFraction`、`dcOffset`、`estimatedNoiseRms`、`estimatedSpeechRms`、`snrProxyDb`、`appliedGainDb`、`activeFrameFraction`、`limitedSampleFraction`、`boostSuppressedForLowSnr`、`preprocessMs`を記録します。保持中M4Aを実際に再生した音とこれらの値を合わせ、録音入力・前処理・Whisper認識を切り分けます。
+
+### 0.4.8: large-v3 Q5既定化とVAD診断時刻修正
+
+実録音の比較でbase/smallよりlarge-v3 Q5の日本語出力が相対的にまともだったため、速度より内容を優先し、通常の確定文字起こしもlarge-v3 Q5を使用します。0.4.7の比較ログでSilero VADの独立診断時刻が100倍になっていた不具合も修正しました。whisper.cpp v1.9.1のVAD segment APIはcentisecond単位を返すため、ms変換は`* 10`です。修正後は5分音源のVAD区間とWhisper出力時刻を同じms timebaseで直接比較できます。
+
+同じ実録音では、正しいtimebaseに直すとVADは約16.59〜73.84秒に6区間を検出し、base/small/medium Q5/large-v3 Q5は最終VAD付近まで出力する一方、Kotoba-Whisper v2.0 Q5は約21.62秒で出力が止まることが分かります。Kotobaの長音声経路は比較診断対象として残し、標準モデルにはしません。
 
 ## 文字起こしキュー
 
@@ -77,7 +83,7 @@ WorkManagerは複数の`TranscriptionWorker`を同時に開始する場合があ
 
 ## ローカルWhisperモデル
 
-Whisper ASRには`ggml-base.bin`、発話検出には`ggml-silero-v6.2.0.bin`を使用します。既にbaseがある端末を0.4.3以降へ更新した場合は不足しているVADモデルだけを取得します。取得後は各モデルのサイズとハッシュを検証します。
+標準Whisper ASRには`ggml-large-v3-q5_0.bin`、発話検出には`ggml-silero-v6.2.0.bin`を使用します。large-v3 Q5は1,081,140,203 bytesとSHA-256 `d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1`を検証します。base/small/medium Q5/Kotoba Q5は比較用として引き続き利用できます。
 
 モデルは`noBackupFilesDir/whisper/`へ保存し、24hRecoderの「作業データ1GB」論理上限には含めません。ただし端末の実空き容量監視からは除外しません。
 

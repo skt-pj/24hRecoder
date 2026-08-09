@@ -27,16 +27,16 @@ public final class WhisperModelManager {
     public static final String MODEL_MEDIUM_Q5 = "medium-q5";
     public static final String MODEL_KOTOBA_V2_Q5 = "kotoba-v2-q5";
     public static final String MODEL_LARGE_V3_Q5 = "large-v3-q5";
+    public static final String MODEL_DEFAULT = MODEL_LARGE_V3_Q5;
 
-    // Standard automatic transcription remains multilingual Whisper base. Model comparison is
-    // deliberately separate so experiments never replace the user's canonical transcript unless
-    // the normal retranscription action is used.
-    public static final String MODEL_ID = "whisper.cpp-v1.9.1/base+silero-v6.2.0";
-    public static final String MODEL_FILE_NAME = "ggml-base.bin";
-    public static final long ASR_EXPECTED_BYTES = 147_951_465L;
-    public static final String ASR_EXPECTED_SHA1 = "465707469ff3a37a2b9b8d8f89f2f99de7299dac";
+    // Canonical automatic transcription now prioritizes recognition quality and uses
+    // multilingual Whisper large-v3 Q5. Comparison remains separate and never overwrites the
+    // canonical transcript unless the normal/manual transcription path is invoked.
+    public static final String MODEL_ID = "whisper.cpp-v1.9.1/large-v3-q5_0+silero-v6.2.0";
+    public static final String MODEL_FILE_NAME = "ggml-large-v3-q5_0.bin";
+    public static final long ASR_EXPECTED_BYTES = 1_081_140_203L;
     public static final String ASR_EXPECTED_SHA256 =
-            "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe";
+            "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1";
 
     public static final String VAD_MODEL_ID = "silero-v6.2.0";
     public static final String VAD_MODEL_FILE_NAME = "ggml-silero-v6.2.0.bin";
@@ -125,7 +125,7 @@ public final class WhisperModelManager {
     }
 
     public static File modelFile(Context context) {
-        return modelFile(context, MODEL_BASE);
+        return modelFile(context, MODEL_DEFAULT);
     }
 
     public static File modelFile(Context context, String modelId) {
@@ -141,7 +141,7 @@ public final class WhisperModelManager {
     }
 
     public static boolean isAsrReady(Context context) {
-        return isModelReady(context, MODEL_BASE);
+        return isModelReady(context, MODEL_DEFAULT);
     }
 
     public static boolean isModelReady(Context context, String modelId) {
@@ -189,7 +189,7 @@ public final class WhisperModelManager {
     }
 
     public static void enqueueDownload(Context context) {
-        enqueueModelDownload(context, MODEL_BASE);
+        enqueueModelDownload(context, MODEL_DEFAULT);
     }
 
     public static void enqueueModelDownload(Context context, String modelId) {
@@ -208,13 +208,13 @@ public final class WhisperModelManager {
                 .addTag("whisper-model-download")
                 .addTag("whisper-model-download:" + modelId)
                 .build();
-        String unique = MODEL_BASE.equals(modelId) ? UNIQUE_DOWNLOAD : "download-whisper-model:" + modelId;
+        String unique = MODEL_DEFAULT.equals(modelId) ? UNIQUE_DOWNLOAD : "download-whisper-model:" + modelId;
         WorkManager.getInstance(context.getApplicationContext()).enqueueUniqueWork(
                 unique, ExistingWorkPolicy.KEEP, request);
     }
 
     static File download(Context context) throws Exception {
-        File asr = downloadModel(context, MODEL_BASE);
+        File asr = downloadModel(context, MODEL_DEFAULT);
         if (!isReady(context)) {
             throw new IOException("Local Whisper model set is incomplete");
         }
@@ -255,7 +255,7 @@ public final class WhisperModelManager {
         connection.setConnectTimeout(30_000);
         connection.setReadTimeout(30_000);
         connection.setInstanceFollowRedirects(true);
-        connection.setRequestProperty("User-Agent", "24hRecoder/0.4.7");
+        connection.setRequestProperty("User-Agent", "24hRecoder/0.4.8");
         connection.connect();
         int code = connection.getResponseCode();
         if (code < 200 || code >= 300) {

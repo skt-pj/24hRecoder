@@ -132,6 +132,11 @@ public final class TranscriptionWorker extends Worker {
                 metrics.put("decodeMs", response.decodeMs);
                 metrics.put("preprocessMs", response.preprocessMs);
                 metrics.put("inferenceMs", response.inferenceMs);
+                metrics.put("modelLoadMs", response.modelLoadMs);
+                metrics.put("whisperFullMs", response.whisperFullMs);
+                metrics.put("modelId", response.modelId);
+                metrics.put("modelLabel", response.modelLabel);
+                metrics.put("modelBytes", response.modelBytes);
                 metrics.put("queueWaitMs", queueWaitMs);
                 metrics.put("textChars", response.text.length());
 

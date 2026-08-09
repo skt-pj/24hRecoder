@@ -8,7 +8,7 @@ import org.json.JSONObject;
 import java.io.File;
 
 public final class LocalWhisperEngine {
-    public static final String ENGINE_ID = "whisper.cpp-v1.9.1/base+frontend-v1+silero-v6.2.0";
+    public static final String ENGINE_ID = "whisper.cpp-v1.9.1/large-v3-q5_0+frontend-v1+silero-v6.2.0";
     private static final String LANGUAGE = "ja";
 
     static {
@@ -20,7 +20,7 @@ public final class LocalWhisperEngine {
 
     public static synchronized Response transcribe(Context context, File audioFile) throws Exception {
         PreparedAudio prepared = prepareAudio(audioFile);
-        return transcribePrepared(context, prepared, WhisperModelManager.MODEL_BASE);
+        return transcribePrepared(context, prepared, WhisperModelManager.MODEL_DEFAULT);
     }
 
     static PreparedAudio prepareAudio(File audioFile) throws Exception {

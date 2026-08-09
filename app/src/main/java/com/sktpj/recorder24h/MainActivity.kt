@@ -368,7 +368,7 @@ private fun RecorderApp(
                             onDownloadModel = {
                                 WhisperModelManager.enqueueDownload(context)
                                 AppLogger.event(context, "UI_WHISPER_MODEL_DOWNLOAD_REQUESTED")
-                                Toast.makeText(context, "Whisper baseモデルのダウンロードを開始します", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Whisper large-v3 Q5モデルのダウンロードを開始します", Toast.LENGTH_SHORT).show()
                             },
                             onRetryTranscription = {
                                 if (!WhisperModelManager.isReady(context)) {
@@ -971,8 +971,8 @@ private fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val versionName = remember {
-        try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.4.0-debug" }
-        catch (_: Exception) { "0.4.0-debug" }
+        try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.4.8-debug" }
+        catch (_: Exception) { "0.4.8-debug" }
     }
     LazyColumn(
         Modifier.fillMaxSize(),
@@ -983,7 +983,7 @@ private fun SettingsScreen(
             Card {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Whisperモデル", style = MaterialTheme.typography.titleLarge)
-                    Text("base / 多言語 / ${formatMb(WhisperModelManager.EXPECTED_BYTES)}")
+                    Text("large-v3 Q5 / 多言語 / デフォルト / ${formatMb(WhisperModelManager.EXPECTED_BYTES)}")
                     StatusPill(
                         if (dashboard.modelReady) "準備済み" else if (dashboard.modelBytes > 0L) "取得中" else "未準備",
                         if (dashboard.modelReady) StatusTone.SUCCESS else StatusTone.WAITING
@@ -995,7 +995,7 @@ private fun SettingsScreen(
                         )
                     }
                     if (!dashboard.modelReady) {
-                        Button(onClick = onDownloadModel, modifier = Modifier.fillMaxWidth()) { Text("Whisper baseモデルをダウンロード") }
+                        Button(onClick = onDownloadModel, modifier = Modifier.fillMaxWidth()) { Text("Whisper large-v3 Q5モデルをダウンロード") }
                     }
                     OutlinedButton(onClick = onRetryTranscription, modifier = Modifier.fillMaxWidth()) {
                         Icon(Icons.Filled.Refresh, contentDescription = null)

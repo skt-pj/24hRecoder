@@ -64,11 +64,12 @@ public final class ModelComparisonWorker extends Worker {
         JSONArray results = new JSONArray();
         long startedAt = System.currentTimeMillis();
         try {
-            root.put("schemaVersion", 2);
+            root.put("schemaVersion", 3);
             root.put("status", "RUNNING");
             root.put("segmentId", segmentId);
             root.put("audioFile", audioFile.getName());
             root.put("startedAtMs", startedAt);
+            root.put("defaultModelId", WhisperModelManager.MODEL_DEFAULT);
             JSONArray requested = new JSONArray();
             for (String id : modelIds) requested.put(id);
             root.put("requestedModels", requested);

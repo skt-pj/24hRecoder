@@ -22,7 +22,7 @@ public final class WhisperModelDownloadWorker extends Worker {
         Context context = getApplicationContext();
         String modelId = getInputData().getString(WhisperModelManager.EXTRA_MODEL_ID);
         if (modelId == null || modelId.isEmpty()) {
-            modelId = WhisperModelManager.MODEL_BASE;
+            modelId = WhisperModelManager.MODEL_DEFAULT;
         }
         WhisperModelManager.ModelSpec spec = WhisperModelManager.modelSpec(modelId);
         if (spec == null) {
@@ -30,17 +30,15 @@ public final class WhisperModelDownloadWorker extends Worker {
         }
 
         if (WhisperModelManager.isComparisonReady(context, modelId)) {
-            if (WhisperModelManager.MODEL_BASE.equals(modelId)) {
+            if (WhisperModelManager.MODEL_DEFAULT.equals(modelId)) {
                 TranscriptionScheduler.enqueueExisting(context);
             }
             return Result.success();
         }
 
-        // small/Kotoba are explicitly requested comparison assets and can be ~500 MiB. Promote
-        // those user-triggered transfers to WorkManager's foreground dataSync service so a slow
-        // network is not constrained by the normal short Worker execution window. The standard
-        // base/VAD bootstrap keeps the existing background behavior because it may be scheduled by
-        // MY_PACKAGE_REPLACED without a visible user action.
+        // Large comparison/default assets can exceed 1 GiB. Promote non-base transfers to
+        // WorkManager's foreground dataSync service so a slow network is not constrained by a
+        // normal short Worker execution window.
         if (!WhisperModelManager.MODEL_BASE.equals(modelId)) {
             try {
                 setForegroundAsync(TranscriptionForegroundInfo.modelDownload(context, spec))
@@ -84,7 +82,7 @@ public final class WhisperModelDownloadWorker extends Worker {
             details.put("vadBytes", WhisperModelManager.vadModelFile(context).length());
             details.put("vadSha256Verified", WhisperModelManager.verifyVadModel(context));
             AppLogger.event(context, "WHISPER_MODEL_READY", details);
-            if (WhisperModelManager.MODEL_BASE.equals(modelId)) {
+            if (WhisperModelManager.MODEL_DEFAULT.equals(modelId)) {
                 TranscriptionScheduler.enqueueExisting(context);
             }
             return Result.success();

@@ -146,14 +146,17 @@ Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeAnalyzeVadDeta
          << ",\"aboveThresholdFraction\":"
          << (probability_count > 0 ? above_threshold / static_cast<double>(probability_count) : 0.0)
          << ",\"threshold\":0.5"
+         << ",\"timebase\":\"whisper-vad-centiseconds-to-ms\""
          << ",\"segmentCount\":" << segment_count
          << ",\"segments\":[";
 
     for (int i = 0; i < segment_count; ++i) {
-        const float t0_seconds = whisper_vad_segments_get_segment_t0(segments, i);
-        const float t1_seconds = whisper_vad_segments_get_segment_t1(segments, i);
-        const long long start_ms = std::llround(t0_seconds * 1000.0);
-        const long long end_ms = std::llround(t1_seconds * 1000.0);
+        // whisper.cpp stores/returns VAD segment timestamps in centiseconds.
+        // Convert cs -> ms by multiplying by 10 (not 1000).
+        const float t0_centiseconds = whisper_vad_segments_get_segment_t0(segments, i);
+        const float t1_centiseconds = whisper_vad_segments_get_segment_t1(segments, i);
+        const long long start_ms = std::llround(t0_centiseconds * 10.0);
+        const long long end_ms = std::llround(t1_centiseconds * 10.0);
         total_speech_ms += std::max(0LL, end_ms - start_ms);
         last_end_ms = std::max(last_end_ms, end_ms);
         if (i > 0) json << ',';

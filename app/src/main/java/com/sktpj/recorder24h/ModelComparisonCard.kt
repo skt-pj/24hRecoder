@@ -56,10 +56,10 @@ fun ModelComparisonCard(record: SegmentRecord) {
         mutableStateOf(ModelComparisonRepository.read(context, record.segmentId))
     }
     var selectedIds by remember(record.segmentId) {
+        val defaultId = WhisperModelManager.MODEL_DEFAULT
         mutableStateOf(
-            specs.filter { WhisperModelManager.isComparisonReady(context, it.id) }
-                .map { it.id }
-                .toSet()
+            if (WhisperModelManager.isComparisonReady(context, defaultId)) setOf(defaultId)
+            else emptySet()
         )
     }
 
@@ -87,7 +87,7 @@ fun ModelComparisonCard(record: SegmentRecord) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("モデル比較", style = MaterialTheme.typography.titleLarge)
             Text(
-                "この記録の元音声だけを同じ前処理・同じSilero VAD条件で比較します。内容と発話の取りこぼしを最優先で確認し、速度は補助指標として表示します。比較結果は通常の文字起こしを上書きしません。",
+                "この記録の元音声だけを同じ前処理・同じSilero VAD条件で比較します。large-v3 Q5をデフォルト選択し、内容と発話の取りこぼしを最優先で確認します。速度は補助指標です。比較結果は通常の文字起こしを上書きしません。",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
@@ -99,7 +99,10 @@ fun ModelComparisonCard(record: SegmentRecord) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Column(Modifier.weight(1f)) {
-                                Text(spec.label, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    if (spec.id == WhisperModelManager.MODEL_DEFAULT) "${spec.label}（デフォルト）" else spec.label,
+                                    fontWeight = FontWeight.SemiBold
+                                )
                                 Text(
                                     "${spec.description} • ${formatModelBytes(spec.expectedBytes)}",
                                     style = MaterialTheme.typography.bodySmall,
