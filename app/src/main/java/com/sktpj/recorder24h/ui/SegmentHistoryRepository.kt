@@ -125,11 +125,11 @@ object SegmentHistoryRepository {
                             val end = row.optLong("endedAtMs", 0L)
                             val rawStatus = row.optString("status", "READY")
                             val rawReason = if (row.isNull("reason")) null else row.optString("reason", null)
-                            // QUEUED is an internal scheduler state: a Worker has started but is
-                            // waiting for the single local Whisper inference slot. User-facing UI
-                            // should present that as ordinary waiting, not active transcription.
-                            val status = if (rawStatus == "QUEUED") "READY" else rawStatus
-                            val reason = if (rawStatus == "QUEUED") null else rawReason
+                            // Keep QUEUED distinct from READY. The detail screen uses the
+                            // reason to show whether this is an automatic queue or a user-requested
+                            // retranscription, while still distinguishing it from active inference.
+                            val status = rawStatus
+                            val reason = rawReason
 
                             if (start > 0L && (builder.fallbackStartMs == 0L || start < builder.fallbackStartMs)) {
                                 builder.fallbackStartMs = start

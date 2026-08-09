@@ -281,11 +281,11 @@ private fun RecorderApp(
             delay(2_000L)
         }
     }
-    LaunchedEffect(section, refresh) {
+    LaunchedEffect(section, refresh, selectedId) {
         if (section == AppSection.HISTORY) {
             do {
                 records = withContext(Dispatchers.IO) { SegmentHistoryRepository.load(context) }
-                delay(5_000L)
+                delay(if (selectedId != null) 1_000L else 5_000L)
             } while (section == AppSection.HISTORY)
         }
     }
@@ -861,7 +861,10 @@ private fun TranscriptCard(record: SegmentRecord) {
     val context = LocalContext.current
     val text = record.transcriptText
     var confirmRetranscribe by remember(record.segmentId) { mutableStateOf(false) }
-    val retranscriptionActive = record.hasTranscript && record.status in setOf("QUEUED", "TRANSCRIBING", "RETRY_WAIT")
+    val manualRetranscriptionActive = isManualRetranscriptionState(record) &&
+        record.status in setOf("QUEUED", "READY", "TRANSCRIBING", "RETRY_WAIT")
+    val retranscriptionActive = manualRetranscriptionActive ||
+        (record.hasTranscript && record.status in setOf("QUEUED", "TRANSCRIBING", "RETRY_WAIT"))
     val canRetranscribe = record.audioAvailable && record.audioPath != null
 
     if (confirmRetranscribe) {
@@ -906,6 +909,20 @@ private fun TranscriptCard(record: SegmentRecord) {
                         clipboard.setPrimaryClip(ClipData.newPlainText("24hRecoder 会話ログ", transcriptClipboardText(record)))
                         Toast.makeText(context, "文字起こしをコピーしました", Toast.LENGTH_SHORT).show()
                     }) { Text("コピー") }
+                }
+            }
+            transcriptionActivityMessage(record)?.let { message ->
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.padding(12.dp)
+                    )
                 }
             }
             if (text == null) {
@@ -979,12 +996,17 @@ private fun TranscriptCard(record: SegmentRecord) {
             if (canRetranscribe) {
                 FilledTonalButton(
                     onClick = { confirmRetranscribe = true },
-                    enabled = record.status !in setOf("QUEUED", "TRANSCRIBING", "RETRY_WAIT"),
+                    enabled = record.status !in setOf("TRANSCRIBING", "RETRY_WAIT") && !manualRetranscriptionActive,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Filled.Refresh, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text(if (retranscriptionActive) "再文字起こし中…" else "この音声を再文字起こし")
+                    Text(when {
+                        manualRetranscriptionActive && record.status == "TRANSCRIBING" -> "手動再文字起こし中…"
+                        manualRetranscriptionActive -> "手動再文字起こし待ち…"
+                        record.status == "QUEUED" -> "この音声を手動で再文字起こし"
+                        else -> "この音声を再文字起こし"
+                    })
                 }
                 Text(
                     "処理済みの文字起こしでも、元M4Aが残っていれば何度でも再実行できます。",
@@ -999,6 +1021,33 @@ private fun TranscriptCard(record: SegmentRecord) {
                 )
             }
         }
+    }
+}
+
+private fun isManualRetranscriptionState(record: SegmentRecord): Boolean {
+    val reason = record.reason.orEmpty()
+    return reason.startsWith("MANUAL_RETRANSCRIPTION") || reason == "MANUAL_RETRANSCRIBING"
+}
+
+private fun transcriptionActivityMessage(record: SegmentRecord): String? {
+    return when {
+        isManualRetranscriptionState(record) && record.status == "QUEUED" ->
+            "手動再文字起こしを登録済みです。Whisper処理枠または低バッテリー制約の解除を待っています。"
+        isManualRetranscriptionState(record) && record.status == "READY" ->
+            "手動再文字起こしの開始待ちです。"
+        isManualRetranscriptionState(record) && record.status == "TRANSCRIBING" ->
+            "Whisper large-v3 Q5で手動再文字起こし中です。"
+        isManualRetranscriptionState(record) && record.status == "RETRY_WAIT" ->
+            "手動再文字起こしが一時失敗し、再試行を待っています。"
+        record.status == "QUEUED" ->
+            "自動文字起こしを登録済みです。Whisper処理枠または低バッテリー制約の解除を待っています。"
+        record.status == "TRANSCRIBING" ->
+            "Whisper large-v3 Q5で端末内文字起こし中です。"
+        record.status == "RETRY_WAIT" ->
+            "文字起こしが一時失敗し、再試行を待っています。"
+        record.status == "READY" && record.audioAvailable ->
+            "音声は保存済みです。文字起こしWorkerの登録またはモデル準備を待っています。"
+        else -> null
     }
 }
 
@@ -1045,8 +1094,8 @@ private fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val versionName = remember {
-        try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.4.9-debug" }
-        catch (_: Exception) { "0.4.9-debug" }
+        try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.4.10-debug" }
+        catch (_: Exception) { "0.4.10-debug" }
     }
     LazyColumn(
         Modifier.fillMaxSize(),
@@ -1138,6 +1187,15 @@ private fun readDashboard(context: Context): DashboardSnapshot {
 }
 
 private fun recordStatusLabel(record: SegmentRecord): String {
+    if (isManualRetranscriptionState(record)) {
+        return when (record.status) {
+            "QUEUED", "READY" -> "手動再文字起こし待ち"
+            "TRANSCRIBING" -> "手動再文字起こし中"
+            "RETRY_WAIT" -> "手動再文字起こし再試行待ち"
+            "FAILED" -> "手動再文字起こし失敗"
+            else -> if (record.hasTranscript) "文字起こし済み" else record.status
+        }
+    }
     if (record.hasTranscript) {
         return when (record.status) {
             "QUEUED", "READY" -> "再文字起こし待ち"

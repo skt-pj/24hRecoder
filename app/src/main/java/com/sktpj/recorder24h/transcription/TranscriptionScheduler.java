@@ -10,6 +10,7 @@ import androidx.work.ExistingWorkPolicy;
 import androidx.work.OneTimeWorkRequest;
 import androidx.work.WorkManager;
 
+import com.sktpj.recorder24h.storage.SegmentRepository;
 import com.sktpj.recorder24h.storage.StoragePolicy;
 import com.sktpj.recorder24h.util.AppLogger;
 
@@ -43,7 +44,7 @@ public final class TranscriptionScheduler {
     }
 
     public static boolean enqueueForceRetranscription(Context context, String segmentId, File file) {
-        return enqueueInternal(context, segmentId, file, true, ExistingWorkPolicy.KEEP);
+        return enqueueInternal(context, segmentId, file, true, ExistingWorkPolicy.REPLACE);
     }
 
     private static boolean enqueueAfterReset(Context context, String segmentId, File file) {
@@ -87,9 +88,19 @@ public final class TranscriptionScheduler {
                 .addTag(forceRetranscribe ? "manual-retranscription" : "automatic-transcription")
                 .build();
         WorkManager.getInstance(context.getApplicationContext()).enqueueUniqueWork(
-                forceRetranscribe ? forceWorkName(segmentId) : uniqueWorkName(segmentId),
+                uniqueWorkName(segmentId),
                 workPolicy,
                 request);
+
+        boolean replacingExistingTranscript = TranscriptionRepository.exists(context, segmentId);
+        String queuedReason = forceRetranscribe
+                ? "MANUAL_RETRANSCRIPTION_WORK_ENQUEUED"
+                : replacingExistingTranscript
+                    ? "LOCAL_RETRANSCRIPTION_WORK_ENQUEUED"
+                    : "LOCAL_TRANSCRIPTION_WORK_ENQUEUED";
+        SegmentRepository.appendWithoutNotify(context, segmentId, file, 0L,
+                System.currentTimeMillis(), "QUEUED", queuedReason);
+
         if (forceRetranscribe) {
             log(context, "MANUAL_RETRANSCRIPTION_ENQUEUED", segmentId, file, null);
         } else {
@@ -177,10 +188,6 @@ public final class TranscriptionScheduler {
 
     private static String uniqueWorkName(String segmentId) {
         return "transcribe:" + segmentId;
-    }
-
-    private static String forceWorkName(String segmentId) {
-        return "manual-retranscribe:" + segmentId;
     }
 
     static void log(Context context, String event, String segmentId, File file, String message) {

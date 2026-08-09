@@ -4,7 +4,7 @@ Android 16 / Pixel 10aを初期基準端末とした24時間録音アプリで�
 
 ## 現在の実装
 
-- 現在のdebug APK: `0.4.8-debug` / versionCode 12
+- 現在のdebug APK: `0.4.10-debug` / versionCode 14
 - microphone Foreground Serviceによるバックグラウンド録音
 - 録音Serviceを`:recorder`専用プロセスに分離
 - AudioRecord: mono / 16 kHz / PCM 16bit
@@ -69,6 +69,12 @@ VADモデルは`ggml-silero-v6.2.0.bin`を使用し、取得時に885,098 bytes�
 0.4.9-debugでは通常文字起こしJSONにWhisperデコーダの`startMs`/`endMs`/区間本文を保存し、記録詳細の「会話ログ」を録音時刻（HH:mm:ss）ごとのカードに分けて表示します。5秒以上の無音・非出力ギャップは区間間に「空き」として表示し、コピー結果にも時刻を含めます。
 
 また0.4.9への初回起動時に、過去の`files/transcripts/`と`files/model_comparisons/`を一度だけ削除し、保持中の`.m4a`音声は削除せず全件をREADYへ戻します。既存の文字起こし・比較WorkManagerはキャンセルし、reset generationを更新するため、リセット前から実行中だったWorkerが終了後に古い結果や異常な状態を書き戻すことを防ぎます。large-v3 Q5 + ASR Audio Front-End + Silero VADが準備済みなら、保持音声はREPLACE方針でクリーンに再登録します。
+
+### 0.4.10: 手動再文字起こしの状態可視化
+
+0.4.9ではQUEUEDをUI読込時にREADYへ変換していたため、記録詳細から「この音声を再文字起こし」を押しても状態表示が変わらず、WorkManagerへ登録されたか判断できなかった。0.4.10ではQUEUEDとreasonをそのままUIへ渡し、WorkManagerへenqueueした直後にjournalへQUEUEDを書き込む。手動要求は`MANUAL_RETRANSCRIPTION_WORK_ENQUEUED`、実推論枠待ちは`MANUAL_RETRANSCRIPTION_SLOT_WAIT`、実処理中は`MANUAL_RETRANSCRIBING`として区別する。
+
+手動再文字起こしは自動処理と同じ`transcribe:<segmentId>` unique workをREPLACEで使用し、同じ音声について自動Workと手動Workが二重に走ることを避ける。詳細画面は1秒ごとに履歴状態を再読込し、「登録済み・処理枠待ち」「large-v3 Q5で処理中」「再試行待ち」を本文の上に明示する。
 
 ## 文字起こしキュー
 

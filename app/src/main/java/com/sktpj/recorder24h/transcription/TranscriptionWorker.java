@@ -197,9 +197,11 @@ public final class TranscriptionWorker extends Worker {
                     return Result.success();
                 }
                 boolean retry = getRunAttemptCount() + 1 < MAX_ATTEMPTS;
+                String stateReason = forceRetranscribe
+                        ? (retry ? "MANUAL_RETRANSCRIPTION_RETRY" : "MANUAL_RETRANSCRIPTION_FAILED")
+                        : (retry ? "LOCAL_TRANSCRIPTION_RETRY" : "LOCAL_TRANSCRIPTION_FAILED");
                 SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),
-                        System.currentTimeMillis(), retry ? "RETRY_WAIT" : "FAILED",
-                        retry ? "LOCAL_TRANSCRIPTION_RETRY" : "LOCAL_TRANSCRIPTION_FAILED");
+                        System.currentTimeMillis(), retry ? "RETRY_WAIT" : "FAILED", stateReason);
                 String event;
                 if (forceRetranscribe) {
                     event = retry ? "MANUAL_RETRANSCRIPTION_RETRY" : "MANUAL_RETRANSCRIPTION_FAILED";
