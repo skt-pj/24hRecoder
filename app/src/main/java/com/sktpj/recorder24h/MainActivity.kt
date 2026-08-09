@@ -768,6 +768,7 @@ private fun RecordDetailScreen(record: SegmentRecord) {
             }
         }
         item { TranscriptCard(record) }
+        item { ModelComparisonCard(record) }
         item {
             Card {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
