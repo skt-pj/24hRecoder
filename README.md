@@ -4,7 +4,7 @@ Android 16 / Pixel 10aを初期基準端末とした24時間録音アプリで�
 
 ## 現在の実装
 
-- 現在のdebug APK: `0.4.10-debug` / versionCode 14
+- 現在のdebug APK: `0.4.11-debug` / versionCode 15
 - microphone Foreground Serviceによるバックグラウンド録音
 - 録音Serviceを`:recorder`専用プロセスに分離
 - AudioRecord: mono / 16 kHz / PCM 16bit
@@ -75,6 +75,12 @@ VADモデルは`ggml-silero-v6.2.0.bin`を使用し、取得時に885,098 bytes�
 0.4.9ではQUEUEDをUI読込時にREADYへ変換していたため、記録詳細から「この音声を再文字起こし」を押しても状態表示が変わらず、WorkManagerへ登録されたか判断できなかった。0.4.10ではQUEUEDとreasonをそのままUIへ渡し、WorkManagerへenqueueした直後にjournalへQUEUEDを書き込む。手動要求は`MANUAL_RETRANSCRIPTION_WORK_ENQUEUED`、実推論枠待ちは`MANUAL_RETRANSCRIPTION_SLOT_WAIT`、実処理中は`MANUAL_RETRANSCRIBING`として区別する。
 
 手動再文字起こしは自動処理と同じ`transcribe:<segmentId>` unique workをREPLACEで使用し、同じ音声について自動Workと手動Workが二重に走ることを避ける。詳細画面は1秒ごとに履歴状態を再読込し、「登録済み・処理枠待ち」「large-v3 Q5で処理中」「再試行待ち」を本文の上に明示する。
+
+### 0.4.11: 文字起こしキュー一覧
+
+0.4.11-debugでは「ホーム / キュー / 記録 / 設定」の4画面構成とし、現在の文字起こしWorkを専用のキュー画面で確認する。実行中・待機中・再試行待ち・失敗/要確認・キュー外音声を区分して表示し、各カードは録音時刻、追加元、状態更新時刻、状態理由を表示する。カード全体をタップすると同じsegmentIdの記録詳細（音声再生・会話ログ）へ遷移する。
+
+待機中/再試行待ちはキュー画面から明示的に外すことができ、WorkManagerの`transcribe:<segmentId>`をcancelして、元音声と既存文字起こしは保持する。キュー外/失敗音声は同じ画面から再追加できる。手動/自動は別状態として扱わず追加元の補助情報とし、QUEUEDは`WORK_ENQUEUED`（WorkManager登録済み・Worker未開始）と`SLOT_WAIT`（Worker起動済み・Whisper排他枠待ち）を分けて説明する。
 
 ## 文字起こしキュー
 

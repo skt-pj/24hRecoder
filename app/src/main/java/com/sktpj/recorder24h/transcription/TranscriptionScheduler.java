@@ -47,6 +47,25 @@ public final class TranscriptionScheduler {
         return enqueueInternal(context, segmentId, file, true, ExistingWorkPolicy.REPLACE);
     }
 
+    public static boolean removeFromQueue(Context context, String segmentId, File file) {
+        if (segmentId == null || segmentId.isEmpty()) {
+            return false;
+        }
+        WorkManager.getInstance(context.getApplicationContext()).cancelUniqueWork(uniqueWorkName(segmentId));
+        boolean hasTranscript = TranscriptionRepository.exists(context, segmentId);
+        SegmentRepository.appendWithoutNotify(
+                context,
+                segmentId,
+                file,
+                0L,
+                System.currentTimeMillis(),
+                hasTranscript ? "TRANSCRIBED" : "READY",
+                "USER_REMOVED_FROM_TRANSCRIPTION_QUEUE");
+        log(context, "TRANSCRIPTION_QUEUE_ITEM_REMOVED", segmentId, file,
+                hasTranscript ? "OLD_TRANSCRIPT_RETAINED" : "AUDIO_RETAINED");
+        return true;
+    }
+
     private static boolean enqueueAfterReset(Context context, String segmentId, File file) {
         return enqueueInternal(context, segmentId, file, false, ExistingWorkPolicy.REPLACE);
     }

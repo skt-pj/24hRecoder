@@ -79,8 +79,12 @@ public final class TranscriptionWorker extends Worker {
 
         synchronized (LocalWhisperEngine.class) {
             if (isStopped()) {
+                SegmentRepository.appendWithoutNotify(context, segmentId, audioFile, 0L,
+                        System.currentTimeMillis(),
+                        TranscriptionRepository.exists(context, segmentId) ? "TRANSCRIBED" : "READY",
+                        "USER_REMOVED_FROM_TRANSCRIPTION_QUEUE");
                 log(context, "LOCAL_TRANSCRIPTION_STOPPED_BEFORE_START", segmentId, audioFile,
-                        null, forceMetrics(forceRetranscribe), attempt);
+                        "QUEUE_ITEM_REMOVED", forceMetrics(forceRetranscribe), attempt);
                 return Result.failure();
             }
             if (!forceRetranscribe &&
