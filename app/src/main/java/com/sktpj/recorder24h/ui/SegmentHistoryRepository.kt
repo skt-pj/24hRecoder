@@ -62,9 +62,6 @@ object SegmentHistoryRepository {
             val audio = builder.audioFile?.takeIf { it.isFile }
             val started = builder.recordedStartMs.takeIf { it > 0L } ?: builder.fallbackStartMs
             val ended = builder.recordedEndMs
-            // A history item represents when audio was captured, not when a later
-            // transcription/retry happened. Only fall back to processing/file time
-            // for legacy or orphaned records that have no capture timestamp.
             val sortTime = if (started > 0L) {
                 started
             } else {
@@ -117,18 +114,23 @@ object SegmentHistoryRepository {
 
                             val start = row.optLong("startedAtMs", 0L)
                             val end = row.optLong("endedAtMs", 0L)
-                            val status = row.optString("status", "READY")
-                            val reason = if (row.isNull("reason")) null else row.optString("reason", null)
+                            val rawStatus = row.optString("status", "READY")
+                            val rawReason = if (row.isNull("reason")) null else row.optString("reason", null)
+                            // QUEUED is an internal scheduler state: a Worker has started but is
+                            // waiting for the single local Whisper inference slot. User-facing UI
+                            // should present that as ordinary waiting, not active transcription.
+                            val status = if (rawStatus == "QUEUED") "READY" else rawStatus
+                            val reason = if (rawStatus == "QUEUED") null else rawReason
 
                             if (start > 0L && (builder.fallbackStartMs == 0L || start < builder.fallbackStartMs)) {
                                 builder.fallbackStartMs = start
                             }
-                            if (status == "READY" && reason == null && start > 0L && end >= start) {
+                            if (rawStatus == "READY" && rawReason == null && start > 0L && end >= start) {
                                 if (builder.recordedStartMs == 0L || start < builder.recordedStartMs) {
                                     builder.recordedStartMs = start
                                     builder.recordedEndMs = end
                                 }
-                            } else if (status == "CORRUPT" && builder.recordedStartMs == 0L && start > 0L) {
+                            } else if (rawStatus == "CORRUPT" && builder.recordedStartMs == 0L && start > 0L) {
                                 builder.recordedStartMs = start
                                 builder.recordedEndMs = end
                             }
