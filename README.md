@@ -20,6 +20,8 @@ Android 16 / Pixel 10aを初期基準端末とした24時間録音アプリで�
 - 多言語Whisper `base`モデルを使用
 - 5分M4AをAndroid MediaCodecでPCMへ復号し、端末内で推論
 - WorkManagerで文字起こしを録音処理から分離し、低バッテリー時は延期
+- ローカルWhisper推論は同時実行1件に制限し、待機中セグメントを「処理中」と誤表示しない
+- debug APKでもwhisper.cpp/ggmlネイティブコードは`-O3`で最適化して推論する
 - 文字起こし結果はtemp書き込み・fsync・renameで永続保存
 - 文字起こし成功後も最近のM4Aを保持し、記録詳細から再生可能
 - 容量圧迫時は古い文字起こし済み音声を優先して削除
@@ -32,6 +34,14 @@ Android 16 / Pixel 10aを初期基準端末とした24時間録音アプリで�
 - 保持中M4Aの端末内再生
 - 録音停止前の確認ダイアログ
 - Dynamic Color、edge-to-edge、コンパクト画面のBottom Navigationと広幅画面のNavigation Rail
+
+## 文字起こしキュー
+
+WorkManagerは複数の`TranscriptionWorker`を同時に開始する場合がありますが、whisper.cppの実推論は1件ずつ実行します。0.4.1以前は各WorkerがWhisperの排他ロックを取得する前に`TRANSCRIBING`を書き込んでいたため、実際には順番待ちのセグメントまで全件「文字起こし中」と表示されていました。
+
+0.4.2-debug以降はWorkerが排他ロック待ちの間は内部状態`QUEUED`とし、UIでは通常の「待機中」として表示します。ロックを取得した1件だけを`TRANSCRIBING`へ遷移させます。ログには`LOCAL_TRANSCRIPTION_QUEUED`、`LOCAL_TRANSCRIPTION_STARTED`、`queueWaitMs`、`decodeMs`、`inferenceMs`を記録します。
+
+配布成果物はdebug APKですが、ローカルWhisperは性能が必要な実処理です。CMakeのDebug構成でもwhisper.cpp/ggml/JNIには`-O3`を追加し、デバッグ可能性を残したまま推論コードを最適化します。5分音声の実際の推論時間はPixel 10a実機で測定して継続可否を判断します。
 
 ## 記録閲覧
 
@@ -71,8 +81,8 @@ gradle :app:assembleDebug
 
 ## 現在のバージョン
 
-- versionName: `0.4.1-debug`
-- versionCode: `5`
+- versionName: `0.4.2-debug`
+- versionCode: `6`
 - minSdk: `29`
 - targetSdk: `36`
 - ABI: `arm64-v8a`
