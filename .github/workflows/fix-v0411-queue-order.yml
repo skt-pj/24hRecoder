@@ -1,0 +1,31 @@
+name: Fix v0.4.11 queue ordering
+
+on:
+  push:
+    branches:
+      - work/queue-ui-v0.4.11
+    paths:
+      - .github/fix-v0411-queue-order.py
+      - .github/workflows/fix-v0411-queue-order.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/queue-ui-v0.4.11
+      - name: Apply queue ordering fix
+        run: python .github/fix-v0411-queue-order.py
+      - name: Remove one-shot patch files
+        run: rm .github/fix-v0411-queue-order.py .github/workflows/fix-v0411-queue-order.yml
+      - name: Commit patched source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Order queue by actual enqueue time'
+          git push origin HEAD:work/queue-ui-v0.4.11
