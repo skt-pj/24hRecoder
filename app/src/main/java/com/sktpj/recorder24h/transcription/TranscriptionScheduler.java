@@ -42,7 +42,7 @@ public final class TranscriptionScheduler {
             return;
         }
         if (TranscriptionRepository.exists(context, segmentId)) {
-            deleteAudioAfterExistingTranscript(context, segmentId, file);
+            log(context, "TRANSCRIPT_ALREADY_SAVED_AUDIO_RETAINED", segmentId, file, null);
             return;
         }
         if (!WhisperModelManager.isReady(context)) {
@@ -95,7 +95,17 @@ public final class TranscriptionScheduler {
     public static int pendingAudioCount(Context context) {
         File[] files = StoragePolicy.getAudioDir(context)
                 .listFiles((dir, name) -> name.endsWith(".m4a"));
-        return files == null ? 0 : files.length;
+        if (files == null) {
+            return 0;
+        }
+        int pending = 0;
+        for (File file : files) {
+            String segmentId = extractSegmentId(file.getName());
+            if (segmentId != null && !TranscriptionRepository.exists(context, segmentId)) {
+                pending++;
+            }
+        }
+        return pending;
     }
 
     public static String extractSegmentId(String fileName) {
@@ -112,17 +122,6 @@ public final class TranscriptionScheduler {
 
     private static String uniqueWorkName(String segmentId) {
         return "transcribe:" + segmentId;
-    }
-
-    private static void deleteAudioAfterExistingTranscript(Context context, String segmentId, File file) {
-        if (!file.exists()) {
-            return;
-        }
-        long size = file.length();
-        if (file.delete()) {
-            log(context, "TRANSCRIPTION_AUDIO_DELETED_IDEMPOTENT", segmentId, file,
-                    "deletedBytes=" + size);
-        }
     }
 
     static void log(Context context, String event, String segmentId, File file, String message) {
