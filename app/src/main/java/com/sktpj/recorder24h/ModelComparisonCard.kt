@@ -87,7 +87,7 @@ fun ModelComparisonCard(record: SegmentRecord) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("モデル比較", style = MaterialTheme.typography.titleLarge)
             Text(
-                "この記録の元音声だけを、同じ前処理・同じVAD条件で選択したモデルへ順番に通します。比較結果は通常の文字起こしを上書きしません。",
+                "この記録の元音声だけを同じ前処理・同じSilero VAD条件で比較します。内容と発話の取りこぼしを最優先で確認し、速度は補助指標として表示します。比較結果は通常の文字起こしを上書きしません。",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
@@ -242,6 +242,42 @@ private fun ComparisonResultBlock(root: JSONObject) {
         )
     }
 
+    val vad = root.optJSONObject("vadDiagnostics")
+    if (vad != null) {
+        Text("Silero VAD独立解析", fontWeight = FontWeight.SemiBold)
+        Text(
+            "発話 ${vad.optInt("segmentCount")}区間 • 発話合計 ${formatMs(vad.optLong("totalSpeechMs"))} • 最終発話終了 ${formatOffset(vad.optLong("lastEndMs"))} • VAD ${formatMs(vad.optLong("vadDetectMs"))}",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Text(
+            String.format(
+                Locale.JAPAN,
+                "speech確率 mean %.3f / max %.3f • threshold以上 %.1f%%",
+                vad.optDouble("meanSpeechProbability"),
+                vad.optDouble("maxSpeechProbability"),
+                vad.optDouble("aboveThresholdFraction") * 100.0
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        val vadSegments = vad.optJSONArray("segments") ?: JSONArray()
+        val visible = minOf(vadSegments.length(), 12)
+        for (i in 0 until visible) {
+            val segment = vadSegments.optJSONObject(i) ?: continue
+            Text(
+                "VAD #${i + 1}  ${formatOffset(segment.optLong("startMs"))}–${formatOffset(segment.optLong("endMs"))}  (${formatMs(segment.optLong("durationMs"))})",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        if (vadSegments.length() > visible) {
+            Text(
+                "ほか ${vadSegments.length() - visible}区間。全区間は「結果＋ログ」でコピーできます。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+
     val results = root.optJSONArray("results") ?: JSONArray()
     for (i in 0 until results.length()) {
         val row = results.optJSONObject(i) ?: continue
@@ -252,36 +288,67 @@ private fun ComparisonResultBlock(root: JSONObject) {
                     Text(comparisonStatusLabel(row.optString("status")), style = MaterialTheme.typography.labelMedium)
                 }
                 if (row.optString("status") == "COMPLETED") {
-                    Text(
-                        String.format(
-                            Locale.JAPAN,
-                            "推論 %.2f秒 • RTF %.3f • 参考総時間 %.2f秒",
-                            row.optLong("inferenceMs") / 1000.0,
-                            row.optDouble("realTimeFactor"),
-                            row.optLong("referenceEndToEndMs") / 1000.0
-                        ),
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        "認識セグメント ${row.optInt("segmentCount")}個 • 認識区間合計 ${formatMs(row.optLong("recognizedSpeechMs"))} • ${row.optInt("textChars")}文字 • モデル ${formatModelBytes(row.optLong("modelBytes"))}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    if (row.has("reachesLastVad") && !row.optBoolean("reachesLastVad")) {
+                        Text(
+                            "警告: Whisper出力がVADの最終発話まで到達していません。後半欠落の可能性があります（差 ${formatMs(row.optLong("lastVadGapMs"))}）。",
+                            color = MaterialTheme.colorScheme.error,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Text("文字起こし内容", style = MaterialTheme.typography.labelLarge)
+                    SelectionContainer {
+                        val text = row.optString("text")
+                        Text(if (text.isBlank()) "（空の文字起こし）" else text)
+                    }
+
                     val segments = row.optJSONArray("segments") ?: JSONArray()
                     if (segments.length() > 0) {
-                        Text("認識した区間", style = MaterialTheme.typography.labelLarge)
+                        Text("Whisper出力区間とデコーダ診断", style = MaterialTheme.typography.labelLarge)
                         for (j in 0 until segments.length()) {
                             val segment = segments.optJSONObject(j) ?: continue
                             Text(
                                 "${formatOffset(segment.optLong("startMs"))}–${formatOffset(segment.optLong("endMs"))}  ${segment.optString("text").trim()}",
                                 style = MaterialTheme.typography.bodySmall
                             )
+                            if (segment.has("noSpeechProbability")) {
+                                Text(
+                                    String.format(
+                                        Locale.JAPAN,
+                                        "  tokens %d • tokenP avg %.3f / min %.3f • noSpeech %.3f",
+                                        segment.optInt("tokenCount"),
+                                        segment.optDouble("avgTokenProbability"),
+                                        segment.optDouble("minTokenProbability"),
+                                        segment.optDouble("noSpeechProbability")
+                                    ),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
-                    SelectionContainer {
-                        val text = row.optString("text")
-                        Text(if (text.isBlank()) "（空の文字起こし）" else text)
-                    }
+
+                    Text(
+                        "Whisper出力 ${row.optInt("segmentCount")}区間 • 出力区間スパン合計 ${formatMs(row.optLong("outputSegmentDurationMs", row.optLong("recognizedSpeechMs")))} • 最終出力 ${formatOffset(row.optLong("lastOutputEndMs"))} • ${row.optInt("textChars")}文字",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        String.format(
+                            Locale.JAPAN,
+                            "処理: JNI全体 %.2f秒 • モデル読込 %.2f秒 • whisper_full %.2f秒 • RTF %.3f",
+                            row.optLong("inferenceMs") / 1000.0,
+                            row.optLong("modelLoadMs") / 1000.0,
+                            row.optLong("whisperFullMs") / 1000.0,
+                            row.optDouble("realTimeFactor")
+                        ),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        "参考総時間 ${formatMs(row.optLong("referenceEndToEndMs"))} • モデル ${formatModelBytes(row.optLong("modelBytes"))}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 } else if (row.has("message") || row.has("error")) {
                     Text(
                         listOf(row.optString("error"), row.optString("message")).filter { it.isNotBlank() }.joinToString(": "),
@@ -317,10 +384,12 @@ private fun formatModelBytes(bytes: Long): String {
 private fun formatMs(ms: Long): String = when {
     ms >= 60_000L -> String.format(Locale.JAPAN, "%.1f分", ms / 60_000.0)
     ms >= 1_000L -> String.format(Locale.JAPAN, "%.2f秒", ms / 1000.0)
-    else -> "${ms}ms"
+    ms >= 0L -> "${ms}ms"
+    else -> "-"
 }
 
 private fun formatOffset(ms: Long): String {
+    if (ms < 0L) return "-"
     val totalSeconds = (ms / 1000L).coerceAtLeast(0L)
     val minutes = totalSeconds / 60L
     val seconds = totalSeconds % 60L
