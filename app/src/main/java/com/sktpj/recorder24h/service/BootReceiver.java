@@ -11,6 +11,7 @@ import android.content.Intent;
 import com.sktpj.recorder24h.MainActivity;
 import com.sktpj.recorder24h.R;
 import com.sktpj.recorder24h.storage.RecordingIntentStore;
+import com.sktpj.recorder24h.transcription.WhisperModelManager;
 import com.sktpj.recorder24h.util.AppLogger;
 
 public final class BootReceiver extends BroadcastReceiver {
@@ -19,6 +20,19 @@ public final class BootReceiver extends BroadcastReceiver {
 
     @Override
     public void onReceive(Context context, Intent intent) {
+        String action = intent == null ? null : intent.getAction();
+
+        // 0.4.2 devices already have the Whisper base model but not the Silero VAD model.
+        // MY_PACKAGE_REPLACED is the safest place to schedule the small missing model without
+        // requiring the user to discover a new setup button. The download worker verifies the
+        // model and then re-enqueues retained audio made by the older transcription engine.
+        if (Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)
+                && WhisperModelManager.isAsrReady(context)
+                && !WhisperModelManager.isReady(context)) {
+            WhisperModelManager.enqueueDownload(context);
+            AppLogger.event(context, "PACKAGE_REPLACED_VAD_MODEL_MIGRATION_QUEUED");
+        }
+
         if (!RecordingIntentStore.isRequested(context)) {
             return;
         }
