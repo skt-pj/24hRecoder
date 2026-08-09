@@ -16,7 +16,7 @@ android {
         versionCode 15
         versionName '0.4.11'
         // Canonical local transcription model: Whisper large-v3 Q5.
-        // 0.4.9 persists timestamped decoder segments and performs a one-time clean transcript reset.
+        // 0.4.11 exposes queued/running/retry transcription work as a dedicated UI section.
 
         ndk {
             abiFilters 'arm64-v8a'
