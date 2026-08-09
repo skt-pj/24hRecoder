@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.22.1)
 project(recorder24h_native LANGUAGES C CXX)
 
 include(FetchContent)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # The installable development artifact is an Android debug APK, but whisper.cpp is
 # production inference code. CMake's Debug configuration otherwise uses debug-oriented
