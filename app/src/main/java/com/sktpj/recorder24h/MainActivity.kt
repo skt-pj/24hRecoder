@@ -929,7 +929,7 @@ private fun TranscriptCard(record: SegmentRecord) {
             if (canRetranscribe) {
                 FilledTonalButton(
                     onClick = { confirmRetranscribe = true },
-                    enabled = record.status !in setOf("QUEUED", "TRANSCRIBING"),
+                    enabled = record.status !in setOf("QUEUED", "TRANSCRIBING", "RETRY_WAIT"),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Filled.Refresh, contentDescription = null)
