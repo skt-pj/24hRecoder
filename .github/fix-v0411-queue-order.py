@@ -52,14 +52,13 @@ replace(path,
         }
     }''')
 replace(path,
-'''        records.filter { it.status == "READY" && it.audioAvailable }
-            .sortedByDescending { it.sortTimeMs }''',
-'''        records.filter { it.status == "READY" && it.audioAvailable }
-            .sortedByDescending { it.sortTimeMs }''')
-replace(path,
-'''                if (record.stateChangedAtMs > 0L) {
+'''            if (record.stateChangedAtMs > 0L) {
                 Text(
-                    "状態更新 ${formatDateTime(record.stateChangedAtMs)}",''',
+                    "状態更新 ${formatDateTime(record.stateChangedAtMs)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }''',
 '''            if (record.queueEnqueuedAtMs > 0L && record.status in setOf("QUEUED", "TRANSCRIBING", "RETRY_WAIT")) {
                 Text(
                     "キュー登録 ${formatDateTime(record.queueEnqueuedAtMs)}",
@@ -69,7 +68,11 @@ replace(path,
             }
             if (record.stateChangedAtMs > 0L) {
                 Text(
-                    "状態更新 ${formatDateTime(record.stateChangedAtMs)}",''')
+                    "状態更新 ${formatDateTime(record.stateChangedAtMs)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }''')
 replace(path,
 '''private fun queueSourceLabel(record: SegmentRecord): String =
     if (record.reason.orEmpty().startsWith("MANUAL_")) "ユーザー追加" else "自動追加"''',
