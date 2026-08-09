@@ -3,6 +3,14 @@ project(recorder24h_native LANGUAGES C CXX)
 
 include(FetchContent)
 
+# The installable development artifact is an Android debug APK, but whisper.cpp is
+# production inference code. CMake's Debug configuration otherwise uses debug-oriented
+# compiler flags, which can make local inference unusably slow. add_compile_options()
+# is appended after per-configuration flags, so -O3 wins while debug symbols remain.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_compile_options(-O3)
+endif()
+
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
