@@ -1,0 +1,31 @@
+name: Patch v0.4.11 queue UI
+
+on:
+  push:
+    branches:
+      - work/queue-ui-v0.4.11
+    paths:
+      - .github/patch-v0411.py
+      - .github/workflows/patch-v0411.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/queue-ui-v0.4.11
+      - name: Apply v0.4.11 changes
+        run: python .github/patch-v0411.py
+      - name: Remove one-shot patch files
+        run: rm .github/patch-v0411.py .github/workflows/patch-v0411.yml
+      - name: Commit patched source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Add readable transcription queue UI'
+          git push origin HEAD:work/queue-ui-v0.4.11
