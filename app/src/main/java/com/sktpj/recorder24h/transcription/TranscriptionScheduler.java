@@ -46,7 +46,10 @@ public final class TranscriptionScheduler {
             return;
         }
         if (!WhisperModelManager.isReady(context)) {
-            log(context, "TRANSCRIPTION_WAITING_FOR_LOCAL_MODEL", segmentId, file, null);
+            WhisperModelManager.enqueueDownload(context);
+            String reason = WhisperModelManager.isAsrReady(context)
+                    ? "SILERO_VAD_MODEL_MISSING" : "LOCAL_MODEL_MISSING";
+            log(context, "TRANSCRIPTION_WAITING_FOR_LOCAL_MODELS", segmentId, file, reason);
             return;
         }
 
@@ -73,6 +76,7 @@ public final class TranscriptionScheduler {
 
     public static int enqueueExisting(Context context) {
         if (!WhisperModelManager.isReady(context)) {
+            WhisperModelManager.enqueueDownload(context);
             return 0;
         }
         File[] files = StoragePolicy.getAudioDir(context)
@@ -130,6 +134,7 @@ public final class TranscriptionScheduler {
             details.put("segmentId", segmentId == null ? JSONObject.NULL : segmentId);
             details.put("file", file == null ? JSONObject.NULL : file.getName());
             details.put("engine", LocalWhisperEngine.ENGINE_ID);
+            details.put("vadReady", WhisperModelManager.isVadReady(context));
             if (message != null) {
                 details.put("message", message);
             }
