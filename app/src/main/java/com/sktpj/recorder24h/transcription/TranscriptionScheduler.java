@@ -41,8 +41,8 @@ public final class TranscriptionScheduler {
         if (segmentId == null || segmentId.isEmpty() || file == null || !file.isFile()) {
             return;
         }
-        if (TranscriptionRepository.exists(context, segmentId)) {
-            log(context, "TRANSCRIPT_ALREADY_SAVED_AUDIO_RETAINED", segmentId, file, null);
+        if (TranscriptionRepository.isCurrentEngine(context, segmentId, LocalWhisperEngine.ENGINE_ID)) {
+            log(context, "TRANSCRIPT_CURRENT_ENGINE_AUDIO_RETAINED", segmentId, file, null);
             return;
         }
         if (!WhisperModelManager.isReady(context)) {
@@ -71,7 +71,9 @@ public final class TranscriptionScheduler {
                 uniqueWorkName(segmentId),
                 ExistingWorkPolicy.KEEP,
                 request);
-        log(context, "LOCAL_TRANSCRIPTION_ENQUEUED", segmentId, file, null);
+        log(context, TranscriptionRepository.exists(context, segmentId)
+                        ? "LOCAL_RETRANSCRIPTION_ENQUEUED" : "LOCAL_TRANSCRIPTION_ENQUEUED",
+                segmentId, file, null);
     }
 
     public static int enqueueExisting(Context context) {
@@ -87,7 +89,8 @@ public final class TranscriptionScheduler {
         int count = 0;
         for (File file : files) {
             String segmentId = extractSegmentId(file.getName());
-            if (segmentId == null || TranscriptionRepository.exists(context, segmentId)) {
+            if (segmentId == null ||
+                    TranscriptionRepository.isCurrentEngine(context, segmentId, LocalWhisperEngine.ENGINE_ID)) {
                 continue;
             }
             enqueue(context, segmentId, file);
@@ -105,7 +108,8 @@ public final class TranscriptionScheduler {
         int pending = 0;
         for (File file : files) {
             String segmentId = extractSegmentId(file.getName());
-            if (segmentId != null && !TranscriptionRepository.exists(context, segmentId)) {
+            if (segmentId != null &&
+                    !TranscriptionRepository.isCurrentEngine(context, segmentId, LocalWhisperEngine.ENGINE_ID)) {
                 pending++;
             }
         }
