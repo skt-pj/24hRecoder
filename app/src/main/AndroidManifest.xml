@@ -37,9 +37,13 @@
             android:foregroundServiceType="microphone"
             android:process=":recorder" />
 
-        <!-- WorkManager's long-running worker service. Comparison uses mediaProcessing; explicit
-             comparison-model downloads use dataSync. Standard 5-minute transcription remains a
-             normal Worker and does not promote itself to a foreground service. -->
+        <!-- User-triggered queue requests run directly here instead of waiting for JobScheduler. -->
+        <service
+            android:name=".transcription.TranscriptionQueueService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProcessing" />
+
+        <!-- WorkManager still handles automatic background transcription and model operations. -->
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="mediaProcessing|dataSync"
