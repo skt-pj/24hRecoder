@@ -18,14 +18,15 @@ Android 16 / Pixel 10aを初期基準端末とした24時間録音アプリで�
 - JSON Lines形式のイベントログ
 - `whisper.cpp v1.9.1`をAndroid NDKで組み込んだ完全ローカル文字起こし
 - 多言語Whisper `base`モデルを使用
+- M4A復号後にDCオフセット除去・ロバスト音量推定・適応ゲイン・スムーズリミッタを適用
 - Silero VAD v6.2.0で音声区間を抽出し、非発話区間のWhisperハルシネーションを抑制
 - 5分M4AをAndroid MediaCodecでPCMへ復号し、端末内で推論
 - WorkManagerで文字起こしを録音処理から分離し、低バッテリー時は延期
 - ローカルWhisper推論は同時実行1件に制限し、待機中セグメントを「処理中」と誤表示しない
 - debug APKでもwhisper.cpp/ggmlネイティブコードは`-O3`で最適化して推論する
-- PCMのRMS、peak、clipping率をログへ残し、録音品質と認識品質を切り分け可能
+- 前処理前後のRMS/peak/clipping、推定SNR、適用gain、limiter比率をログへ記録
 - 文字起こし結果はtemp書き込み・fsync・renameで永続保存
-- 旧エンジンの文字起こしは元M4Aが残る場合にVAD版で再処理し、成功時だけ結果を置換
+- 旧エンジンの文字起こしは元M4Aが残る場合に現行版で再処理し、成功時だけ結果を置換
 - 処理済みの記録でも、元M4Aが残っていれば記録詳細から「この音声を再文字起こし」で強制再実行可能
 - 手動再文字起こし中も既存の文字起こし結果を保持し、新結果が正常保存された時だけ置換
 - 文字起こし成功後も最近のM4Aを保持し、記録詳細から再生可能
@@ -44,19 +45,23 @@ Android 16 / Pixel 10aを初期基準端末とした24時間録音アプリで�
 
 0.4.3-debug以降では、24時間録音で頻出する無音・生活音・長い非発話区間をそのままWhisperへ渡さず、Silero VAD v6.2.0が音声と判定した区間だけを推論対象にします。加えて`no_speech_thold`、`suppress_blank`、`suppress_nst`等のデコード制御を使用します。
 
+0.4.5-debugではVADの前に軽量なASR Audio Front-Endを追加します。M4Aを16kHz mono float PCMへ復号した後、DCオフセットを除去し、20msフレームのRMS分布から20パーセンタイルをノイズ床、ノイズ床+9dB以上かつ-50dBFS以上のフレームを発話候補として扱います。十分な発話候補がある場合は60パーセンタイルのRMSを発話レベルとして推定し、約-22dBFSへ近づけるゲインを-6〜+12dBの範囲で適用します。推定speech/noise差が6dB未満なら正のゲインを抑止し、ノイズだけを増幅しにくくします。
+
+ゲイン後のピークは-2.5dBFSを超えた部分だけ滑らかに圧縮し、-1dBFSへ漸近するリミッタを通します。強いノイズ除去やEQは常時適用せず、音声のスペクトルを必要以上に変えない方針です。その後にSilero VADとWhisperを実行します。
+
 VADモデルは`ggml-silero-v6.2.0.bin`を使用し、取得時に885,098 bytesとSHA-256 `2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987`を検証します。Whisper baseと同じく`noBackupFilesDir/whisper/`へ保存し、作業データ1GBの論理上限には含めません。
 
-旧バージョンのローカルエンジンで文字起こし済みでも元M4Aが残っているセグメントは、VADモデル準備後に再文字起こし対象になります。既存JSONは新しい文字起こしのtemp書き込み・fsync・renameが成功するまで保持し、失敗時に過去の結果を失わないようにします。元M4Aが既に容量管理で削除済みの場合は再文字起こしできないため、旧結果をそのまま保持します。
+エンジンIDは`whisper.cpp-v1.9.1/base+frontend-v1+silero-v6.2.0`とします。旧エンジンで文字起こし済みでも元M4Aが残っているセグメントは現行エンジンの再処理対象になります。既存JSONは新しい文字起こしのtemp書き込み・fsync・renameが成功するまで保持し、失敗時に過去の結果を失わないようにします。元M4Aが既に容量管理で削除済みの場合は再文字起こしできないため、旧結果をそのまま保持します。
 
-0.4.4-debugでは自動移行とは別に、現在のエンジンですでに処理済みの記録をユーザー操作で強制再実行できます。記録詳細の「この音声を再文字起こし」を押すと確認ダイアログを表示し、同じsegmentIdの保存済みM4Aを現在のWhisper + VAD設定で再処理します。Workerは手動再実行フラグがある場合、現在のエンジンで処理済みでもスキップしません。再処理に失敗しても既存の文字起こしJSONは削除せず、新しい結果の永続保存に成功した時だけ置換します。
+0.4.4-debug以降では自動移行とは別に、現在のエンジンですでに処理済みの記録をユーザー操作で強制再実行できます。記録詳細の「この音声を再文字起こし」を押すと確認ダイアログを表示し、同じsegmentIdの保存済みM4Aを現在の前処理 + Whisper + VAD設定で再処理します。Workerは手動再実行フラグがある場合、現在のエンジンで処理済みでもスキップしません。再処理に失敗しても既存の文字起こしJSONは削除せず、新しい結果の永続保存に成功した時だけ置換します。
 
-文字起こし完了ログには`audioRms`、`audioPeak`、`clippedFraction`を追加しています。保持中M4Aを実際に再生した音とこれらの値を合わせて確認し、録音自体が小さい・潰れている問題とWhisperモデル側の認識問題を分けて判断します。
+文字起こし完了ログには`inputRms`、`inputPeak`、`inputClippedFraction`、`audioRms`、`audioPeak`、`clippedFraction`、`dcOffset`、`estimatedNoiseRms`、`estimatedSpeechRms`、`snrProxyDb`、`appliedGainDb`、`activeFrameFraction`、`limitedSampleFraction`、`boostSuppressedForLowSnr`、`preprocessMs`を記録します。保持中M4Aを実際に再生した音とこれらの値を合わせ、録音入力・前処理・Whisper認識を切り分けます。
 
 ## 文字起こしキュー
 
 WorkManagerは複数の`TranscriptionWorker`を同時に開始する場合がありますが、whisper.cppの実推論は1件ずつ実行します。0.4.1以前は各WorkerがWhisperの排他ロックを取得する前に`TRANSCRIBING`を書き込んでいたため、実際には順番待ちのセグメントまで全件「文字起こし中」と表示されていました。
 
-0.4.2-debug以降はWorkerが排他ロック待ちの間は内部状態`QUEUED`とし、UIでは通常の「待機中」として表示します。ロックを取得した1件だけを`TRANSCRIBING`へ遷移させます。ログには`LOCAL_TRANSCRIPTION_QUEUED`、`LOCAL_TRANSCRIPTION_STARTED`、`queueWaitMs`、`decodeMs`、`inferenceMs`を記録します。
+0.4.2-debug以降はWorkerが排他ロック待ちの間は内部状態`QUEUED`とし、UIでは通常の「待機中」として表示します。ロックを取得した1件だけを`TRANSCRIBING`へ遷移させます。ログには`LOCAL_TRANSCRIPTION_QUEUED`、`LOCAL_TRANSCRIPTION_STARTED`、`queueWaitMs`、`decodeMs`、`preprocessMs`、`inferenceMs`を記録します。
 
 手動再文字起こしは通常の自動処理とは別のunique work名で登録しますが、実Whisper推論は同じ排他区間を使うため同時実行数は1件のままです。手動再実行は`MANUAL_RETRANSCRIPTION_ENQUEUED`、`MANUAL_RETRANSCRIPTION_QUEUED`、`MANUAL_RETRANSCRIPTION_STARTED`、`MANUAL_RETRANSCRIPTION_SAVED`等のイベントで追跡できます。
 
@@ -100,16 +105,16 @@ gradle :app:assembleDebug
 
 ## 現在のバージョン
 
-- versionName: `0.4.4-debug`
-- versionCode: `8`
+- versionName: `0.4.5-debug`
+- versionCode: `9`
 - minSdk: `29`
 - targetSdk: `36`
 - ABI: `arm64-v8a`
 
 ## 注意
 
-Pixel 10a実機でのVAD検出品質、5分音声の推論時間、24時間録音との同時運用時の電池消費・温度・メモリ使用量は実測が必要です。ローカル文字起こしが失敗しても録音処理を停止させず、元音声と既存の確定済み文字起こしは可能な限り保持します。
+Pixel 10a実機での前処理ゲイン分布、VAD検出品質、5分音声の推論時間、24時間録音との同時運用時の電池消費・温度・メモリ使用量は実測が必要です。ローカル文字起こしが失敗しても録音処理を停止させず、元音声と既存の確定済み文字起こしは可能な限り保持します。
 
-VAD導入後も、実際のM4Aを再生して会話が明瞭に聞こえるのにbaseモデルの文字起こし精度が不足する場合は、より大きいモデルへの変更をPixel 10aの処理時間・熱・バックログと合わせて評価します。
+前処理 + VAD導入後も、実際のM4Aを再生して会話が明瞭に聞こえるのにbaseモデルの文字起こし精度が不足する場合は、より大きいモデルへの変更をPixel 10aの処理時間・熱・バックログと合わせて評価します。
 
 履歴画面は現段階ではJSONLとファイルを読み合わせる実装です。長期間運用して履歴件数が大きくなった場合は、起動・検索性能を実測し、必要ならインデックス付きDBへ移行します。
