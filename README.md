@@ -26,6 +26,8 @@ Android 16 / Pixel 10aを初期基準端末とした24時間録音アプリで�
 - PCMのRMS、peak、clipping率をログへ残し、録音品質と認識品質を切り分け可能
 - 文字起こし結果はtemp書き込み・fsync・renameで永続保存
 - 旧エンジンの文字起こしは元M4Aが残る場合にVAD版で再処理し、成功時だけ結果を置換
+- 処理済みの記録でも、元M4Aが残っていれば記録詳細から「この音声を再文字起こし」で強制再実行可能
+- 手動再文字起こし中も既存の文字起こし結果を保持し、新結果が正常保存された時だけ置換
 - 文字起こし成功後も最近のM4Aを保持し、記録詳細から再生可能
 - 容量圧迫時は古い文字起こし済み音声を優先して削除
 - Jetpack Compose + Material 3によるUI
@@ -40,11 +42,13 @@ Android 16 / Pixel 10aを初期基準端末とした24時間録音アプリで�
 
 ## 文字起こし品質
 
-0.4.3-debugでは、24時間録音で頻出する無音・生活音・長い非発話区間をそのままWhisperへ渡さず、Silero VAD v6.2.0が音声と判定した区間だけを推論対象にします。加えて`no_speech_thold`、`suppress_blank`、`suppress_nst`等のデコード制御を使用します。
+0.4.3-debug以降では、24時間録音で頻出する無音・生活音・長い非発話区間をそのままWhisperへ渡さず、Silero VAD v6.2.0が音声と判定した区間だけを推論対象にします。加えて`no_speech_thold`、`suppress_blank`、`suppress_nst`等のデコード制御を使用します。
 
 VADモデルは`ggml-silero-v6.2.0.bin`を使用し、取得時に885,098 bytesとSHA-256 `2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987`を検証します。Whisper baseと同じく`noBackupFilesDir/whisper/`へ保存し、作業データ1GBの論理上限には含めません。
 
 旧バージョンのローカルエンジンで文字起こし済みでも元M4Aが残っているセグメントは、VADモデル準備後に再文字起こし対象になります。既存JSONは新しい文字起こしのtemp書き込み・fsync・renameが成功するまで保持し、失敗時に過去の結果を失わないようにします。元M4Aが既に容量管理で削除済みの場合は再文字起こしできないため、旧結果をそのまま保持します。
+
+0.4.4-debugでは自動移行とは別に、現在のエンジンですでに処理済みの記録をユーザー操作で強制再実行できます。記録詳細の「この音声を再文字起こし」を押すと確認ダイアログを表示し、同じsegmentIdの保存済みM4Aを現在のWhisper + VAD設定で再処理します。Workerは手動再実行フラグがある場合、現在のエンジンで処理済みでもスキップしません。再処理に失敗しても既存の文字起こしJSONは削除せず、新しい結果の永続保存に成功した時だけ置換します。
 
 文字起こし完了ログには`audioRms`、`audioPeak`、`clippedFraction`を追加しています。保持中M4Aを実際に再生した音とこれらの値を合わせて確認し、録音自体が小さい・潰れている問題とWhisperモデル側の認識問題を分けて判断します。
 
@@ -53,6 +57,8 @@ VADモデルは`ggml-silero-v6.2.0.bin`を使用し、取得時に885,098 bytes�
 WorkManagerは複数の`TranscriptionWorker`を同時に開始する場合がありますが、whisper.cppの実推論は1件ずつ実行します。0.4.1以前は各WorkerがWhisperの排他ロックを取得する前に`TRANSCRIBING`を書き込んでいたため、実際には順番待ちのセグメントまで全件「文字起こし中」と表示されていました。
 
 0.4.2-debug以降はWorkerが排他ロック待ちの間は内部状態`QUEUED`とし、UIでは通常の「待機中」として表示します。ロックを取得した1件だけを`TRANSCRIBING`へ遷移させます。ログには`LOCAL_TRANSCRIPTION_QUEUED`、`LOCAL_TRANSCRIPTION_STARTED`、`queueWaitMs`、`decodeMs`、`inferenceMs`を記録します。
+
+手動再文字起こしは通常の自動処理とは別のunique work名で登録しますが、実Whisper推論は同じ排他区間を使うため同時実行数は1件のままです。手動再実行は`MANUAL_RETRANSCRIPTION_ENQUEUED`、`MANUAL_RETRANSCRIPTION_QUEUED`、`MANUAL_RETRANSCRIPTION_STARTED`、`MANUAL_RETRANSCRIPTION_SAVED`等のイベントで追跡できます。
 
 配布成果物はdebug APKですが、ローカルWhisperは性能が必要な実処理です。CMakeのDebug構成でもwhisper.cpp/ggml/JNIには`-O3`を追加し、デバッグ可能性を残したまま推論コードを最適化します。5分音声の実際の推論時間はPixel 10a実機で測定して継続可否を判断します。
 
@@ -66,7 +72,7 @@ WorkManagerは複数の`TranscriptionWorker`を同時に開始する場合があ
 
 ## ローカルWhisperモデル
 
-Whisper ASRには`ggml-base.bin`、発話検出には`ggml-silero-v6.2.0.bin`を使用します。既にbaseがある端末を0.4.3へ更新した場合は不足しているVADモデルだけを取得します。取得後は各モデルのサイズとハッシュを検証します。
+Whisper ASRには`ggml-base.bin`、発話検出には`ggml-silero-v6.2.0.bin`を使用します。既にbaseがある端末を0.4.3以降へ更新した場合は不足しているVADモデルだけを取得します。取得後は各モデルのサイズとハッシュを検証します。
 
 モデルは`noBackupFilesDir/whisper/`へ保存し、24hRecoderの「作業データ1GB」論理上限には含めません。ただし端末の実空き容量監視からは除外しません。
 
@@ -94,8 +100,8 @@ gradle :app:assembleDebug
 
 ## 現在のバージョン
 
-- versionName: `0.4.3-debug`
-- versionCode: `7`
+- versionName: `0.4.4-debug`
+- versionCode: `8`
 - minSdk: `29`
 - targetSdk: `36`
 - ABI: `arm64-v8a`
