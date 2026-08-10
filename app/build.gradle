@@ -13,8 +13,8 @@ android {
         applicationId 'com.sktpj.recorder24h'
         minSdk 29
         targetSdk 36
-        versionCode 25
-        versionName '0.6.4'
+        versionCode 26
+        versionName '0.6.5'
         // Canonical local transcription model: Whisper large-v3 Q5.
         // User-triggered queue requests run immediately in a mediaProcessing FGS.
         // Automatic background transcription still uses WorkManager with battery-not-low.
