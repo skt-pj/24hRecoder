@@ -33,7 +33,7 @@ import com.sktpj.recorder24h.ui.SegmentRecord
 import com.sktpj.recorder24h.ui.TranscriptChunk
 
 @Composable
-internal fun EditableTranscriptChunk(record: SegmentRecord, chunk: TranscriptChunk) {
+internal fun EditableTranscriptChunk(record: SegmentRecord, chunk: TranscriptChunk, timeLabel: String) {
     val context = LocalContext.current
     var editing by remember(record.segmentId, chunk.editKey) { mutableStateOf(false) }
 
@@ -71,6 +71,12 @@ internal fun EditableTranscriptChunk(record: SegmentRecord, chunk: TranscriptChu
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Text(
+                timeLabel,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary
+            )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {
                     Text(
