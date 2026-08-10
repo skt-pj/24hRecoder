@@ -2,6 +2,8 @@ package com.sktpj.recorder24h.ui
 
 import android.content.Context
 import com.sktpj.recorder24h.storage.StoragePolicy
+import com.sktpj.recorder24h.transcription.SpeakerIdentifier
+import com.sktpj.recorder24h.transcription.TranscriptEditRepository
 import com.sktpj.recorder24h.transcription.TranscriptionRepository
 import org.json.JSONObject
 import java.io.File
@@ -12,7 +14,13 @@ import java.util.Locale
 data class TranscriptChunk(
     val startMs: Long,
     val endMs: Long,
-    val text: String
+    val text: String,
+    val sourceText: String,
+    val speaker: String,
+    val autoSpeaker: String,
+    val autoSpeakerScore: Double?,
+    val editKey: String,
+    val manuallyEdited: Boolean
 )
 
 data class SegmentRecord(
@@ -30,6 +38,9 @@ data class SegmentRecord(
     val audioAvailable: Boolean,
     val transcriptText: String?,
     val transcriptChunks: List<TranscriptChunk>,
+    val transcriptSpeaker: String?,
+    val transcriptEditKey: String?,
+    val transcriptManuallyEdited: Boolean,
     val transcriptModel: String?,
     val transcribedAtMs: Long
 ) {
@@ -57,6 +68,9 @@ object SegmentHistoryRepository {
         var reason: String? = null,
         var transcriptText: String? = null,
         var transcriptChunks: List<TranscriptChunk> = emptyList(),
+        var transcriptSpeaker: String? = null,
+        var transcriptEditKey: String? = null,
+        var transcriptManuallyEdited: Boolean = false,
         var transcriptModel: String? = null,
         var transcribedAtMs: Long = 0L,
         var audioFile: File? = null
@@ -98,6 +112,9 @@ object SegmentHistoryRepository {
                 audioAvailable = audio != null,
                 transcriptText = builder.transcriptText,
                 transcriptChunks = builder.transcriptChunks,
+                transcriptSpeaker = builder.transcriptSpeaker,
+                transcriptEditKey = builder.transcriptEditKey,
+                transcriptManuallyEdited = builder.transcriptManuallyEdited,
                 transcriptModel = builder.transcriptModel,
                 transcribedAtMs = builder.transcribedAtMs
             )
@@ -130,9 +147,6 @@ object SegmentHistoryRepository {
                             val end = row.optLong("endedAtMs", 0L)
                             val rawStatus = row.optString("status", "READY")
                             val rawReason = if (row.isNull("reason")) null else row.optString("reason", null)
-                            // Keep QUEUED distinct from READY. The detail screen uses the
-                            // reason to show whether this is an automatic queue or a user-requested
-                            // retranscription, while still distinguishing it from active inference.
                             val status = rawStatus
                             val reason = rawReason
 
@@ -156,7 +170,6 @@ object SegmentHistoryRepository {
                             builder.status = status
                             builder.reason = reason
                         } catch (_: Exception) {
-                            // The recorder process can be appending the final line while the UI reads it.
                         }
                     }
                 }
@@ -175,20 +188,52 @@ object SegmentHistoryRepository {
                     .ifBlank { file.name.removeSuffix(".json") }
                 if (segmentId.isBlank()) return@forEach
                 val builder = builders.getOrPut(segmentId) { Builder(segmentId) }
-                builder.transcriptText = row.optString("text", "")
+                val sourceText = row.optString("text", "")
+                val edits = TranscriptEditRepository.load(context, segmentId)
                 val chunks = mutableListOf<TranscriptChunk>()
                 row.optJSONArray("segments")?.let { segments ->
                     for (index in 0 until segments.length()) {
                         val segment = segments.optJSONObject(index) ?: continue
-                        val chunkText = segment.optString("text", "").trim()
+                        val chunkSourceText = segment.optString("text", "").trim()
                         val startMs = segment.optLong("startMs", -1L)
                         val endMs = segment.optLong("endMs", -1L)
-                        if (chunkText.isNotBlank() && startMs >= 0L && endMs >= startMs) {
-                            chunks += TranscriptChunk(startMs, endMs, chunkText)
+                        if (chunkSourceText.isNotBlank() && startMs >= 0L && endMs >= startMs) {
+                            val autoSpeaker = segment.optString("autoSpeaker", SpeakerIdentifier.UNKNOWN)
+                            val autoScore = if (segment.isNull("autoSpeakerScore")) {
+                                null
+                            } else {
+                                segment.optDouble("autoSpeakerScore").takeIf { it.isFinite() }
+                            }
+                            val editKey = TranscriptEditRepository.chunkKey(startMs, endMs, chunkSourceText)
+                            val edit = edits[editKey]
+                            chunks += TranscriptChunk(
+                                startMs = startMs,
+                                endMs = endMs,
+                                text = edit?.text ?: chunkSourceText,
+                                sourceText = chunkSourceText,
+                                speaker = edit?.speaker?.takeIf { it.isNotBlank() } ?: speakerLabel(autoSpeaker),
+                                autoSpeaker = autoSpeaker,
+                                autoSpeakerScore = autoScore,
+                                editKey = editKey,
+                                manuallyEdited = edit != null
+                            )
                         }
                     }
                 }
                 builder.transcriptChunks = chunks
+                if (chunks.isNotEmpty()) {
+                    builder.transcriptText = chunks.joinToString(" ") { it.text }.trim()
+                    builder.transcriptSpeaker = null
+                    builder.transcriptEditKey = null
+                    builder.transcriptManuallyEdited = chunks.any { it.manuallyEdited }
+                } else {
+                    val editKey = TranscriptEditRepository.wholeKey(sourceText)
+                    val edit = edits[editKey]
+                    builder.transcriptText = edit?.text ?: sourceText
+                    builder.transcriptSpeaker = edit?.speaker?.takeIf { it.isNotBlank() } ?: "判定不能"
+                    builder.transcriptEditKey = editKey
+                    builder.transcriptManuallyEdited = edit != null
+                }
                 builder.transcriptModel = row.optString("model", "")
                 builder.transcribedAtMs = row.optLong("transcribedAtMs", file.lastModified())
                 if (!row.isNull("audioFile")) {
@@ -198,6 +243,12 @@ object SegmentHistoryRepository {
             } catch (_: Exception) {
             }
         }
+    }
+
+    private fun speakerLabel(value: String): String = when (value) {
+        SpeakerIdentifier.SELF -> "自分"
+        SpeakerIdentifier.OTHER -> "他人"
+        else -> "判定不能"
     }
 
     private fun readAudioFiles(context: Context, builders: MutableMap<String, Builder>) {

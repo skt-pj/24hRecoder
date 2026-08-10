@@ -1130,28 +1130,14 @@ private fun TranscriptCard(record: SegmentRecord) {
                                 )
                             }
                         }
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                                Text(
-                                    transcriptChunkTimeLabel(record, chunk.startMs, chunk.endMs),
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                SelectionContainer {
-                                    Text(chunk.text, style = MaterialTheme.typography.bodyLarge, lineHeight = 26.sp)
-                                }
-                            }
-                        }
+                        EditableTranscriptChunk(
+                            record = record,
+                            chunk = chunk,
+                            timeLabel = transcriptChunkTimeLabel(record, chunk.startMs, chunk.endMs)
+                        )
                     }
                 } else {
-                    SelectionContainer {
-                        Text(if (text.isBlank()) "（文字起こし結果は空です）" else text, style = MaterialTheme.typography.bodyLarge, lineHeight = 26.sp)
-                    }
+                    EditableWholeTranscript(record)
                     if (text.isNotBlank()) {
                         Text(
                             "この結果には時刻区間データがありません。0.4.9で再文字起こしした結果から時刻区切り表示になります。",
@@ -1217,9 +1203,12 @@ private fun transcriptionActivityMessage(record: SegmentRecord): String? {
 
 private fun transcriptClipboardText(record: SegmentRecord): String {
     val fallback = record.transcriptText.orEmpty()
-    if (record.transcriptChunks.isEmpty()) return fallback
+    if (record.transcriptChunks.isEmpty()) {
+        val speaker = record.transcriptSpeaker ?: "判定不能"
+        return if (fallback.isBlank()) fallback else "${transcriptSpeakerLabel(speaker)}\n$fallback"
+    }
     return record.transcriptChunks.joinToString("\n\n") { chunk ->
-        "${transcriptChunkTimeLabel(record, chunk.startMs, chunk.endMs)}\n${chunk.text}"
+        "${transcriptChunkTimeLabel(record, chunk.startMs, chunk.endMs)}\n${transcriptSpeakerLabel(chunk.speaker)}\n${chunk.text}"
     }
 }
 
