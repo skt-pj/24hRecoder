@@ -642,17 +642,20 @@ private fun Metric(label: String, value: String) {
 
 @Composable
 private fun TranscriptionCard(dashboard: DashboardSnapshot, onOpenHistory: () -> Unit) {
+    val context = LocalContext.current
+    val selectedModel = WhisperModelManager.selectedModelSpec(context)
+    val expectedBytes = WhisperModelManager.selectedExpectedBytes(context)
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("ローカル文字起こし", style = MaterialTheme.typography.titleLarge)
-            Text("${LocalWhisperEngine.ENGINE_ID} / Whisper large-v3 Q5")
+            Text("${LocalWhisperEngine.engineId(context)} / ${selectedModel?.label ?: WhisperModelManager.selectedModelId(context)}")
             StatusPill(
                 if (dashboard.modelReady) "モデル準備済み" else if (dashboard.modelBytes > 0L) "モデル取得中" else "モデル未準備",
                 if (dashboard.modelReady) StatusTone.SUCCESS else StatusTone.WAITING
             )
             if (!dashboard.modelReady && dashboard.modelBytes > 0L) {
                 LinearProgressIndicator(
-                    progress = { (dashboard.modelBytes.toFloat() / WhisperModelManager.EXPECTED_BYTES).coerceIn(0f, 1f) },
+                    progress = { (dashboard.modelBytes.toFloat() / expectedBytes.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -1192,7 +1195,7 @@ private fun transcriptionActivityMessage(record: SegmentRecord): String? {
         record.status == "QUEUED" && record.reason.orEmpty().endsWith("WORK_ENQUEUED") ->
             "WorkManager登録済み・Worker未開始です。明示制約はbattery-not-lowです。OSスケジューラ待ちとの区別は現時点では計測していません。"
         record.status == "TRANSCRIBING" ->
-            "Whisper large-v3 Q5の実行枠を取得済みです。端末内で文字起こし処理中です。"
+            "選択中のWhisperモデルの実行枠を取得済みです。端末内で文字起こし処理中です。"
         record.status == "RETRY_WAIT" ->
             "前回処理が失敗し、WorkManagerの再試行を待っています。"
         record.status == "READY" && record.audioAvailable ->
@@ -1255,43 +1258,7 @@ private fun SettingsScreen(
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        item {
-            Card {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Whisperモデル", style = MaterialTheme.typography.titleLarge)
-                    Text("large-v3 Q5 / 多言語 / デフォルト / ${formatMb(WhisperModelManager.EXPECTED_BYTES)}")
-                    StatusPill(
-                        if (dashboard.modelReady) "準備済み" else if (dashboard.modelBytes > 0L) "取得中" else "未準備",
-                        if (dashboard.modelReady) StatusTone.SUCCESS else StatusTone.WAITING
-                    )
-                    if (!dashboard.modelReady && dashboard.modelBytes > 0L) {
-                        LinearProgressIndicator(
-                            progress = { (dashboard.modelBytes.toFloat() / WhisperModelManager.EXPECTED_BYTES).coerceIn(0f, 1f) },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    if (!dashboard.modelReady) {
-                        Button(onClick = onDownloadModel, modifier = Modifier.fillMaxWidth()) { Text("Whisper large-v3 Q5モデルをダウンロード") }
-                    }
-                    OutlinedButton(onClick = onRetryTranscription, modifier = Modifier.fillMaxWidth()) {
-                        Icon(Icons.Filled.Refresh, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("未処理・旧方式の音声を再登録")
-                    }
-                    if (dashboard.modelBytes > 0L) {
-                        OutlinedButton(
-                            onClick = onDeleteModel,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                        ) {
-                            Icon(Icons.Filled.Delete, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Whisperモデルを削除")
-                        }
-                    }
-                }
-            }
-        }
+        item { WhisperModelSettingsCard() }
         item { AiSettingsCard() }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
