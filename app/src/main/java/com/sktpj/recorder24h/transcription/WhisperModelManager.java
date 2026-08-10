@@ -29,11 +29,8 @@ public final class WhisperModelManager {
     public static final String MODEL_KOTOBA_V2_Q5 = "kotoba-v2-q5";
     public static final String MODEL_LARGE_V3_Q5 = "large-v3-q5";
 
-    /**
-     * Initial/default choice for a fresh install and the default preselection in the comparison UI.
-     * Normal transcription must use selectedModelId(context), not this constant directly.
-     */
-    public static final String MODEL_DEFAULT = MODEL_LARGE_V3_Q5;
+    /** Initial/default choice for a fresh install or an unset/invalid normal-model preference. */
+    public static final String MODEL_DEFAULT = MODEL_MEDIUM_Q5;
 
     // Legacy large-v3 constants are retained for compatibility with existing UI/diagnostics code.
     public static final String MODEL_ID = "whisper.cpp-v1.9.1/large-v3-q5_0+silero-v6.2.0";
@@ -64,7 +61,7 @@ public final class WhisperModelManager {
             new ModelSpec(
                     MODEL_BASE,
                     "Whisper base",
-                    "多言語・比較用・旧標準",
+                    "多言語・軽量",
                     "ggml-base.bin",
                     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
                     147_951_465L,
@@ -84,7 +81,7 @@ public final class WhisperModelManager {
             new ModelSpec(
                     MODEL_MEDIUM_Q5,
                     "Whisper medium Q5",
-                    "多言語・medium量子化・精度優先候補",
+                    "多言語・medium量子化・標準",
                     "ggml-medium-q5_0.bin",
                     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin",
                     539_212_467L,
@@ -94,7 +91,7 @@ public final class WhisperModelManager {
             new ModelSpec(
                     MODEL_KOTOBA_V2_Q5,
                     "Kotoba-Whisper v2.0 Q5",
-                    "日本語特化・量子化・長音声デバッグ対象",
+                    "日本語特化・量子化",
                     "ggml-kotoba-whisper-v2.0-q5_0.bin",
                     "https://huggingface.co/kotoba-tech/kotoba-whisper-v2.0-ggml/resolve/main/ggml-kotoba-whisper-v2.0-q5_0.bin",
                     537_819_875L,
@@ -294,7 +291,7 @@ public final class WhisperModelManager {
         connection.setConnectTimeout(30_000);
         connection.setReadTimeout(30_000);
         connection.setInstanceFollowRedirects(true);
-        connection.setRequestProperty("User-Agent", "24hRecoder/0.6.7");
+        connection.setRequestProperty("User-Agent", "24hRecoder/0.6.8");
         connection.connect();
         int code = connection.getResponseCode();
         if (code < 200 || code >= 300) {
