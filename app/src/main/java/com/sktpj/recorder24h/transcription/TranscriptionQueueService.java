@@ -126,14 +126,19 @@ public final class TranscriptionQueueService extends Service {
         int generation = TranscriptionResetManager.currentGeneration(context);
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            String selectedModelId = WhisperModelManager.selectedModelId(context);
+            String selectedEngineId = LocalWhisperEngine.engineId(selectedModelId);
+
             if (!isStillQueued(context, segmentId)) {
                 log(context, "TRANSCRIPTION_DIRECT_QUEUE_ITEM_SKIPPED", segmentId, audioFile,
-                        "ITEM_NO_LONGER_QUEUED", forceRetranscribe, attempt, null);
+                        "ITEM_NO_LONGER_QUEUED", forceRetranscribe, attempt, null,
+                        selectedModelId, selectedEngineId);
                 return;
             }
             if (!TranscriptionResetManager.isCurrentGeneration(context, generation)) {
                 log(context, "TRANSCRIPTION_DIRECT_QUEUE_ITEM_SKIPPED", segmentId, audioFile,
-                        "RESET_GENERATION_CHANGED", forceRetranscribe, attempt, null);
+                        "RESET_GENERATION_CHANGED", forceRetranscribe, attempt, null,
+                        selectedModelId, selectedEngineId);
                 return;
             }
             if (!audioFile.isFile()) {
@@ -145,21 +150,22 @@ public final class TranscriptionQueueService extends Service {
                             System.currentTimeMillis(), "FAILED", "SOURCE_AUDIO_MISSING");
                 }
                 log(context, "TRANSCRIPTION_DIRECT_SOURCE_MISSING", segmentId, audioFile,
-                        null, forceRetranscribe, attempt, null);
+                        null, forceRetranscribe, attempt, null, selectedModelId, selectedEngineId);
                 return;
             }
-            if (!WhisperModelManager.isReady(context)) {
-                WhisperModelManager.enqueueDownload(context);
-                String reason = WhisperModelManager.isAsrReady(context)
+            if (!WhisperModelManager.isComparisonReady(context, selectedModelId)) {
+                WhisperModelManager.enqueueModelDownload(context, selectedModelId);
+                String reason = WhisperModelManager.isModelReady(context, selectedModelId)
                         ? "SILERO_VAD_MODEL_MISSING" : "LOCAL_MODEL_MISSING";
                 SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
                         audioFile.lastModified(), System.currentTimeMillis(), "READY", reason);
                 log(context, "TRANSCRIPTION_DIRECT_MODELS_MISSING", segmentId, audioFile,
-                        reason, forceRetranscribe, attempt, null);
+                        reason, forceRetranscribe, attempt, null,
+                        selectedModelId, selectedEngineId);
                 return;
             }
             if (!forceRetranscribe &&
-                    TranscriptionRepository.isCurrentEngine(context, segmentId, LocalWhisperEngine.ENGINE_ID)) {
+                    TranscriptionRepository.isCurrentEngine(context, segmentId, selectedEngineId)) {
                 SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
                         audioFile.lastModified(), System.currentTimeMillis(), "TRANSCRIBED", null);
                 return;
@@ -170,13 +176,15 @@ public final class TranscriptionQueueService extends Service {
             SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
                     audioFile.lastModified(), System.currentTimeMillis(), "QUEUED", slotReason);
             log(context, "TRANSCRIPTION_DIRECT_SLOT_WAIT", segmentId, audioFile,
-                    null, forceRetranscribe, attempt, null);
+                    null, forceRetranscribe, attempt, null,
+                    selectedModelId, selectedEngineId);
 
             try {
                 synchronized (LocalWhisperEngine.class) {
                     if (!isStillQueued(context, segmentId)) {
                         log(context, "TRANSCRIPTION_DIRECT_QUEUE_ITEM_SKIPPED", segmentId, audioFile,
-                                "REMOVED_WHILE_WAITING_FOR_SLOT", forceRetranscribe, attempt, null);
+                                "REMOVED_WHILE_WAITING_FOR_SLOT", forceRetranscribe, attempt, null,
+                                selectedModelId, selectedEngineId);
                         return;
                     }
 
@@ -184,21 +192,24 @@ public final class TranscriptionQueueService extends Service {
                     SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
                             audioFile.lastModified(), startedAt, "TRANSCRIBING",
                             forceRetranscribe ? "MANUAL_DIRECT_TRANSCRIBING" : "LOCAL_DIRECT_TRANSCRIBING");
-                    promote("文字起こし中");
+                    promote("文字起こし中: " + modelLabel(selectedModelId));
                     log(context, "TRANSCRIPTION_DIRECT_STARTED", segmentId, audioFile,
-                            null, forceRetranscribe, attempt, null);
+                            null, forceRetranscribe, attempt, null,
+                            selectedModelId, selectedEngineId);
 
-                    LocalWhisperEngine.Response response = LocalWhisperEngine.transcribe(context, audioFile);
+                    LocalWhisperEngine.Response response =
+                            LocalWhisperEngine.transcribe(context, audioFile, selectedModelId);
                     if (!TranscriptionResetManager.isCurrentGeneration(context, generation)) {
                         SegmentRepository.appendWithoutNotify(context, segmentId, audioFile, 0L,
                                 System.currentTimeMillis(), "READY", null);
                         log(context, "TRANSCRIPTION_DIRECT_RESULT_DISCARDED_AFTER_RESET", segmentId,
-                                audioFile, null, forceRetranscribe, attempt, null);
+                                audioFile, null, forceRetranscribe, attempt, null,
+                                selectedModelId, selectedEngineId);
                         return;
                     }
 
                     TranscriptionRepository.save(context, segmentId, audioFile,
-                            LocalWhisperEngine.ENGINE_ID, response.text, response.segments);
+                            selectedEngineId, response.text, response.segments);
                     SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
                             audioFile.lastModified(), System.currentTimeMillis(), "TRANSCRIBED", null);
 
@@ -209,13 +220,15 @@ public final class TranscriptionQueueService extends Service {
                     metrics.put("modelLoadMs", response.modelLoadMs);
                     metrics.put("whisperFullMs", response.whisperFullMs);
                     metrics.put("modelId", response.modelId);
+                    metrics.put("modelLabel", response.modelLabel);
                     metrics.put("modelBytes", response.modelBytes);
                     metrics.put("textChars", response.text.length());
                     metrics.put("segmentCount", response.segmentCount);
                     metrics.put("snrProxyDb", response.snrProxyDb);
                     metrics.put("appliedGainDb", response.appliedGainDb);
                     log(context, "TRANSCRIPTION_DIRECT_SAVED", segmentId, audioFile,
-                            null, forceRetranscribe, attempt, metrics);
+                            null, forceRetranscribe, attempt, metrics,
+                            selectedModelId, selectedEngineId);
                     promote("文字起こしキューを処理中");
                     return;
                 }
@@ -223,7 +236,8 @@ public final class TranscriptionQueueService extends Service {
                 SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
                         audioFile.lastModified(), System.currentTimeMillis(), "FAILED", "LOCAL_TRANSCRIPTION_OOM");
                 log(context, "TRANSCRIPTION_DIRECT_OOM", segmentId, audioFile,
-                        oom.getClass().getSimpleName(), forceRetranscribe, attempt, null);
+                        oom.getClass().getSimpleName(), forceRetranscribe, attempt, null,
+                        selectedModelId, selectedEngineId);
                 return;
             } catch (Exception error) {
                 boolean retry = attempt < MAX_ATTEMPTS;
@@ -236,7 +250,7 @@ public final class TranscriptionQueueService extends Service {
                 log(context, retry ? "TRANSCRIPTION_DIRECT_RETRY" : "TRANSCRIPTION_DIRECT_FAILED",
                         segmentId, audioFile,
                         error.getClass().getSimpleName() + ": " + safeMessage(error),
-                        forceRetranscribe, attempt, null);
+                        forceRetranscribe, attempt, null, selectedModelId, selectedEngineId);
                 if (!retry) {
                     return;
                 }
@@ -338,15 +352,17 @@ public final class TranscriptionQueueService extends Service {
     }
 
     private static void log(Context context, String event, String segmentId, File file,
-                            String message, boolean forceRetranscribe, int attempt, JSONObject extra) {
+                            String message, boolean forceRetranscribe, int attempt, JSONObject extra,
+                            String modelId, String engineId) {
         try {
             JSONObject details = extra == null ? new JSONObject() : extra;
             details.put("segmentId", segmentId);
             details.put("file", file == null ? JSONObject.NULL : file.getName());
-            details.put("engine", LocalWhisperEngine.ENGINE_ID);
+            details.put("engine", engineId);
+            details.put("modelId", modelId);
             details.put("manualRetranscription", forceRetranscribe);
             details.put("attempt", attempt);
-            details.put("asrReady", WhisperModelManager.isAsrReady(context));
+            details.put("asrReady", WhisperModelManager.isModelReady(context, modelId));
             details.put("vadReady", WhisperModelManager.isVadReady(context));
             if (message != null) {
                 details.put("message", message);
@@ -354,6 +370,11 @@ public final class TranscriptionQueueService extends Service {
             AppLogger.event(context, event, details);
         } catch (Exception ignored) {
         }
+    }
+
+    private static String modelLabel(String modelId) {
+        WhisperModelManager.ModelSpec spec = WhisperModelManager.modelSpec(modelId);
+        return spec == null ? modelId : spec.label;
     }
 
     private static String safeMessage(Throwable error) {
