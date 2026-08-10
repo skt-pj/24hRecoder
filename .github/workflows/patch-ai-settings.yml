@@ -24,17 +24,17 @@ jobs:
           path = Path('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
           source = path.read_text(encoding='utf-8')
 
-          privacy_marker = '''        item {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("プライバシー", style = MaterialTheme.typography.titleLarge)
-'''
+          privacy_marker = (
+              '        item {\n'
+              '            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {\n'
+              '                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {\n'
+              '                    Text("プライバシー", style = MaterialTheme.typography.titleLarge)\n'
+          )
           if privacy_marker not in source:
               raise SystemExit('privacy settings block not found')
           source = source.replace(
               privacy_marker,
-              '''        item { AiSettingsCard() }
-''' + privacy_marker,
+              '        item { AiSettingsCard() }\n' + privacy_marker,
               1,
           )
 
