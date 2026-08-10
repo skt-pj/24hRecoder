@@ -28,8 +28,10 @@ class SpeakerEnrollmentWorker(
             return Result.failure()
         }
 
+        val enrollmentKey = SpeakerProfileStore.enrollmentKey(segmentId, editKey)
         val currentEdit = TranscriptEditRepository.load(applicationContext, segmentId)[editKey]
         if (currentEdit?.speaker != "自分") {
+            SpeakerProfileStore.removeEnrollment(applicationContext, enrollmentKey)
             AppLogger.event(
                 applicationContext,
                 "SELF_SPEAKER_ENROLLMENT_STALE_SKIPPED",
@@ -47,8 +49,21 @@ class SpeakerEnrollmentWorker(
                 File(filePath),
                 startMs,
                 endMs,
-                SpeakerProfileStore.enrollmentKey(segmentId, editKey)
+                enrollmentKey
             )
+            val stillSelf = TranscriptEditRepository.load(applicationContext, segmentId)[editKey]?.speaker == "自分"
+            if (!stillSelf) {
+                SpeakerProfileStore.removeEnrollment(applicationContext, enrollmentKey)
+                AppLogger.event(
+                    applicationContext,
+                    "SELF_SPEAKER_ENROLLMENT_REVERTED",
+                    JSONObject()
+                        .put("segmentId", segmentId)
+                        .put("startMs", startMs)
+                        .put("endMs", endMs)
+                )
+                return Result.success()
+            }
             AppLogger.event(
                 applicationContext,
                 if (enrolled) "SELF_SPEAKER_ENROLLED" else "SELF_SPEAKER_ENROLLMENT_SKIPPED",
