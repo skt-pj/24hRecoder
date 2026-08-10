@@ -68,6 +68,7 @@ public final class AiAnalysisRepository {
                             Math.max(periodStartMs, absoluteStart),
                             Math.min(periodEndMs, Math.max(absoluteStart, absoluteEnd)),
                             record.getSegmentId(),
+                            chunk.getSpeaker(),
                             text));
                     includedRecord = true;
                 }
@@ -75,10 +76,13 @@ public final class AiAnalysisRepository {
                 long recordStart = record.getStartedAtMs() > 0L ? record.getStartedAtMs() : record.getSortTimeMs();
                 long recordEnd = record.getEndedAtMs() > recordStart ? record.getEndedAtMs() : recordStart + 1L;
                 if (recordStart < periodEndMs && recordEnd > periodStartMs) {
+                    String speaker = record.getTranscriptSpeaker();
+                    if (speaker == null || speaker.trim().isEmpty()) speaker = "判定不能";
                     entries.add(new SourceEntry(
                             Math.max(periodStartMs, recordStart),
                             Math.min(periodEndMs, recordEnd),
                             record.getSegmentId(),
+                            speaker,
                             transcript.trim()));
                     includedRecord = true;
                 }
@@ -187,7 +191,8 @@ public final class AiAnalysisRepository {
         for (SourceEntry entry : source.entries) {
             String start = PROMPT_TIME.format(Instant.ofEpochMilli(entry.startMs).atZone(zone));
             String end = PROMPT_TIME.format(Instant.ofEpochMilli(entry.endMs).atZone(zone));
-            text.append('[').append(start).append(" - ").append(end).append("] ")
+            text.append('[').append(start).append(" - ").append(end).append("] [")
+                    .append(entry.speaker).append("] ")
                     .append(entry.text).append('\n');
         }
         return text.toString();
@@ -202,6 +207,8 @@ public final class AiAnalysisRepository {
                 digest.update(Long.toString(entry.endMs).getBytes(StandardCharsets.UTF_8));
                 digest.update((byte) 0);
                 digest.update(entry.segmentId.getBytes(StandardCharsets.UTF_8));
+                digest.update((byte) 0);
+                digest.update(entry.speaker.getBytes(StandardCharsets.UTF_8));
                 digest.update((byte) 0);
                 digest.update(entry.text.getBytes(StandardCharsets.UTF_8));
                 digest.update((byte) '\n');
@@ -257,12 +264,14 @@ public final class AiAnalysisRepository {
         public final long startMs;
         public final long endMs;
         public final String segmentId;
+        public final String speaker;
         public final String text;
 
-        SourceEntry(long startMs, long endMs, String segmentId, String text) {
+        SourceEntry(long startMs, long endMs, String segmentId, String speaker, String text) {
             this.startMs = startMs;
             this.endMs = endMs;
             this.segmentId = segmentId;
+            this.speaker = speaker;
             this.text = text;
         }
     }
