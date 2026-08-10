@@ -69,7 +69,7 @@ public final class OpenAiKeyStore {
     public static boolean hasKey(Context context) {
         try {
             String key = load(context);
-            return key != null && !key.isBlank();
+            return key != null && !key.trim().isEmpty();
         } catch (Exception ignored) {
             return false;
         }
