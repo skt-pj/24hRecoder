@@ -33,6 +33,8 @@ public final class RecorderService extends Service {
     private static final String CHANNEL_ID = "recording";
     private static final int NOTIFICATION_ID = 1001;
     private static final long RECOVERY_STOP_TIMEOUT_MS = 10_000L;
+    private static final long AUTO_RECOVERY_BURST_WINDOW_MS = 60_000L;
+    private static final int MAX_AUTO_RECOVERY_ATTEMPTS_PER_WINDOW = 3;
 
     private final Object lock = new Object();
     private Thread recorderThread;
@@ -42,6 +44,8 @@ public final class RecorderService extends Service {
     private volatile long recoveryStartedAtMs;
     private volatile String pendingRecoveryReason;
     private volatile boolean serviceDestroyed;
+    private long autoRecoveryWindowStartedAtMs;
+    private int autoRecoveryAttempts;
     private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
     private final Runnable watchdog = new Runnable() {
         @Override
@@ -81,6 +85,7 @@ public final class RecorderService extends Service {
 
         if (ACTION_START.equals(action)) {
             RecordingIntentStore.setRequested(this, true);
+            resetAutomaticRecoveryWindow();
         }
 
         if (!RecordingIntentStore.isRequested(this)) {
@@ -170,6 +175,9 @@ public final class RecorderService extends Service {
 
                     String reason = "録音処理エラー: " + (message == null || message.trim().isEmpty()
                             ? messageOrType(error) : message);
+                    if (!registerAutomaticRecoveryAttempt(reason)) {
+                        return;
+                    }
                     recoveryInProgress = true;
                     recoveryStartedAtMs = System.currentTimeMillis();
                     pendingRecoveryReason = reason;
@@ -264,6 +272,9 @@ public final class RecorderService extends Service {
         AacSegmentRecorder recorderToStop;
         boolean startWithoutExistingThread;
         String reason = health.code + ": " + health.detail;
+        if (!registerAutomaticRecoveryAttempt(reason)) {
+            return;
+        }
         synchronized (lock) {
             if (recoveryInProgress) {
                 return;
@@ -292,6 +303,35 @@ public final class RecorderService extends Service {
             watchdogHandler.post(this::startRecorderIfNeeded);
         } else if (recorderToStop != null) {
             recorderToStop.requestStop();
+        }
+    }
+
+    private boolean registerAutomaticRecoveryAttempt(String reason) {
+        long now = System.currentTimeMillis();
+        int attempts;
+        synchronized (lock) {
+            if (autoRecoveryWindowStartedAtMs <= 0L
+                    || now - autoRecoveryWindowStartedAtMs > AUTO_RECOVERY_BURST_WINDOW_MS) {
+                autoRecoveryWindowStartedAtMs = now;
+                autoRecoveryAttempts = 0;
+            }
+            autoRecoveryAttempts++;
+            attempts = autoRecoveryAttempts;
+        }
+        if (attempts <= MAX_AUTO_RECOVERY_ATTEMPTS_PER_WINDOW) {
+            return true;
+        }
+
+        failPermanently(
+                "短時間に録音異常が繰り返されたため自動再試行を停止しました。最終理由: " + reason,
+                null);
+        return false;
+    }
+
+    private void resetAutomaticRecoveryWindow() {
+        synchronized (lock) {
+            autoRecoveryWindowStartedAtMs = 0L;
+            autoRecoveryAttempts = 0;
         }
     }
 
