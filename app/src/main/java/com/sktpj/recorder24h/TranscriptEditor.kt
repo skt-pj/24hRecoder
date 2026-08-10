@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sktpj.recorder24h.transcription.SpeakerEnrollmentWorker
 import com.sktpj.recorder24h.transcription.SpeakerIdentifier
+import com.sktpj.recorder24h.transcription.SpeakerProfileStore
 import com.sktpj.recorder24h.transcription.TranscriptEditRepository
 import com.sktpj.recorder24h.ui.SegmentRecord
 import com.sktpj.recorder24h.ui.TranscriptChunk
@@ -36,6 +37,9 @@ import com.sktpj.recorder24h.ui.TranscriptChunk
 internal fun EditableTranscriptChunk(record: SegmentRecord, chunk: TranscriptChunk, timeLabel: String) {
     val context = LocalContext.current
     var editing by remember(record.segmentId, chunk.editKey) { mutableStateOf(false) }
+    val enrollmentKey = remember(record.segmentId, chunk.editKey) {
+        SpeakerProfileStore.enrollmentKey(record.segmentId, chunk.editKey)
+    }
 
     if (editing) {
         TranscriptEditDialog(
@@ -45,6 +49,7 @@ internal fun EditableTranscriptChunk(record: SegmentRecord, chunk: TranscriptChu
             onDismiss = { editing = false },
             onReset = {
                 TranscriptEditRepository.delete(context, record.segmentId, chunk.editKey)
+                SpeakerProfileStore.removeEnrollment(context, enrollmentKey)
                 editing = false
                 Toast.makeText(context, "手動修正を解除しました", Toast.LENGTH_SHORT).show()
             },
@@ -54,10 +59,13 @@ internal fun EditableTranscriptChunk(record: SegmentRecord, chunk: TranscriptChu
                     SpeakerEnrollmentWorker.enqueue(
                         context,
                         record.segmentId,
+                        chunk.editKey,
                         record.audioPath,
                         chunk.startMs,
                         chunk.endMs
                     )
+                } else if (speaker != "自分") {
+                    SpeakerProfileStore.removeEnrollment(context, enrollmentKey)
                 }
                 editing = false
                 Toast.makeText(context, "会話ログを更新しました", Toast.LENGTH_SHORT).show()
