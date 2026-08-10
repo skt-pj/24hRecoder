@@ -1262,11 +1262,12 @@ private fun SettingsScreen(
                 }
             }
         }
+        item { AiSettingsCard() }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("プライバシー", style = MaterialTheme.typography.titleLarge)
-                    Text("録音音声と文字起こしは端末内で完結します。外部APIへ音声を送信しません。初回のWhisperモデル取得時のみネット接続を使用します。")
+                    Text("録音音声とローカル文字起こしは端末内で処理します。AI分析を有効にした場合のみ、文字起こしテキストをOpenAI APIへ送信します。録音音声はOpenAI APIへ送信しません。")
                     Text("モデル本体は1GBの作業データ制限の対象外です。", fontWeight = FontWeight.SemiBold)
                 }
             }
