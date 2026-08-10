@@ -8,6 +8,7 @@ import androidx.work.WorkerParameters;
 import com.sktpj.recorder24h.storage.SegmentRepository;
 import com.sktpj.recorder24h.util.AppLogger;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
@@ -118,6 +119,7 @@ public final class TranscriptionWorker extends Worker {
                 startedMetrics.put("queueWaitMs", queueWaitMs);
                 startedMetrics.put("vadModel", WhisperModelManager.VAD_MODEL_ID);
                 startedMetrics.put("vadEnabled", true);
+                startedMetrics.put("vadBeforeWhisper", true);
                 startedMetrics.put("audioFrontend", "adaptive-gain-v1");
                 startedMetrics.put("replacingOldTranscript", replacingOldTranscript);
             } catch (Exception ignored) {
@@ -129,6 +131,9 @@ public final class TranscriptionWorker extends Worker {
 
             try {
                 LocalWhisperEngine.Response response = LocalWhisperEngine.transcribe(context, audioFile);
+                JSONArray annotatedSegments = response.skippedNoSpeech
+                        ? new JSONArray()
+                        : SpeakerIdentifier.annotate(context, audioFile, response.segments);
                 synchronized (TranscriptionResetManager.class) {
                     if (!TranscriptionResetManager.isCurrentGeneration(context, workGeneration)) {
                         SegmentRepository.appendWithoutNotify(context, segmentId, audioFile, 0L,
@@ -138,10 +143,10 @@ public final class TranscriptionWorker extends Worker {
                         return Result.success();
                     }
                     TranscriptionRepository.save(context, segmentId, audioFile,
-                            LocalWhisperEngine.ENGINE_ID, response.text,
-                            SpeakerIdentifier.annotate(context, audioFile, response.segments));
+                            LocalWhisperEngine.ENGINE_ID, response.text, annotatedSegments);
                     SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),
-                            System.currentTimeMillis(), "TRANSCRIBED", null);
+                            System.currentTimeMillis(), "TRANSCRIBED",
+                            response.skippedNoSpeech ? "NO_SPEECH_DETECTED" : null);
                 }
 
                 JSONObject metrics = forceMetrics(forceRetranscribe);
@@ -176,12 +181,35 @@ public final class TranscriptionWorker extends Worker {
 
                 metrics.put("vadModel", WhisperModelManager.VAD_MODEL_ID);
                 metrics.put("vadEnabled", true);
+                metrics.put("vadBeforeWhisper", true);
+                metrics.put("vadInitMs", response.vadInitMs);
+                metrics.put("vadDetectMs", response.vadDetectMs);
+                metrics.put("vadSegmentCount", response.vadSegmentCount);
+                metrics.put("vadSpeechMs", response.vadSpeechMs);
+                metrics.put("speechChunkCount", response.speechChunkCount);
+                metrics.put("speechInputMs", response.speechInputMs);
+                metrics.put("audioDurationMs", response.audioDurationMs);
+                metrics.put("skippedSilenceMs", response.skippedSilenceMs);
+                metrics.put("skippedNoSpeech", response.skippedNoSpeech);
+                metrics.put("whisperInvoked", !response.skippedNoSpeech);
                 metrics.put("replacedOldTranscript", replacingOldTranscript);
                 metrics.put("audioRetained", true);
-                log(context,
-                        forceRetranscribe ? "MANUAL_RETRANSCRIPTION_SAVED"
-                                : replacingOldTranscript ? "LOCAL_RETRANSCRIPTION_SAVED" : "LOCAL_TRANSCRIPTION_SAVED",
-                        segmentId, audioFile, null, metrics, attempt);
+
+                String completedEvent;
+                if (response.skippedNoSpeech) {
+                    completedEvent = forceRetranscribe
+                            ? "MANUAL_RETRANSCRIPTION_SKIPPED_NO_SPEECH"
+                            : replacingOldTranscript
+                            ? "LOCAL_RETRANSCRIPTION_SKIPPED_NO_SPEECH"
+                            : "LOCAL_TRANSCRIPTION_SKIPPED_NO_SPEECH";
+                } else {
+                    completedEvent = forceRetranscribe
+                            ? "MANUAL_RETRANSCRIPTION_SAVED"
+                            : replacingOldTranscript
+                            ? "LOCAL_RETRANSCRIPTION_SAVED"
+                            : "LOCAL_TRANSCRIPTION_SAVED";
+                }
+                log(context, completedEvent, segmentId, audioFile, null, metrics, attempt);
                 return Result.success();
             } catch (OutOfMemoryError oom) {
                 if (!TranscriptionResetManager.isCurrentGeneration(context, workGeneration)) {

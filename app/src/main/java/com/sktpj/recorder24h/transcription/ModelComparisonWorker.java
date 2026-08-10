@@ -68,7 +68,7 @@ public final class ModelComparisonWorker extends Worker {
         JSONArray results = new JSONArray();
         long startedAt = System.currentTimeMillis();
         try {
-            root.put("schemaVersion", 3);
+            root.put("schemaVersion", 4);
             root.put("status", "RUNNING");
             root.put("segmentId", segmentId);
             root.put("audioFile", audioFile.getName());
@@ -105,8 +105,9 @@ public final class ModelComparisonWorker extends Worker {
                 root.put("limitedSampleFraction", front.limitedSampleFraction);
                 root.put("boostSuppressedForLowSnr", front.boostSuppressedForLowSnr);
 
-                // Run Silero once independently from Whisper. This is the ground truth for what the
-                // VAD stage saw, so a model that stops early can be distinguished from a VAD miss.
+                // Run Silero once independently from Whisper. The exact same VAD result is then
+                // reused by every compared model, so no model receives silence that another model
+                // did not receive and the VAD pass is not repeated per model.
                 LocalWhisperEngine.VadDiagnostics vad = LocalWhisperEngine.analyzeVad(context, prepared);
                 root.put("vadDiagnostics", vad.toJson());
                 root.put("vadSegmentCount", vad.segmentCount);
@@ -152,10 +153,12 @@ public final class ModelComparisonWorker extends Worker {
 
                     try {
                         LocalWhisperEngine.Response response = LocalWhisperEngine.transcribePrepared(
-                                context, prepared, modelId);
+                                context, prepared, modelId, vad);
                         long audioDurationMs = Math.max(1L, prepared.durationMs());
                         long referenceTotalMs = response.decodeMs + response.preprocessMs + response.inferenceMs;
                         double rtf = response.inferenceMs / (double) audioDurationMs;
+                        double speechRtf = response.speechInputMs <= 0L
+                                ? 0.0 : response.inferenceMs / (double) response.speechInputMs;
                         long lastVadGapMs = Math.max(0L, vad.lastEndMs - response.lastOutputEndMs);
                         boolean reachesLastVad = vad.segmentCount == 0
                                 || response.lastOutputEndMs + LAST_VAD_TOLERANCE_MS >= vad.lastEndMs;
@@ -171,6 +174,7 @@ public final class ModelComparisonWorker extends Worker {
                         row.put("whisperFullMs", response.whisperFullMs);
                         row.put("referenceEndToEndMs", referenceTotalMs);
                         row.put("realTimeFactor", rtf);
+                        row.put("speechRealTimeFactor", speechRtf);
                         row.put("textChars", response.text.length());
                         row.put("segmentCount", response.segmentCount);
                         // Kept for backward compatibility. This is the sum of Whisper output segment
@@ -181,6 +185,11 @@ public final class ModelComparisonWorker extends Worker {
                         row.put("lastVadEndMs", vad.lastEndMs);
                         row.put("lastVadGapMs", lastVadGapMs);
                         row.put("reachesLastVad", reachesLastVad);
+                        row.put("speechChunkCount", response.speechChunkCount);
+                        row.put("speechInputMs", response.speechInputMs);
+                        row.put("skippedSilenceMs", response.skippedSilenceMs);
+                        row.put("skippedNoSpeech", response.skippedNoSpeech);
+                        row.put("whisperInvoked", !response.skippedNoSpeech);
                         if (!reachesLastVad) {
                             row.put("warning", "OUTPUT_STOPS_BEFORE_LAST_VAD");
                         }
@@ -196,12 +205,18 @@ public final class ModelComparisonWorker extends Worker {
                         log.put("modelLoadMs", response.modelLoadMs);
                         log.put("whisperFullMs", response.whisperFullMs);
                         log.put("rtf", rtf);
+                        log.put("speechRtf", speechRtf);
                         log.put("segmentCount", response.segmentCount);
                         log.put("outputSegmentDurationMs", response.recognizedSpeechMs);
                         log.put("lastOutputEndMs", response.lastOutputEndMs);
                         log.put("lastVadEndMs", vad.lastEndMs);
                         log.put("lastVadGapMs", lastVadGapMs);
                         log.put("reachesLastVad", reachesLastVad);
+                        log.put("speechChunkCount", response.speechChunkCount);
+                        log.put("speechInputMs", response.speechInputMs);
+                        log.put("skippedSilenceMs", response.skippedSilenceMs);
+                        log.put("skippedNoSpeech", response.skippedNoSpeech);
+                        log.put("whisperInvoked", !response.skippedNoSpeech);
                         log.put("textChars", response.text.length());
                         log.put("appliedGainDb", front.appliedGainDb);
                         log.put("snrProxyDb", front.snrProxyDb);
@@ -220,6 +235,10 @@ public final class ModelComparisonWorker extends Worker {
                             kotoba.put("vadSpeechMs", vad.totalSpeechMs);
                             kotoba.put("vadLastEndMs", vad.lastEndMs);
                             kotoba.put("vadSegments", vad.segments);
+                            kotoba.put("speechChunkCount", response.speechChunkCount);
+                            kotoba.put("speechInputMs", response.speechInputMs);
+                            kotoba.put("skippedSilenceMs", response.skippedSilenceMs);
+                            kotoba.put("skippedNoSpeech", response.skippedNoSpeech);
                             kotoba.put("outputSegmentCount", response.segmentCount);
                             kotoba.put("outputSegmentDurationMs", response.recognizedSpeechMs);
                             kotoba.put("lastOutputEndMs", response.lastOutputEndMs);
@@ -298,6 +317,9 @@ public final class ModelComparisonWorker extends Worker {
                 row.put("startMs", source.optLong("startMs"));
                 row.put("endMs", source.optLong("endMs"));
                 row.put("durationMs", source.optLong("durationMs"));
+                row.put("sourceChunkIndex", source.optInt("sourceChunkIndex", -1));
+                row.put("sourceChunkStartMs", source.optLong("sourceChunkStartMs", -1L));
+                row.put("sourceChunkEndMs", source.optLong("sourceChunkEndMs", -1L));
                 row.put("tokenCount", source.optInt("tokenCount"));
                 row.put("avgTokenProbability", source.optDouble("avgTokenProbability"));
                 row.put("minTokenProbability", source.optDouble("minTokenProbability"));

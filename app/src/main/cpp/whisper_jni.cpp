@@ -4,6 +4,7 @@
 #include <cmath>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "whisper.h"
 
@@ -184,11 +185,13 @@ Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribeDeta
         JNIEnv * env,
         jclass,
         jstring model_path,
-        jstring vad_model_path,
         jfloatArray pcm,
+        jintArray chunk_starts_ms,
+        jintArray chunk_ends_ms,
         jstring language,
         jint threads) {
-    if (model_path == nullptr || vad_model_path == nullptr || pcm == nullptr || language == nullptr) {
+    if (model_path == nullptr || pcm == nullptr || chunk_starts_ms == nullptr ||
+            chunk_ends_ms == nullptr || language == nullptr) {
         throw_runtime(env, "Invalid local Whisper arguments");
         return nullptr;
     }
@@ -199,14 +202,30 @@ Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribeDeta
         return nullptr;
     }
 
+    const jsize chunk_count = env->GetArrayLength(chunk_starts_ms);
+    if (chunk_count != env->GetArrayLength(chunk_ends_ms)) {
+        throw_runtime(env, "Speech chunk arrays have different lengths");
+        return nullptr;
+    }
+    if (chunk_count <= 0) {
+        const std::string empty = "{\"modelLoadMs\":0,\"whisperFullMs\":0,\"segments\":[],\"lastOutputEndMs\":0,\"text\":\"\"}";
+        return env->NewStringUTF(empty.c_str());
+    }
+
+    std::vector<jint> starts(static_cast<size_t>(chunk_count));
+    std::vector<jint> ends(static_cast<size_t>(chunk_count));
+    env->GetIntArrayRegion(chunk_starts_ms, 0, chunk_count, starts.data());
+    env->GetIntArrayRegion(chunk_ends_ms, 0, chunk_count, ends.data());
+    if (env->ExceptionCheck()) {
+        return nullptr;
+    }
+
     const char * model = env->GetStringUTFChars(model_path, nullptr);
-    const char * vad_model = env->GetStringUTFChars(vad_model_path, nullptr);
     const char * lang = env->GetStringUTFChars(language, nullptr);
     jfloat * samples = env->GetFloatArrayElements(pcm, nullptr);
-    if (model == nullptr || vad_model == nullptr || lang == nullptr || samples == nullptr) {
+    if (model == nullptr || lang == nullptr || samples == nullptr) {
         if (samples != nullptr) env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
         if (lang != nullptr) env->ReleaseStringUTFChars(language, lang);
-        if (vad_model != nullptr) env->ReleaseStringUTFChars(vad_model_path, vad_model);
         if (model != nullptr) env->ReleaseStringUTFChars(model_path, model);
         throw_runtime(env, "Unable to access local Whisper input");
         return nullptr;
@@ -222,7 +241,6 @@ Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribeDeta
     if (ctx == nullptr) {
         env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
         env->ReleaseStringUTFChars(language, lang);
-        env->ReleaseStringUTFChars(vad_model_path, vad_model);
         env->ReleaseStringUTFChars(model_path, model);
         throw_runtime(env, "Unable to load Whisper model");
         return nullptr;
@@ -246,71 +264,95 @@ Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribeDeta
     params.entropy_thold = 2.4f;
     params.logprob_thold = -1.0f;
     params.no_speech_thold = 0.6f;
-
-    params.vad = true;
-    params.vad_model_path = vad_model;
-    params.vad_params = app_vad_params();
-
-    const auto whisper_started = std::chrono::steady_clock::now();
-    const int result = whisper_full(ctx, params, samples, static_cast<int>(sample_count));
-    const auto whisper_finished = std::chrono::steady_clock::now();
-    env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
-
-    if (result != 0) {
-        whisper_free(ctx);
-        env->ReleaseStringUTFChars(language, lang);
-        env->ReleaseStringUTFChars(vad_model_path, vad_model);
-        env->ReleaseStringUTFChars(model_path, model);
-        throw_runtime(env, "whisper_full with VAD failed");
-        return nullptr;
-    }
+    // VAD already ran before the Whisper model was loaded. Only the selected speech chunks
+    // reach whisper_full(), so do not run Whisper's internal VAD a second time.
+    params.vad = false;
 
     std::string text;
     std::ostringstream json;
-    const int segment_count = whisper_full_n_segments(ctx);
+    long long whisper_full_ms = 0;
     long long last_output_end_ms = 0;
+    bool first_output_segment = true;
     json << "{\"modelLoadMs\":" << elapsed_ms(model_load_started, model_load_finished)
-         << ",\"whisperFullMs\":" << elapsed_ms(whisper_started, whisper_finished)
          << ",\"segments\":[";
-    for (int i = 0; i < segment_count; ++i) {
-        const char * segment_text = whisper_full_get_segment_text(ctx, i);
-        const int64_t t0 = whisper_full_get_segment_t0(ctx, i);
-        const int64_t t1 = whisper_full_get_segment_t1(ctx, i);
-        const long long start_ms = t0 * 10;
-        const long long end_ms = t1 * 10;
-        last_output_end_ms = std::max(last_output_end_ms, end_ms);
-        if (segment_text != nullptr) text += segment_text;
 
-        const int token_count = whisper_full_n_tokens(ctx, i);
-        double token_probability_sum = 0.0;
-        double min_token_probability = 1.0;
-        for (int token_index = 0; token_index < token_count; ++token_index) {
-            const double probability = whisper_full_get_token_p(ctx, i, token_index);
-            token_probability_sum += probability;
-            min_token_probability = std::min(min_token_probability, probability);
+    for (jsize chunk_index = 0; chunk_index < chunk_count; ++chunk_index) {
+        const long long requested_start_ms = std::max(0, starts[static_cast<size_t>(chunk_index)]);
+        const long long requested_end_ms = std::max(0, ends[static_cast<size_t>(chunk_index)]);
+        long long start_sample = requested_start_ms * 16LL;
+        long long end_sample = requested_end_ms * 16LL;
+        start_sample = std::max(0LL, std::min(start_sample, static_cast<long long>(sample_count)));
+        end_sample = std::max(0LL, std::min(end_sample, static_cast<long long>(sample_count)));
+        if (end_sample <= start_sample) continue;
+
+        const long long chunk_start_ms = start_sample / 16LL;
+        const long long chunk_end_ms = end_sample / 16LL;
+        const int chunk_sample_count = static_cast<int>(end_sample - start_sample);
+
+        const auto whisper_started = std::chrono::steady_clock::now();
+        const int result = whisper_full(ctx, params, samples + start_sample, chunk_sample_count);
+        const auto whisper_finished = std::chrono::steady_clock::now();
+        whisper_full_ms += elapsed_ms(whisper_started, whisper_finished);
+        if (result != 0) {
+            whisper_free(ctx);
+            env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+            env->ReleaseStringUTFChars(language, lang);
+            env->ReleaseStringUTFChars(model_path, model);
+            throw_runtime(env, "whisper_full for speech chunk failed");
+            return nullptr;
         }
-        const double average_token_probability = token_count > 0
-                ? token_probability_sum / token_count : 0.0;
-        if (token_count == 0) min_token_probability = 0.0;
-        const double no_speech_probability = whisper_full_get_segment_no_speech_prob(ctx, i);
 
-        if (i > 0) json << ',';
-        json << "{\"startMs\":" << start_ms
-             << ",\"endMs\":" << end_ms
-             << ",\"durationMs\":" << std::max(0LL, end_ms - start_ms)
-             << ",\"tokenCount\":" << token_count
-             << ",\"avgTokenProbability\":" << average_token_probability
-             << ",\"minTokenProbability\":" << min_token_probability
-             << ",\"noSpeechProbability\":" << no_speech_probability
-             << ",\"text\":\"" << json_escape(segment_text) << "\"}";
+        const int segment_count = whisper_full_n_segments(ctx);
+        for (int i = 0; i < segment_count; ++i) {
+            const char * segment_text = whisper_full_get_segment_text(ctx, i);
+            const int64_t t0 = whisper_full_get_segment_t0(ctx, i);
+            const int64_t t1 = whisper_full_get_segment_t1(ctx, i);
+            const long long relative_start_ms = std::max(0LL, static_cast<long long>(t0) * 10LL);
+            const long long relative_end_ms = std::max(0LL, static_cast<long long>(t1) * 10LL);
+            const long long start_ms = std::max(chunk_start_ms,
+                    std::min(chunk_end_ms, chunk_start_ms + relative_start_ms));
+            const long long end_ms = std::max(start_ms,
+                    std::min(chunk_end_ms, chunk_start_ms + relative_end_ms));
+            last_output_end_ms = std::max(last_output_end_ms, end_ms);
+            if (segment_text != nullptr) text += segment_text;
+
+            const int token_count = whisper_full_n_tokens(ctx, i);
+            double token_probability_sum = 0.0;
+            double min_token_probability = 1.0;
+            for (int token_index = 0; token_index < token_count; ++token_index) {
+                const double probability = whisper_full_get_token_p(ctx, i, token_index);
+                token_probability_sum += probability;
+                min_token_probability = std::min(min_token_probability, probability);
+            }
+            const double average_token_probability = token_count > 0
+                    ? token_probability_sum / token_count : 0.0;
+            if (token_count == 0) min_token_probability = 0.0;
+            const double no_speech_probability = whisper_full_get_segment_no_speech_prob(ctx, i);
+
+            if (!first_output_segment) json << ',';
+            first_output_segment = false;
+            json << "{\"startMs\":" << start_ms
+                 << ",\"endMs\":" << end_ms
+                 << ",\"durationMs\":" << std::max(0LL, end_ms - start_ms)
+                 << ",\"sourceChunkIndex\":" << chunk_index
+                 << ",\"sourceChunkStartMs\":" << chunk_start_ms
+                 << ",\"sourceChunkEndMs\":" << chunk_end_ms
+                 << ",\"tokenCount\":" << token_count
+                 << ",\"avgTokenProbability\":" << average_token_probability
+                 << ",\"minTokenProbability\":" << min_token_probability
+                 << ",\"noSpeechProbability\":" << no_speech_probability
+                 << ",\"text\":\"" << json_escape(segment_text) << "\"}";
+        }
     }
-    json << "],\"lastOutputEndMs\":" << last_output_end_ms
+
+    env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+    json << "],\"whisperFullMs\":" << whisper_full_ms
+         << ",\"lastOutputEndMs\":" << last_output_end_ms
          << ",\"text\":\"" << json_escape(text.c_str()) << "\"}";
 
     const std::string output = json.str();
     whisper_free(ctx);
     env->ReleaseStringUTFChars(language, lang);
-    env->ReleaseStringUTFChars(vad_model_path, vad_model);
     env->ReleaseStringUTFChars(model_path, model);
     return env->NewStringUTF(output.c_str());
 }

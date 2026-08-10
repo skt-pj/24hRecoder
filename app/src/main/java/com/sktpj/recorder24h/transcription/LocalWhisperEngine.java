@@ -6,10 +6,13 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 
 public final class LocalWhisperEngine {
-    public static final String ENGINE_ID = "whisper.cpp-v1.9.1/large-v3-q5_0+frontend-v1+silero-v6.2.0";
+    public static final String ENGINE_ID = "whisper.cpp-v1.9.1/large-v3-q5_0+frontend-v1+silero-v6.2.0+speech-chunks-v1";
     private static final String LANGUAGE = "ja";
+    private static final long SPEECH_CHUNK_MERGE_GAP_MS = 200L;
 
     static {
         System.loadLibrary("whisper_jni");
@@ -20,7 +23,8 @@ public final class LocalWhisperEngine {
 
     public static synchronized Response transcribe(Context context, File audioFile) throws Exception {
         PreparedAudio prepared = prepareAudio(audioFile);
-        return transcribePrepared(context, prepared, WhisperModelManager.MODEL_DEFAULT);
+        VadDiagnostics vad = analyzeVad(context, prepared);
+        return transcribePrepared(context, prepared, WhisperModelManager.MODEL_DEFAULT, vad);
     }
 
     static PreparedAudio prepareAudio(File audioFile) throws Exception {
@@ -46,20 +50,35 @@ public final class LocalWhisperEngine {
     }
 
     static Response transcribePrepared(Context context, PreparedAudio prepared, String modelId) throws Exception {
+        VadDiagnostics vad = analyzeVad(context, prepared);
+        return transcribePrepared(context, prepared, modelId, vad);
+    }
+
+    static Response transcribePrepared(Context context, PreparedAudio prepared, String modelId,
+                                       VadDiagnostics vad) throws Exception {
         WhisperModelManager.ModelSpec spec = WhisperModelManager.modelSpec(modelId);
         if (spec == null) {
             throw new IllegalArgumentException("Unknown model: " + modelId);
         }
+
+        SpeechChunks chunks = SpeechChunks.fromVad(vad, prepared.durationMs());
+        int threads = threadCount();
         File model = WhisperModelManager.modelFile(context, modelId);
-        File vadModel = WhisperModelManager.vadModelFile(context);
+        long modelBytes = model.isFile() ? model.length() : 0L;
+        if (chunks.count() == 0) {
+            return new Response("", prepared.frontEnd.samples.length, threads,
+                    prepared.decodeMs, prepared.preprocessMs, 0L, prepared.frontEnd,
+                    modelId, spec.label, modelBytes, 0, 0L, new JSONArray(),
+                    0L, 0L, 0L, vad, chunks, prepared.durationMs(), true);
+        }
+
         if (!WhisperModelManager.isComparisonReady(context, modelId)) {
             throw new IllegalStateException("Whisper model is not ready: " + modelId);
         }
 
-        int threads = threadCount();
         long inferenceStarted = System.currentTimeMillis();
-        String raw = nativeTranscribeDetailed(model.getAbsolutePath(), vadModel.getAbsolutePath(),
-                prepared.frontEnd.samples, LANGUAGE, threads);
+        String raw = nativeTranscribeDetailed(model.getAbsolutePath(), prepared.frontEnd.samples,
+                chunks.startsMs, chunks.endsMs, LANGUAGE, threads);
         long inferenceMs = System.currentTimeMillis() - inferenceStarted;
         if (raw == null) {
             throw new IllegalStateException("Local Whisper returned null");
@@ -74,18 +93,20 @@ public final class LocalWhisperEngine {
             for (int i = 0; i < segments.length(); i++) {
                 JSONObject row = segments.optJSONObject(i);
                 if (row != null) {
-                    outputSegmentDurationMs += Math.max(0L, row.optLong("endMs") - row.optLong("startMs"));
+                    outputSegmentDurationMs += Math.max(0L,
+                            row.optLong("endMs") - row.optLong("startMs"));
                 }
             }
         }
 
         return new Response(text, prepared.frontEnd.samples.length, threads,
                 prepared.decodeMs, prepared.preprocessMs, inferenceMs, prepared.frontEnd,
-                modelId, spec.label, model.length(), segmentCount, outputSegmentDurationMs,
+                modelId, spec.label, modelBytes, segmentCount, outputSegmentDurationMs,
                 segments == null ? new JSONArray() : segments,
                 nativeResult.optLong("modelLoadMs", -1L),
                 nativeResult.optLong("whisperFullMs", -1L),
-                nativeResult.optLong("lastOutputEndMs", 0L));
+                nativeResult.optLong("lastOutputEndMs", 0L),
+                vad, chunks, prepared.durationMs(), false);
     }
 
     private static int threadCount() {
@@ -94,8 +115,9 @@ public final class LocalWhisperEngine {
 
     private static native String nativeAnalyzeVadDetailed(String vadModelPath, float[] pcm, int threads);
 
-    private static native String nativeTranscribeDetailed(String modelPath, String vadModelPath,
-                                                           float[] pcm, String language, int threads);
+    private static native String nativeTranscribeDetailed(String modelPath, float[] pcm,
+                                                           int[] chunkStartsMs, int[] chunkEndsMs,
+                                                           String language, int threads);
 
     static final class PreparedAudio {
         final AudioPreprocessor.Result frontEnd;
@@ -152,6 +174,68 @@ public final class LocalWhisperEngine {
         }
     }
 
+    private static final class SpeechChunks {
+        final int[] startsMs;
+        final int[] endsMs;
+        final long totalMs;
+
+        SpeechChunks(int[] startsMs, int[] endsMs, long totalMs) {
+            this.startsMs = startsMs;
+            this.endsMs = endsMs;
+            this.totalMs = totalMs;
+        }
+
+        int count() {
+            return startsMs.length;
+        }
+
+        static SpeechChunks fromVad(VadDiagnostics vad, long audioDurationMs) {
+            if (vad == null || vad.segments.length() == 0 || audioDurationMs <= 0L) {
+                return new SpeechChunks(new int[0], new int[0], 0L);
+            }
+
+            List<Long> starts = new ArrayList<>();
+            List<Long> ends = new ArrayList<>();
+            long currentStart = -1L;
+            long currentEnd = -1L;
+            for (int i = 0; i < vad.segments.length(); i++) {
+                JSONObject row = vad.segments.optJSONObject(i);
+                if (row == null) continue;
+                long start = Math.max(0L, Math.min(audioDurationMs, row.optLong("startMs", -1L)));
+                long end = Math.max(0L, Math.min(audioDurationMs, row.optLong("endMs", -1L)));
+                if (end <= start) continue;
+
+                if (currentStart < 0L) {
+                    currentStart = start;
+                    currentEnd = end;
+                } else if (start <= currentEnd + SPEECH_CHUNK_MERGE_GAP_MS) {
+                    currentEnd = Math.max(currentEnd, end);
+                } else {
+                    starts.add(currentStart);
+                    ends.add(currentEnd);
+                    currentStart = start;
+                    currentEnd = end;
+                }
+            }
+            if (currentStart >= 0L && currentEnd > currentStart) {
+                starts.add(currentStart);
+                ends.add(currentEnd);
+            }
+
+            int[] startArray = new int[starts.size()];
+            int[] endArray = new int[ends.size()];
+            long totalMs = 0L;
+            for (int i = 0; i < starts.size(); i++) {
+                long start = starts.get(i);
+                long end = ends.get(i);
+                startArray[i] = (int) Math.min(Integer.MAX_VALUE, start);
+                endArray[i] = (int) Math.min(Integer.MAX_VALUE, end);
+                totalMs += Math.max(0L, end - start);
+            }
+            return new SpeechChunks(startArray, endArray, totalMs);
+        }
+    }
+
     public static final class Response {
         public final String text;
         public final int sampleCount;
@@ -182,12 +266,23 @@ public final class LocalWhisperEngine {
         public final long modelLoadMs;
         public final long whisperFullMs;
         public final long lastOutputEndMs;
+        public final long vadInitMs;
+        public final long vadDetectMs;
+        public final int vadSegmentCount;
+        public final long vadSpeechMs;
+        public final int speechChunkCount;
+        public final long speechInputMs;
+        public final long skippedSilenceMs;
+        public final long audioDurationMs;
+        public final boolean skippedNoSpeech;
 
         Response(String text, int sampleCount, int threads,
                  long decodeMs, long preprocessMs, long inferenceMs,
                  AudioPreprocessor.Result frontEnd, String modelId, String modelLabel,
                  long modelBytes, int segmentCount, long recognizedSpeechMs, JSONArray segments,
-                 long modelLoadMs, long whisperFullMs, long lastOutputEndMs) {
+                 long modelLoadMs, long whisperFullMs, long lastOutputEndMs,
+                 VadDiagnostics vad, SpeechChunks chunks, long audioDurationMs,
+                 boolean skippedNoSpeech) {
             this.text = text;
             this.sampleCount = sampleCount;
             this.threads = threads;
@@ -217,6 +312,15 @@ public final class LocalWhisperEngine {
             this.modelLoadMs = modelLoadMs;
             this.whisperFullMs = whisperFullMs;
             this.lastOutputEndMs = lastOutputEndMs;
+            this.vadInitMs = vad == null ? -1L : vad.vadInitMs;
+            this.vadDetectMs = vad == null ? -1L : vad.vadDetectMs;
+            this.vadSegmentCount = vad == null ? 0 : vad.segmentCount;
+            this.vadSpeechMs = vad == null ? 0L : vad.totalSpeechMs;
+            this.speechChunkCount = chunks == null ? 0 : chunks.count();
+            this.speechInputMs = chunks == null ? 0L : chunks.totalMs;
+            this.audioDurationMs = Math.max(0L, audioDurationMs);
+            this.skippedSilenceMs = Math.max(0L, this.audioDurationMs - this.speechInputMs);
+            this.skippedNoSpeech = skippedNoSpeech;
         }
     }
 }
