@@ -39,7 +39,7 @@ public final class AiAnalysisWorker extends Worker {
             log(context, "AI_ANALYSIS_KEY_READ_FAILED", kind, 0L, 0L, null, error);
             return Result.failure();
         }
-        if (apiKey == null || apiKey.isBlank()) {
+        if (apiKey == null || apiKey.trim().isEmpty()) {
             return Result.success();
         }
 

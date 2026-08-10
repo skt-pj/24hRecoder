@@ -47,7 +47,7 @@ public final class AiAnalysisRepository {
 
         for (SegmentRecord record : records) {
             String transcript = record.getTranscriptText();
-            if (transcript == null || transcript.isBlank()) {
+            if (transcript == null || transcript.trim().isEmpty()) {
                 continue;
             }
 

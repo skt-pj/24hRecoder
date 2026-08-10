@@ -36,7 +36,7 @@ public final class OpenAiLunaClient {
     private static Response request(String apiKey, String prompt, String reasoningEffort,
                                     String schemaName, JSONObject schema, int maxOutputTokens)
             throws Exception {
-        if (apiKey == null || apiKey.isBlank()) {
+        if (apiKey == null || apiKey.trim().isEmpty()) {
             throw new ApiException(401, false, "OpenAI API key is not configured");
         }
 
@@ -93,7 +93,7 @@ public final class OpenAiLunaClient {
         }
 
         String outputText = extractOutputText(raw);
-        if (outputText == null || outputText.isBlank()) {
+        if (outputText == null || outputText.trim().isEmpty()) {
             throw new ApiException(status, false, "OpenAI response did not contain output_text");
         }
 
@@ -262,7 +262,7 @@ public final class OpenAiLunaClient {
             if (error != null) return error.optString("message", "OpenAI API request failed");
         } catch (Exception ignored) {
         }
-        return raw == null || raw.isBlank() ? "OpenAI API request failed" : raw;
+        return raw == null || raw.trim().isEmpty() ? "OpenAI API request failed" : raw;
     }
 
     public static final class Response {
