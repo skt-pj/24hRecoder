@@ -21,12 +21,34 @@ class SpeakerEnrollmentWorker(
     override fun doWork(): Result {
         val filePath = inputData.getString(EXTRA_FILE_PATH).orEmpty()
         val segmentId = inputData.getString(EXTRA_SEGMENT_ID).orEmpty()
+        val editKey = inputData.getString(EXTRA_EDIT_KEY).orEmpty()
         val startMs = inputData.getLong(EXTRA_START_MS, -1L)
         val endMs = inputData.getLong(EXTRA_END_MS, -1L)
-        if (filePath.isBlank() || startMs < 0L || endMs <= startMs) return Result.failure()
+        if (filePath.isBlank() || segmentId.isBlank() || editKey.isBlank() || startMs < 0L || endMs <= startMs) {
+            return Result.failure()
+        }
+
+        val currentEdit = TranscriptEditRepository.load(applicationContext, segmentId)[editKey]
+        if (currentEdit?.speaker != "自分") {
+            AppLogger.event(
+                applicationContext,
+                "SELF_SPEAKER_ENROLLMENT_STALE_SKIPPED",
+                JSONObject()
+                    .put("segmentId", segmentId)
+                    .put("startMs", startMs)
+                    .put("endMs", endMs)
+            )
+            return Result.success()
+        }
 
         return try {
-            val enrolled = SpeakerIdentifier.enroll(applicationContext, File(filePath), startMs, endMs)
+            val enrolled = SpeakerIdentifier.enroll(
+                applicationContext,
+                File(filePath),
+                startMs,
+                endMs,
+                SpeakerProfileStore.enrollmentKey(segmentId, editKey)
+            )
             AppLogger.event(
                 applicationContext,
                 if (enrolled) "SELF_SPEAKER_ENROLLED" else "SELF_SPEAKER_ENROLLMENT_SKIPPED",
@@ -51,6 +73,7 @@ class SpeakerEnrollmentWorker(
     companion object {
         private const val EXTRA_FILE_PATH = "speakerEnrollmentFilePath"
         private const val EXTRA_SEGMENT_ID = "speakerEnrollmentSegmentId"
+        private const val EXTRA_EDIT_KEY = "speakerEnrollmentEditKey"
         private const val EXTRA_START_MS = "speakerEnrollmentStartMs"
         private const val EXTRA_END_MS = "speakerEnrollmentEndMs"
 
@@ -58,6 +81,7 @@ class SpeakerEnrollmentWorker(
         fun enqueue(
             context: Context,
             segmentId: String,
+            editKey: String,
             filePath: String,
             startMs: Long,
             endMs: Long
@@ -65,6 +89,7 @@ class SpeakerEnrollmentWorker(
             val data = Data.Builder()
                 .putString(EXTRA_FILE_PATH, filePath)
                 .putString(EXTRA_SEGMENT_ID, segmentId)
+                .putString(EXTRA_EDIT_KEY, editKey)
                 .putLong(EXTRA_START_MS, startMs)
                 .putLong(EXTRA_END_MS, endMs)
                 .build()
