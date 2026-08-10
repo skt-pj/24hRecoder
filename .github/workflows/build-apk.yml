@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -15,24 +15,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Apply 0.6.4 integration patch once
-        if: github.event_name == 'push' && github.ref == 'refs/heads/agent/today-hourly-ai-results'
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin main --depth=1
-          git fetch origin 72335a6f472426042e8c4a05c72ee268759e2014 8f3d8933759f346cd624378fc57efd1961a0c909 --depth=2
-          git cherry-pick 72335a6f472426042e8c4a05c72ee268759e2014 8f3d8933759f346cd624378fc57efd1961a0c909
-          python3 .github/apply_today_hourly.py
-          git checkout origin/main -- .github/workflows/build-apk.yml
-          git rm .github/apply_today_hourly.py
-          git add app/build.gradle \
-            app/src/main/java/com/sktpj/recorder24h/AiAnalysisScreen.kt \
-            .github/workflows/build-apk.yml
-          git commit -m "Show today's hourly Luna results"
-          git push origin HEAD:agent/today-hourly-ai-results --force-with-lease
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
