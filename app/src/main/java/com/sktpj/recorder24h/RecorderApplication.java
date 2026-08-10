@@ -14,6 +14,10 @@ public final class RecorderApplication extends Application implements Applicatio
     @Override
     public void onCreate() {
         super.onCreate();
+        String processName = Application.getProcessName();
+        if (!getPackageName().equals(processName)) {
+            return;
+        }
         DriveLogSync.ensureScheduled(this);
         registerActivityLifecycleCallbacks(this);
     }
