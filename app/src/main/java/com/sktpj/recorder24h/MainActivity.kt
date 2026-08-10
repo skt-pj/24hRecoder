@@ -100,6 +100,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sktpj.recorder24h.service.RecorderService
+import com.sktpj.recorder24h.storage.RecorderHealth
 import com.sktpj.recorder24h.storage.RecorderStateStore
 import com.sktpj.recorder24h.storage.RecordingIntentStore
 import com.sktpj.recorder24h.storage.StoragePolicy
@@ -231,6 +232,13 @@ private data class DashboardSnapshot(
     val segmentId: String,
     val error: String,
     val recordingRequested: Boolean,
+    val currentSegmentStartedAtMs: Long,
+    val lastAudioReadMs: Long,
+    val lastSegmentId: String,
+    val lastSegmentFinalizedAtMs: Long,
+    val lastSegmentDurationMs: Long,
+    val captureSilenced: Boolean,
+    val health: RecorderHealth.Snapshot,
     val audioBytes: Long,
     val appBytes: Long,
     val deviceFreeBytes: Long,
@@ -501,42 +509,68 @@ private fun RecordingCard(
     onRequestStart: () -> Unit,
     onRequestStop: () -> Unit
 ) {
-    val active = dashboard.state in setOf("STARTING", "RECORDING", "STOPPING") || dashboard.recordingRequested
-    val stale = dashboard.state == "RECORDING" && dashboard.heartbeatMs > 0L &&
-        System.currentTimeMillis() - dashboard.heartbeatMs > 10_000L
-    val dotColor = when (dashboard.state) {
-        "RECORDING" -> MaterialTheme.colorScheme.primary
-        "ERROR" -> MaterialTheme.colorScheme.error
-        "STARTING", "STOPPING" -> MaterialTheme.colorScheme.tertiary
+    val health = dashboard.health
+    val active = health.active
+    val dotColor = when {
+        health.problem -> MaterialTheme.colorScheme.error
+        health.healthy -> MaterialTheme.colorScheme.primary
+        dashboard.state in setOf("STARTING", "STOPPING", "ROTATING", "RECOVERING") -> MaterialTheme.colorScheme.tertiary
         else -> MaterialTheme.colorScheme.outline
     }
+    val cardColor = when {
+        health.problem -> MaterialTheme.colorScheme.errorContainer
+        health.healthy -> MaterialTheme.colorScheme.primaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val secondaryColor = when {
+        health.problem -> MaterialTheme.colorScheme.onErrorContainer
+        health.healthy -> MaterialTheme.colorScheme.onPrimaryContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
 
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+    Card(colors = CardDefaults.cardColors(containerColor = cardColor)) {
         Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(14.dp).background(dotColor, CircleShape))
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(recordingStateLabel(dashboard.state), style = MaterialTheme.typography.headlineMedium)
-                    Text(
-                        if (dashboard.state == "RECORDING") "バックグラウンドで録音しています" else "24時間録音の状態を管理します",
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.76f)
-                    )
+                    Text(health.label, style = MaterialTheme.typography.headlineMedium)
+                    Text(health.detail, color = secondaryColor.copy(alpha = 0.84f))
                 }
             }
-            if (dashboard.segmentId.isNotBlank() && dashboard.segmentId != "null") {
-                Text("現在のセグメント  ${dashboard.segmentId}", style = MaterialTheme.typography.labelLarge)
+            StatusPill(
+                when {
+                    health.healthy -> "監視正常"
+                    health.problem -> "録音要確認"
+                    active -> "状態確認中"
+                    else -> "停止中"
+                },
+                when {
+                    health.healthy -> StatusTone.SUCCESS
+                    health.problem -> StatusTone.ERROR
+                    active -> StatusTone.WAITING
+                    else -> StatusTone.NEUTRAL
+                }
+            )
+            if (dashboard.heartbeatMs > 0L) InfoRow("最終heartbeat", formatAgo(dashboard.heartbeatMs))
+            if (dashboard.lastAudioReadMs > 0L) InfoRow("マイク入力", formatAgo(dashboard.lastAudioReadMs))
+            if (dashboard.currentSegmentStartedAtMs > 0L) {
+                InfoRow("現在の5分音声", "${formatDuration(System.currentTimeMillis() - dashboard.currentSegmentStartedAtMs)} 経過")
             }
-            if (stale) {
+            if (dashboard.segmentId.isNotBlank() && dashboard.segmentId != "null") {
+                InfoRow("segment", dashboard.segmentId.take(8))
+            }
+            if (dashboard.lastSegmentFinalizedAtMs > 0L) {
+                InfoRow("直近の正常確定", "${formatAgo(dashboard.lastSegmentFinalizedAtMs)} / ${formatDuration(dashboard.lastSegmentDurationMs)}")
+            }
+            if (health.problem) {
                 Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.small) {
                     Text(
-                        "heartbeatが10秒以上更新されていません。ログ確認を推奨します。",
+                        "現在は「正常録音中」と判定していません。${health.detail}",
                         color = MaterialTheme.colorScheme.onErrorContainer,
                         modifier = Modifier.padding(12.dp)
                     )
                 }
-            } else if (dashboard.heartbeatMs > 0L) {
-                Text("最終heartbeat  ${formatDateTime(dashboard.heartbeatMs)}", style = MaterialTheme.typography.bodySmall)
             }
             if (dashboard.error.isNotBlank() && dashboard.error != "null") {
                 Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.small) {
@@ -1096,28 +1130,14 @@ private fun TranscriptCard(record: SegmentRecord) {
                                 )
                             }
                         }
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                                Text(
-                                    transcriptChunkTimeLabel(record, chunk.startMs, chunk.endMs),
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                SelectionContainer {
-                                    Text(chunk.text, style = MaterialTheme.typography.bodyLarge, lineHeight = 26.sp)
-                                }
-                            }
-                        }
+                        EditableTranscriptChunk(
+                            record = record,
+                            chunk = chunk,
+                            timeLabel = transcriptChunkTimeLabel(record, chunk.startMs, chunk.endMs)
+                        )
                     }
                 } else {
-                    SelectionContainer {
-                        Text(if (text.isBlank()) "（文字起こし結果は空です）" else text, style = MaterialTheme.typography.bodyLarge, lineHeight = 26.sp)
-                    }
+                    EditableWholeTranscript(record)
                     if (text.isNotBlank()) {
                         Text(
                             "この結果には時刻区間データがありません。0.4.9で再文字起こしした結果から時刻区切り表示になります。",
@@ -1183,9 +1203,12 @@ private fun transcriptionActivityMessage(record: SegmentRecord): String? {
 
 private fun transcriptClipboardText(record: SegmentRecord): String {
     val fallback = record.transcriptText.orEmpty()
-    if (record.transcriptChunks.isEmpty()) return fallback
+    if (record.transcriptChunks.isEmpty()) {
+        val speaker = record.transcriptSpeaker ?: "判定不能"
+        return if (fallback.isBlank()) fallback else "${transcriptSpeakerLabel(speaker)}\n$fallback"
+    }
     return record.transcriptChunks.joinToString("\n\n") { chunk ->
-        "${transcriptChunkTimeLabel(record, chunk.startMs, chunk.endMs)}\n${chunk.text}"
+        "${transcriptChunkTimeLabel(record, chunk.startMs, chunk.endMs)}\n${transcriptSpeakerLabel(chunk.speaker)}\n${chunk.text}"
     }
 }
 
@@ -1301,12 +1324,21 @@ private fun SettingsScreen(
 
 private fun readDashboard(context: Context): DashboardSnapshot {
     val state: JSONObject = RecorderStateStore.read(context)
+    val recordingRequested = RecordingIntentStore.isRequested(context)
+    val health = RecorderHealth.evaluate(state, recordingRequested, System.currentTimeMillis())
     return DashboardSnapshot(
         state = state.optString("state", "STOPPED"),
         heartbeatMs = state.optLong("heartbeatMs", 0L),
         segmentId = state.optString("segmentId", ""),
         error = state.optString("error", ""),
-        recordingRequested = RecordingIntentStore.isRequested(context),
+        recordingRequested = recordingRequested,
+        currentSegmentStartedAtMs = state.optLong("currentSegmentStartedAtMs", 0L),
+        lastAudioReadMs = state.optLong("lastAudioReadMs", 0L),
+        lastSegmentId = state.optString("lastSegmentId", ""),
+        lastSegmentFinalizedAtMs = state.optLong("lastSegmentFinalizedAtMs", 0L),
+        lastSegmentDurationMs = state.optLong("lastSegmentDurationMs", 0L),
+        captureSilenced = state.optBoolean("captureSilenced", false),
+        health = health,
         audioBytes = StoragePolicy.audioBytes(context),
         appBytes = StoragePolicy.appDataBytes(context),
         deviceFreeBytes = context.filesDir.usableSpace,
@@ -1338,6 +1370,17 @@ private fun recordTone(record: SegmentRecord) = when {
     record.status == "FAILED" || record.status == "CORRUPT" -> StatusTone.ERROR
     record.status == "QUEUED" || record.status == "TRANSCRIBING" || record.status == "RETRY_WAIT" || record.status == "READY" -> StatusTone.WAITING
     else -> StatusTone.NEUTRAL
+}
+
+private fun formatAgo(timestampMs: Long): String {
+    if (timestampMs <= 0L) return "-"
+    val seconds = ((System.currentTimeMillis() - timestampMs).coerceAtLeast(0L) / 1000L)
+    return when {
+        seconds < 2L -> "たった今"
+        seconds < 60L -> "${seconds}秒前"
+        seconds < 3600L -> "${seconds / 60L}分前"
+        else -> formatDateTime(timestampMs)
+    }
 }
 
 private fun recordingStateLabel(state: String) = when (state) {

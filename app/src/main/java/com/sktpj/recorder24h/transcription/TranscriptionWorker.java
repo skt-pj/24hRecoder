@@ -138,7 +138,8 @@ public final class TranscriptionWorker extends Worker {
                         return Result.success();
                     }
                     TranscriptionRepository.save(context, segmentId, audioFile,
-                            LocalWhisperEngine.ENGINE_ID, response.text, response.segments);
+                            LocalWhisperEngine.ENGINE_ID, response.text,
+                            SpeakerIdentifier.annotate(context, audioFile, response.segments));
                     SegmentRepository.append(context, segmentId, audioFile, audioFile.lastModified(),
                             System.currentTimeMillis(), "TRANSCRIBED", null);
                 }
