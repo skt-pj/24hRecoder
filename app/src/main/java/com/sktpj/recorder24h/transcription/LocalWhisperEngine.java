@@ -10,7 +10,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class LocalWhisperEngine {
-    public static final String ENGINE_ID = "whisper.cpp-v1.9.1/large-v3-q5_0+frontend-v1+silero-v6.2.0+speech-chunks-v1";
+    /** Legacy large-v3 engine identifier retained for old transcript compatibility. */
+    public static final String ENGINE_ID =
+            "whisper.cpp-v1.9.1/large-v3-q5_0+frontend-v1+silero-v6.2.0+speech-chunks-v1";
     private static final String LANGUAGE = "ja";
     private static final long SPEECH_CHUNK_MERGE_GAP_MS = 200L;
 
@@ -21,10 +23,26 @@ public final class LocalWhisperEngine {
     private LocalWhisperEngine() {
     }
 
+    public static String engineId(Context context) {
+        return engineId(WhisperModelManager.selectedModelId(context));
+    }
+
+    public static String engineId(String modelId) {
+        String normalized = modelId == null || modelId.isEmpty()
+                ? WhisperModelManager.MODEL_DEFAULT : modelId;
+        return "whisper.cpp-v1.9.1/" + normalized
+                + "+frontend-v1+silero-v6.2.0+speech-chunks-v1";
+    }
+
     public static synchronized Response transcribe(Context context, File audioFile) throws Exception {
+        return transcribe(context, audioFile, WhisperModelManager.selectedModelId(context));
+    }
+
+    public static synchronized Response transcribe(Context context, File audioFile,
+                                                   String modelId) throws Exception {
         PreparedAudio prepared = prepareAudio(audioFile);
         VadDiagnostics vad = analyzeVad(context, prepared);
-        return transcribePrepared(context, prepared, WhisperModelManager.MODEL_DEFAULT, vad);
+        return transcribePrepared(context, prepared, modelId, vad);
     }
 
     static PreparedAudio prepareAudio(File audioFile) throws Exception {
