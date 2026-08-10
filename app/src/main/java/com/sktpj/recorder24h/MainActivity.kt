@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -217,7 +218,7 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class AppSection(val label: String) {
-    HOME("ホーム"), QUEUE("キュー"), HISTORY("記録"), SETTINGS("設定")
+    HOME("ホーム"), QUEUE("キュー"), HISTORY("記録"), AI("AIノート"), SETTINGS("設定")
 }
 
 private enum class HistoryFilter(val label: String) {
@@ -330,7 +331,7 @@ private fun RecorderApp(
                         }
                     },
                     actions = {
-                        if ((section == AppSection.HISTORY || section == AppSection.QUEUE) && selected == null) {
+                        if ((section == AppSection.HISTORY || section == AppSection.QUEUE || section == AppSection.AI) && selected == null) {
                             IconButton(onClick = { refresh++ }) {
                                 Icon(Icons.Filled.Refresh, contentDescription = "表示を更新")
                             }
@@ -390,6 +391,10 @@ private fun RecorderApp(
                             }
                         )
                         section == AppSection.HISTORY -> HistoryScreen(records) { selectedId = it.segmentId }
+                        section == AppSection.AI -> AiAnalysisScreen(
+                            refreshToken = refresh,
+                            onOpenSettings = { section = AppSection.SETTINGS }
+                        )
                         else -> SettingsScreen(
                             dashboard,
                             onDownloadModel = {
@@ -423,6 +428,7 @@ private fun sectionTitle(section: AppSection) = when (section) {
     AppSection.HOME -> "24hRecoder"
     AppSection.QUEUE -> "文字起こしキュー"
     AppSection.HISTORY -> "記録"
+    AppSection.AI -> "AIノート"
     AppSection.SETTINGS -> "設定"
 }
 
@@ -432,6 +438,7 @@ private fun SectionIcon(section: AppSection) {
         AppSection.HOME -> Icons.Filled.Home
         AppSection.QUEUE -> Icons.Filled.Refresh
         AppSection.HISTORY -> Icons.Filled.List
+        AppSection.AI -> Icons.Filled.Star
         AppSection.SETTINGS -> Icons.Filled.Settings
     }
     Icon(icon, contentDescription = null)
