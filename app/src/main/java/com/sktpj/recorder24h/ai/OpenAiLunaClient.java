@@ -33,6 +33,19 @@ public final class OpenAiLunaClient {
         return request(apiKey, prompt, "medium", "daily_analysis", dailySchema(), 24_000);
     }
 
+    public static Response analyzeRollup(String apiKey, String kind,
+                                         AiRollupRepository.RollupSource source)
+            throws Exception {
+        if (!AiAnalysisScheduler.KIND_WEEKLY.equals(kind)
+                && !AiAnalysisScheduler.KIND_MONTHLY.equals(kind)
+                && !AiAnalysisScheduler.KIND_YEARLY.equals(kind)) {
+            throw new IllegalArgumentException("Unsupported rollup kind: " + kind);
+        }
+        String prompt = buildRollupPrompt(kind, source);
+        return request(apiKey, prompt, "medium",
+                kind + "_analysis", rollupSchema(), 24_000);
+    }
+
     private static Response request(String apiKey, String prompt, String reasoningEffort,
                                     String schemaName, JSONObject schema, int maxOutputTokens)
             throws Exception {
@@ -46,8 +59,8 @@ public final class OpenAiLunaClient {
         request.put("max_output_tokens", maxOutputTokens);
         request.put("reasoning", new JSONObject().put("effort", reasoningEffort));
         request.put("instructions",
-                "You analyze a private 24-hour recorder transcript. Use only the supplied transcript as evidence. " +
-                "Do not invent missing events, people, places, durations, intentions, or conclusions. " +
+                "You analyze a private 24-hour recorder notebook. Use only the supplied source data as evidence. " +
+                "Do not invent missing events, people, places, durations, intentions, counts, or conclusions. " +
                 "If evidence is absent, return an empty array or an empty string as appropriate. " +
                 "Return only the requested JSON structure.");
         request.put("input", prompt);
@@ -140,6 +153,39 @@ public final class OpenAiLunaClient {
                 "TRANSCRIPT:\n" + AiAnalysisRepository.promptTranscript(source);
     }
 
+    private static String buildRollupPrompt(String kind, AiRollupRepository.RollupSource source) {
+        String label;
+        if (AiAnalysisScheduler.KIND_WEEKLY.equals(kind)) {
+            label = "weekly";
+        } else if (AiAnalysisScheduler.KIND_MONTHLY.equals(kind)) {
+            label = "monthly";
+        } else {
+            label = "yearly";
+        }
+
+        return "Create a " + label + " notebook by aggregating the supplied lower-level AI notes. " +
+                "These notes are the only available source because raw audio/transcripts may already be deleted. " +
+                "Do not claim evidence that is not present in the supplied notes.\n" +
+                "The output MUST be JSON and MUST follow this JSON format exactly:\n" +
+                "{\"summary\":string,\"highlights\":[string]," +
+                "\"topics\":[{\"name\":string,\"summary\":string,\"count\":integer}]," +
+                "\"decisions\":[string],\"todos\":[{\"task\":string,\"status\":string,\"evidence\":string}]," +
+                "\"ideas\":[string],\"unresolved\":[string]," +
+                "\"people\":[{\"name\":string,\"summary\":string}]," +
+                "\"places\":[{\"name\":string,\"summary\":string}]," +
+                "\"timeAllocation\":[{\"category\":string,\"minutes\":integer,\"evidence\":string}]," +
+                "\"trends\":[{\"label\":string,\"summary\":string}]," +
+                "\"mindMap\":[{\"id\":string,\"label\":string,\"parentId\":string}]," +
+                "\"searchIndex\":[string]}\n" +
+                "Rules: highlight only cross-note or period-level information supported by the source notes. " +
+                "Topic counts must count supporting source notes, not invented occurrences. " +
+                "Time allocation may only aggregate evidence-backed minutes already present in source notes; " +
+                "do not force it to cover the full period. " +
+                "For trends, describe only changes or repeated patterns that can be supported by multiple source notes. " +
+                "For the mind map, create one root with empty parentId and connect all other nodes to it or its descendants.\n\n" +
+                "SOURCE NOTES:\n" + AiRollupRepository.promptSource(source);
+    }
+
     private static JSONObject hourlySchema() throws Exception {
         JSONObject properties = new JSONObject();
         properties.put("summary", stringSchema());
@@ -200,6 +246,42 @@ public final class OpenAiLunaClient {
         return objectSchema(properties);
     }
 
+    private static JSONObject rollupSchema() throws Exception {
+        JSONObject properties = new JSONObject();
+        properties.put("summary", stringSchema());
+        properties.put("highlights", arraySchema(stringSchema()));
+        properties.put("topics", arraySchema(objectSchema(new JSONObject()
+                .put("name", stringSchema())
+                .put("summary", stringSchema())
+                .put("count", integerSchema()))));
+        properties.put("decisions", arraySchema(stringSchema()));
+        properties.put("todos", arraySchema(objectSchema(new JSONObject()
+                .put("task", stringSchema())
+                .put("status", stringSchema())
+                .put("evidence", stringSchema()))));
+        properties.put("ideas", arraySchema(stringSchema()));
+        properties.put("unresolved", arraySchema(stringSchema()));
+        properties.put("people", arraySchema(objectSchema(new JSONObject()
+                .put("name", stringSchema())
+                .put("summary", stringSchema()))));
+        properties.put("places", arraySchema(objectSchema(new JSONObject()
+                .put("name", stringSchema())
+                .put("summary", stringSchema()))));
+        properties.put("timeAllocation", arraySchema(objectSchema(new JSONObject()
+                .put("category", stringSchema())
+                .put("minutes", integerSchema())
+                .put("evidence", stringSchema()))));
+        properties.put("trends", arraySchema(objectSchema(new JSONObject()
+                .put("label", stringSchema())
+                .put("summary", stringSchema()))));
+        properties.put("mindMap", arraySchema(objectSchema(new JSONObject()
+                .put("id", stringSchema())
+                .put("label", stringSchema())
+                .put("parentId", stringSchema()))));
+        properties.put("searchIndex", arraySchema(stringSchema()));
+        return objectSchema(properties);
+    }
+
     private static JSONObject stringSchema() throws Exception {
         return new JSONObject().put("type", "string");
     }
@@ -247,7 +329,8 @@ public final class OpenAiLunaClient {
 
     private static String readBody(InputStream input) throws Exception {
         if (input == null) return "";
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
+        try (BufferedReader reader =
+                     new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
             StringBuilder text = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) text.append(line);

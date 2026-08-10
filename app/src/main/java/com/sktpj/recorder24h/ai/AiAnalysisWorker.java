@@ -41,9 +41,6 @@ public final class AiAnalysisWorker extends Worker {
                 ? AiAnalysisRepository.dailyFile(context, periodStartMs)
                 : AiAnalysisRepository.hourlyFile(context, periodStartMs);
 
-        // Once cleanup has started, the saved daily note is final. Never rebuild it from a
-        // partially deleted source; just continue the cleanup until it succeeds. Cleanup also
-        // continues if the API key was removed after the note was already saved.
         if (daily) {
             String cleanupStatus = AiDailySourceCleanup.cleanupStatus(target);
             if (AiDailySourceCleanup.STATUS_PENDING.equals(cleanupStatus)) {
@@ -52,6 +49,7 @@ public final class AiAnalysisWorker extends Worker {
             if (AiDailySourceCleanup.STATUS_COMPLETE.equals(cleanupStatus)) {
                 log(context, "AI_DAILY_ANALYSIS_ALREADY_FINALIZED", kind,
                         periodStartMs, periodEndMs, null, null);
+                AiAnalysisScheduler.enqueueRollup(context);
                 return Result.success();
             }
         }
@@ -68,8 +66,6 @@ public final class AiAnalysisWorker extends Worker {
         }
 
         if (daily) {
-            // Give the final recording segment time to close after midnight. Then wait until
-            // all still-processable audio for the day has left READY/QUEUED/TRANSCRIBING states.
             if (System.currentTimeMillis() < periodEndMs + DAILY_FINALIZATION_GRACE_MS) {
                 log(context, "AI_DAILY_ANALYSIS_WAITING_FOR_DAY_CLOSE", kind,
                         periodStartMs, periodEndMs, null, null);
@@ -88,6 +84,9 @@ public final class AiAnalysisWorker extends Worker {
         if (source.isEmpty()) {
             log(context, "AI_ANALYSIS_SKIPPED_NO_TRANSCRIPT", kind,
                     periodStartMs, periodEndMs, source, null);
+            if (daily) {
+                AiAnalysisScheduler.enqueueRollup(context);
+            }
             return Result.success();
         }
         if (AiAnalysisRepository.isCurrent(target, source.sourceHash)) {
@@ -128,7 +127,8 @@ public final class AiAnalysisWorker extends Worker {
                                       long periodStartMs, long periodEndMs,
                                       AiAnalysisRepository.SourceWindow source) {
         try {
-            if (!AiDailySourceCleanup.STATUS_PENDING.equals(AiDailySourceCleanup.cleanupStatus(target))) {
+            if (!AiDailySourceCleanup.STATUS_PENDING.equals(
+                    AiDailySourceCleanup.cleanupStatus(target))) {
                 AiDailySourceCleanup.markPending(target);
             }
             AiDailySourceCleanup.CleanupResult cleanup =
@@ -141,6 +141,7 @@ public final class AiAnalysisWorker extends Worker {
             }
             log(context, "AI_DAILY_SOURCE_CLEANUP_COMPLETE", AiAnalysisScheduler.KIND_DAILY,
                     periodStartMs, periodEndMs, source, null);
+            AiAnalysisScheduler.enqueueRollup(context);
             return Result.success();
         } catch (Exception error) {
             log(context, "AI_DAILY_SOURCE_CLEANUP_FAILED", AiAnalysisScheduler.KIND_DAILY,
@@ -177,7 +178,8 @@ public final class AiAnalysisWorker extends Worker {
                 details.put("sourceHash", source.sourceHash);
             }
             if (error instanceof OpenAiLunaClient.ApiException) {
-                OpenAiLunaClient.ApiException apiError = (OpenAiLunaClient.ApiException) error;
+                OpenAiLunaClient.ApiException apiError =
+                        (OpenAiLunaClient.ApiException) error;
                 details.put("httpStatus", apiError.statusCode);
                 details.put("retryable", apiError.retryable);
             }
@@ -185,7 +187,8 @@ public final class AiAnalysisWorker extends Worker {
                 String message = error.getMessage();
                 details.put("error", error.getClass().getSimpleName());
                 if (message != null) {
-                    details.put("message", message.length() > 500 ? message.substring(0, 500) : message);
+                    details.put("message",
+                            message.length() > 500 ? message.substring(0, 500) : message);
                 }
             }
             AppLogger.event(context, event, details);
