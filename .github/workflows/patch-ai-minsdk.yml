@@ -1,0 +1,44 @@
+name: Patch AI minSdk compatibility
+
+on:
+  push:
+    branches: ["agent/add-luna-analysis"]
+    paths: [".github/workflows/patch-ai-minsdk.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/add-luna-analysis
+
+      - name: Replace API 33 String calls
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          changed = 0
+          for path in Path('app/src/main/java/com/sktpj/recorder24h/ai').glob('*.java'):
+              source = path.read_text(encoding='utf-8')
+              updated = source.replace('.isBlank()', '.trim().isEmpty()')
+              if updated != source:
+                  path.write_text(updated, encoding='utf-8')
+                  changed += 1
+          if changed == 0:
+              raise SystemExit('no incompatible String.isBlank calls found')
+          print(f'updated {changed} files')
+          PY
+
+      - name: Commit compatibility fix
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/patch-ai-minsdk.yml
+          git add app/src/main/java/com/sktpj/recorder24h/ai
+          git commit -m 'Keep AI analysis compatible with minSdk 29'
+          git push origin HEAD:agent/add-luna-analysis
