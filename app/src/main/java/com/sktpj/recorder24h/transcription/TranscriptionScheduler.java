@@ -103,8 +103,9 @@ public final class TranscriptionScheduler {
         if (segmentId == null || segmentId.isEmpty() || file == null || !file.isFile()) {
             return false;
         }
+        String currentEngine = LocalWhisperEngine.engineId(context);
         if (!forceRetranscribe &&
-                TranscriptionRepository.isCurrentEngine(context, segmentId, LocalWhisperEngine.ENGINE_ID)) {
+                TranscriptionRepository.isCurrentEngine(context, segmentId, currentEngine)) {
             log(context, "TRANSCRIPT_CURRENT_ENGINE_AUDIO_RETAINED", segmentId, file, null);
             return false;
         }
@@ -176,11 +177,12 @@ public final class TranscriptionScheduler {
         if (files == null) {
             return 0;
         }
+        String currentEngine = LocalWhisperEngine.engineId(context);
         int count = 0;
         for (File file : files) {
             String segmentId = extractSegmentId(file.getName());
             if (segmentId == null ||
-                    TranscriptionRepository.isCurrentEngine(context, segmentId, LocalWhisperEngine.ENGINE_ID)) {
+                    TranscriptionRepository.isCurrentEngine(context, segmentId, currentEngine)) {
                 continue;
             }
             enqueue(context, segmentId, file);
@@ -218,11 +220,12 @@ public final class TranscriptionScheduler {
         if (files == null) {
             return 0;
         }
+        String currentEngine = LocalWhisperEngine.engineId(context);
         int pending = 0;
         for (File file : files) {
             String segmentId = extractSegmentId(file.getName());
             if (segmentId != null &&
-                    !TranscriptionRepository.isCurrentEngine(context, segmentId, LocalWhisperEngine.ENGINE_ID)) {
+                    !TranscriptionRepository.isCurrentEngine(context, segmentId, currentEngine)) {
                 pending++;
             }
         }
@@ -250,7 +253,8 @@ public final class TranscriptionScheduler {
             JSONObject details = new JSONObject();
             details.put("segmentId", segmentId == null ? JSONObject.NULL : segmentId);
             details.put("file", file == null ? JSONObject.NULL : file.getName());
-            details.put("engine", LocalWhisperEngine.ENGINE_ID);
+            details.put("engine", LocalWhisperEngine.engineId(context));
+            details.put("modelId", WhisperModelManager.selectedModelId(context));
             details.put("vadReady", WhisperModelManager.isVadReady(context));
             if (message != null) {
                 details.put("message", message);
