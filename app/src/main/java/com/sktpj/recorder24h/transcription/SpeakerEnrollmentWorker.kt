@@ -5,7 +5,7 @@ import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OneTimeWorkRequest
 import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
@@ -68,17 +68,18 @@ class SpeakerEnrollmentWorker(
                 .putLong(EXTRA_START_MS, startMs)
                 .putLong(EXTRA_END_MS, endMs)
                 .build()
-            val request = OneTimeWorkRequestBuilder<SpeakerEnrollmentWorker>()
+            val builder = OneTimeWorkRequest.Builder(SpeakerEnrollmentWorker::class.java)
                 .setInputData(data)
-                .setConstraints(
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag("speaker-enrollment")
+            if (!SpeakerModelManager.isReady(context)) {
+                builder.setConstraints(
                     Constraints.Builder()
                         .setRequiredNetworkType(NetworkType.CONNECTED)
                         .build()
                 )
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-                .addTag("speaker-enrollment")
-                .build()
-            WorkManager.getInstance(context.applicationContext).enqueue(request)
+            }
+            WorkManager.getInstance(context.applicationContext).enqueue(builder.build())
         }
     }
 }
