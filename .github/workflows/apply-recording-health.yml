@@ -1,0 +1,707 @@
+name: Apply recording health monitoring
+
+on:
+  push:
+    branches:
+      - agent/purge-daily-source
+    paths:
+      - .github/workflows/apply-recording-health.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/purge-daily-source
+          fetch-depth: 0
+      - name: Apply recording health monitoring
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if text.count(old) != 1:
+                  raise SystemExit(f"expected one match in {path}: {old[:100]!r}, got {text.count(old)}")
+              p.write_text(text.replace(old, new, 1))
+
+          state_store = r'''package com.sktpj.recorder24h.storage;
+
+import android.content.Context;
+
+import org.json.JSONObject;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+
+public final class RecorderStateStore {
+    private static final String FILE_NAME = "recorder_state.json";
+
+    private RecorderStateStore() {
+    }
+
+    public static JSONObject read(Context context) {
+        try {
+            File file = new File(context.getFilesDir(), FILE_NAME);
+            if (!file.exists()) {
+                return defaultState();
+            }
+            return new JSONObject(readUtf8(file));
+        } catch (Exception e) {
+            return defaultState();
+        }
+    }
+
+    private static String readUtf8(File file) throws Exception {
+        byte[] buffer = new byte[(int) file.length()];
+        int offset = 0;
+        try (FileInputStream in = new FileInputStream(file)) {
+            while (offset < buffer.length) {
+                int read = in.read(buffer, offset, buffer.length - offset);
+                if (read < 0) {
+                    break;
+                }
+                offset += read;
+            }
+        }
+        return new String(buffer, 0, offset, StandardCharsets.UTF_8);
+    }
+
+    public static synchronized void write(Context context, String state, String segmentId, String error) {
+        JSONObject json = read(context);
+        long now = System.currentTimeMillis();
+        try {
+            String previousState = json.optString("state", "STOPPED");
+            json.put("state", state);
+            if (!state.equals(previousState)) {
+                json.put("stateChangedAtMs", now);
+            }
+            json.put("segmentId", segmentId == null ? JSONObject.NULL : segmentId);
+            json.put("heartbeatMs", now);
+            json.put("error", error == null ? JSONObject.NULL : error);
+            if ("STOPPED".equals(state) || "STARTING".equals(state) || "ERROR".equals(state)) {
+                json.put("currentSegmentStartedAtMs", 0L);
+            }
+            if ("STOPPED".equals(state) || "ERROR".equals(state)) {
+                json.put("captureSilenced", false);
+            }
+        } catch (Exception ignored) {
+        }
+        writeJson(context, json);
+    }
+
+    public static synchronized void segmentStarted(Context context, String segmentId,
+                                                   long startedAtMs, long lastAudioReadMs) {
+        JSONObject json = read(context);
+        long now = System.currentTimeMillis();
+        try {
+            String previousState = json.optString("state", "STOPPED");
+            json.put("state", "RECORDING");
+            if (!"RECORDING".equals(previousState)) {
+                json.put("stateChangedAtMs", now);
+            }
+            json.put("segmentId", segmentId == null ? JSONObject.NULL : segmentId);
+            json.put("currentSegmentStartedAtMs", startedAtMs);
+            json.put("heartbeatMs", now);
+            if (lastAudioReadMs > 0L) {
+                json.put("lastAudioReadMs", lastAudioReadMs);
+            }
+            json.put("error", JSONObject.NULL);
+        } catch (Exception ignored) {
+        }
+        writeJson(context, json);
+    }
+
+    public static synchronized void segmentFinalized(Context context, String segmentId,
+                                                     long endedAtMs, long durationMs) {
+        JSONObject json = read(context);
+        try {
+            json.put("lastSegmentId", segmentId == null ? JSONObject.NULL : segmentId);
+            json.put("lastSegmentFinalizedAtMs", endedAtMs);
+            json.put("lastSegmentDurationMs", Math.max(0L, durationMs));
+            json.put("segmentId", JSONObject.NULL);
+            json.put("currentSegmentStartedAtMs", 0L);
+            json.put("heartbeatMs", System.currentTimeMillis());
+        } catch (Exception ignored) {
+        }
+        writeJson(context, json);
+    }
+
+    public static void heartbeat(Context context, String state, String segmentId) {
+        JSONObject current = read(context);
+        heartbeat(context, state, segmentId,
+                current.optLong("currentSegmentStartedAtMs", 0L),
+                current.optLong("lastAudioReadMs", 0L));
+    }
+
+    public static synchronized void heartbeat(Context context, String state, String segmentId,
+                                              long currentSegmentStartedAtMs, long lastAudioReadMs) {
+        JSONObject current = read(context);
+        long now = System.currentTimeMillis();
+        try {
+            String previousState = current.optString("state", "STOPPED");
+            current.put("state", state);
+            if (!state.equals(previousState)) {
+                current.put("stateChangedAtMs", now);
+            }
+            current.put("segmentId", segmentId == null ? JSONObject.NULL : segmentId);
+            current.put("currentSegmentStartedAtMs", Math.max(0L, currentSegmentStartedAtMs));
+            current.put("heartbeatMs", now);
+            if (lastAudioReadMs > 0L) {
+                current.put("lastAudioReadMs", lastAudioReadMs);
+            }
+        } catch (Exception ignored) {
+        }
+        writeJson(context, current);
+    }
+
+    public static synchronized void setCaptureSilenced(Context context, boolean silenced) {
+        JSONObject current = read(context);
+        try {
+            current.put("captureSilenced", silenced);
+        } catch (Exception ignored) {
+        }
+        writeJson(context, current);
+    }
+
+    private static JSONObject defaultState() {
+        JSONObject json = new JSONObject();
+        try {
+            json.put("state", "STOPPED");
+            json.put("stateChangedAtMs", 0L);
+            json.put("segmentId", JSONObject.NULL);
+            json.put("currentSegmentStartedAtMs", 0L);
+            json.put("heartbeatMs", 0L);
+            json.put("lastAudioReadMs", 0L);
+            json.put("lastSegmentId", JSONObject.NULL);
+            json.put("lastSegmentFinalizedAtMs", 0L);
+            json.put("lastSegmentDurationMs", 0L);
+            json.put("captureSilenced", false);
+            json.put("error", JSONObject.NULL);
+        } catch (Exception ignored) {
+        }
+        return json;
+    }
+
+    private static void writeJson(Context context, JSONObject json) {
+        File target = new File(context.getFilesDir(), FILE_NAME);
+        File temp = new File(context.getFilesDir(), FILE_NAME + ".tmp");
+        try (FileOutputStream out = new FileOutputStream(temp, false)) {
+            out.write(json.toString().getBytes(StandardCharsets.UTF_8));
+            out.flush();
+            out.getFD().sync();
+        } catch (Exception e) {
+            return;
+        }
+        try {
+            Files.move(temp.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } catch (Exception atomicMoveFailed) {
+            //noinspection ResultOfMethodCallIgnored
+            temp.renameTo(target);
+        }
+    }
+}
+'''
+          Path('app/src/main/java/com/sktpj/recorder24h/storage/RecorderStateStore.java').write_text(state_store)
+
+          health = r'''package com.sktpj.recorder24h.storage;
+
+import org.json.JSONObject;
+
+public final class RecorderHealth {
+    public static final long HEARTBEAT_STALE_MS = 15_000L;
+    public static final long AUDIO_READ_STALE_MS = 15_000L;
+    public static final long STARTING_STALE_MS = 30_000L;
+    public static final long ROTATING_STALE_MS = 30_000L;
+    public static final long SEGMENT_OVERDUE_MS = 6L * 60L * 1000L + 30_000L;
+
+    private RecorderHealth() {
+    }
+
+    public static Snapshot evaluate(JSONObject state, boolean requested, long nowMs) {
+        String rawState = state.optString("state", "STOPPED");
+        long heartbeatMs = state.optLong("heartbeatMs", 0L);
+        long stateChangedAtMs = state.optLong("stateChangedAtMs", 0L);
+        long audioReadMs = state.optLong("lastAudioReadMs", 0L);
+        long segmentStartedAtMs = state.optLong("currentSegmentStartedAtMs", 0L);
+        boolean captureSilenced = state.optBoolean("captureSilenced", false);
+        String error = state.optString("error", "");
+
+        long heartbeatAge = age(nowMs, heartbeatMs);
+        long audioAge = age(nowMs, audioReadMs);
+        long segmentAge = age(nowMs, segmentStartedAtMs);
+        long stateAge = age(nowMs, stateChangedAtMs);
+        boolean active = requested || "STARTING".equals(rawState) || "RECORDING".equals(rawState)
+                || "ROTATING".equals(rawState) || "RECOVERING".equals(rawState)
+                || "STOPPING".equals(rawState);
+
+        if ("ERROR".equals(rawState)) {
+            String detail = isBlank(error) ? "録音処理でエラーが発生しました。" : error;
+            return problem("ERROR", "録音エラー", detail, active, heartbeatAge, audioAge, segmentAge);
+        }
+        if (!requested && "STOPPED".equals(rawState)) {
+            return neutral("STOPPED", "録音停止中", "録音は停止しています。", false,
+                    heartbeatAge, audioAge, segmentAge);
+        }
+        if ("STOPPING".equals(rawState)) {
+            return neutral("STOPPING", "録音を停止中", "現在の音声セグメントを確定しています。", true,
+                    heartbeatAge, audioAge, segmentAge);
+        }
+        if ("RECOVERING".equals(rawState)) {
+            return neutral("RECOVERING", "録音を復旧中", "録音サービスの復旧状態を確認しています。", true,
+                    heartbeatAge, audioAge, segmentAge);
+        }
+        if ("STARTING".equals(rawState)) {
+            if (stateAge > STARTING_STALE_MS) {
+                return problem("STARTING_STALE", "録音開始を確認できません",
+                        "録音開始から30秒以上経過しました。マイク開始を確認できていません。", true,
+                        heartbeatAge, audioAge, segmentAge);
+            }
+            return neutral("STARTING", "録音を開始中", "マイクとエンコーダを準備しています。", true,
+                    heartbeatAge, audioAge, segmentAge);
+        }
+        if (requested && !"RECORDING".equals(rawState) && !"ROTATING".equals(rawState)) {
+            return problem("STATE_MISMATCH", "録音状態を確認できません",
+                    "録音継続が要求されていますが、録音サービスの状態が一致していません。", true,
+                    heartbeatAge, audioAge, segmentAge);
+        }
+        if (heartbeatMs <= 0L || heartbeatAge > HEARTBEAT_STALE_MS) {
+            return problem("HEARTBEAT_STALE", "録音が止まった可能性があります",
+                    "録音heartbeatが15秒以上更新されていません。", true,
+                    heartbeatAge, audioAge, segmentAge);
+        }
+        if (captureSilenced) {
+            return problem("CAPTURE_SILENCED", "マイク入力が無音化されています",
+                    "Androidから録音入力のsilenced状態が通知されています。", true,
+                    heartbeatAge, audioAge, segmentAge);
+        }
+        if (audioReadMs > 0L && audioAge > AUDIO_READ_STALE_MS) {
+            return problem("AUDIO_READ_STALE", "音声入力が止まった可能性があります",
+                    "AudioRecordから15秒以上音声データを取得できていません。", true,
+                    heartbeatAge, audioAge, segmentAge);
+        }
+        if ("ROTATING".equals(rawState)) {
+            if (stateAge > ROTATING_STALE_MS) {
+                return problem("ROTATION_STALE", "5分セグメント切替が停止しています",
+                        "セグメント切替状態が30秒以上続いています。", true,
+                        heartbeatAge, audioAge, segmentAge);
+            }
+            return neutral("ROTATING", "録音中・セグメント切替", "5分音声を確定して次のセグメントへ切り替えています。", true,
+                    heartbeatAge, audioAge, segmentAge);
+        }
+        if (segmentStartedAtMs <= 0L && stateAge > STARTING_STALE_MS) {
+            return problem("SEGMENT_MISSING", "録音ファイルを確認できません",
+                    "録音状態ですが、現在の5分セグメントが開始されていません。", true,
+                    heartbeatAge, audioAge, segmentAge);
+        }
+        if (segmentStartedAtMs > 0L && segmentAge > SEGMENT_OVERDUE_MS) {
+            return problem("SEGMENT_OVERDUE", "5分セグメント更新が止まっています",
+                    "現在の音声セグメントが6分30秒を超えて継続しています。", true,
+                    heartbeatAge, audioAge, segmentAge);
+        }
+        return new Snapshot("HEALTHY", "録音中・正常",
+                "マイク入力・heartbeat・5分セグメント更新を監視しています。",
+                true, false, true, heartbeatAge, audioAge, segmentAge);
+    }
+
+    private static Snapshot problem(String code, String label, String detail, boolean active,
+                                    long heartbeatAge, long audioAge, long segmentAge) {
+        return new Snapshot(code, label, detail, false, true, active,
+                heartbeatAge, audioAge, segmentAge);
+    }
+
+    private static Snapshot neutral(String code, String label, String detail, boolean active,
+                                    long heartbeatAge, long audioAge, long segmentAge) {
+        return new Snapshot(code, label, detail, false, false, active,
+                heartbeatAge, audioAge, segmentAge);
+    }
+
+    private static long age(long nowMs, long timestampMs) {
+        if (timestampMs <= 0L) return Long.MAX_VALUE;
+        return Math.max(0L, nowMs - timestampMs);
+    }
+
+    private static boolean isBlank(String text) {
+        return text == null || text.trim().isEmpty() || "null".equals(text);
+    }
+
+    public static final class Snapshot {
+        public final String code;
+        public final String label;
+        public final String detail;
+        public final boolean healthy;
+        public final boolean problem;
+        public final boolean active;
+        public final long heartbeatAgeMs;
+        public final long audioReadAgeMs;
+        public final long segmentAgeMs;
+
+        Snapshot(String code, String label, String detail, boolean healthy, boolean problem,
+                 boolean active, long heartbeatAgeMs, long audioReadAgeMs, long segmentAgeMs) {
+            this.code = code;
+            this.label = label;
+            this.detail = detail;
+            this.healthy = healthy;
+            this.problem = problem;
+            this.active = active;
+            this.heartbeatAgeMs = heartbeatAgeMs;
+            this.audioReadAgeMs = audioReadAgeMs;
+            this.segmentAgeMs = segmentAgeMs;
+        }
+    }
+}
+'''
+          Path('app/src/main/java/com/sktpj/recorder24h/storage/RecorderHealth.java').write_text(health)
+
+          aac = Path('app/src/main/java/com/sktpj/recorder24h/audio/AacSegmentRecorder.java')
+          text = aac.read_text()
+          text = text.replace('    private long lastHeartbeatMs;\n', '    private long lastHeartbeatMs;\n    private volatile long lastAudioReadMs;\n', 1)
+          text = text.replace('''        if (read == 0) {
+            encoder.queueInputBuffer(inputIndex, 0, 0, pcmPresentationTimeUs(), 0);
+            return;
+        }
+
+        inputBuffer.clear();''', '''        if (read == 0) {
+            encoder.queueInputBuffer(inputIndex, 0, 0, pcmPresentationTimeUs(), 0);
+            return;
+        }
+
+        lastAudioReadMs = System.currentTimeMillis();
+        inputBuffer.clear();''', 1)
+          text = text.replace('''        } else if ((info.presentationTimeUs - currentSegmentBasePtsUs) >= SEGMENT_DURATION_US) {
+            closeCurrentSegment("READY");''', '''        } else if ((info.presentationTimeUs - currentSegmentBasePtsUs) >= SEGMENT_DURATION_US) {
+            RecorderStateStore.write(context, "ROTATING", currentSegmentId, null);
+            closeCurrentSegment("READY");''', 1)
+          text = text.replace('''        RecorderStateStore.write(context, "RECORDING", currentSegmentId, null);
+        if (listener != null) {''', '''        RecorderStateStore.segmentStarted(
+                context, currentSegmentId, currentSegmentStartedAtMs, lastAudioReadMs);
+        if (listener != null) {''', 1)
+          text = text.replace('''            AppLogger.event(context, "SEGMENT_FINALIZED", d);
+        } catch (Exception ignored) {
+        }
+
+        currentPartFile = null;''', '''            AppLogger.event(context, "SEGMENT_FINALIZED", d);
+        } catch (Exception ignored) {
+        }
+        RecorderStateStore.segmentFinalized(
+                context, segmentId, endedAt, Math.max(0L, endedAt - startedAt));
+
+        currentPartFile = null;''', 1)
+          text = text.replace('''        currentSegmentStartedAtMs = 0L;
+        currentSegmentBasePtsUs = 0L;
+        RecorderStateStore.write(context, "RECORDING", null, null);
+    }''', '''        currentSegmentStartedAtMs = 0L;
+        currentSegmentBasePtsUs = 0L;
+    }''', 1)
+          text = text.replace('''                            AppLogger.event(context,
+                                    config.isClientSilenced() ? "CAPTURE_SILENCED" : "CAPTURE_CONFIGURATION",
+                                    d);''', '''                            RecorderStateStore.setCaptureSilenced(context, config.isClientSilenced());
+                            AppLogger.event(context,
+                                    config.isClientSilenced() ? "CAPTURE_SILENCED" : "CAPTURE_CONFIGURATION",
+                                    d);''', 1)
+          text = text.replace('''        if (now - lastHeartbeatMs < 30_000L) {''', '''        if (now - lastHeartbeatMs < 5_000L) {''', 1)
+          text = text.replace('''        RecorderStateStore.heartbeat(context, "RECORDING", currentSegmentId);''', '''        RecorderStateStore.heartbeat(
+                context, "RECORDING", currentSegmentId, currentSegmentStartedAtMs, lastAudioReadMs);''', 1)
+          aac.write_text(text)
+
+          service = Path('app/src/main/java/com/sktpj/recorder24h/service/RecorderService.java')
+          text = service.read_text()
+          text = text.replace('import android.os.IBinder;\n', 'import android.os.Handler;\nimport android.os.IBinder;\nimport android.os.Looper;\n', 1)
+          text = text.replace('import com.sktpj.recorder24h.storage.RecorderStateStore;\n', 'import com.sktpj.recorder24h.storage.RecorderHealth;\nimport com.sktpj.recorder24h.storage.RecorderStateStore;\n', 1)
+          text = text.replace('''    private AacSegmentRecorder recorder;
+    private volatile String activeSegmentId;
+''', '''    private AacSegmentRecorder recorder;
+    private volatile String activeSegmentId;
+    private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
+    private final Runnable watchdog = new Runnable() {
+        @Override
+        public void run() {
+            updateRecordingHealthNotification();
+            watchdogHandler.postDelayed(this, 5_000L);
+        }
+    };
+''', 1)
+          text = text.replace('''        StoragePolicy.recoverOrphanParts(this);
+        AppLogger.event(this, "RECORDER_SERVICE_CREATED");
+''', '''        StoragePolicy.recoverOrphanParts(this);
+        AppLogger.event(this, "RECORDER_SERVICE_CREATED");
+        watchdogHandler.postDelayed(watchdog, 5_000L);
+''', 1)
+          text = text.replace('''    public void onDestroy() {
+        AppLogger.event(this, "RECORDER_SERVICE_DESTROYED");
+        stopRecorder(false);
+        super.onDestroy();
+    }''', '''    public void onDestroy() {
+        watchdogHandler.removeCallbacks(watchdog);
+        AppLogger.event(this, "RECORDER_SERVICE_DESTROYED");
+        stopRecorder(false);
+        super.onDestroy();
+    }''', 1)
+          text = text.replace('''                    RecorderStateStore.write(RecorderService.this, "RECORDING", segmentId, null);
+                    updateNotification("録音中: " + shortSegment(segmentId));''', '''                    RecorderStateStore.write(RecorderService.this, "RECORDING", segmentId, null);
+                    updateRecordingHealthNotification();''', 1)
+          marker = '''    private void updateNotification(String text) {
+'''
+          method = '''    private void updateRecordingHealthNotification() {
+        if (!RecordingIntentStore.isRequested(this)) {
+            return;
+        }
+        JSONObject state = RecorderStateStore.read(this);
+        RecorderHealth.Snapshot health = RecorderHealth.evaluate(
+                state, true, System.currentTimeMillis());
+        String text = health.label;
+        if (health.healthy && activeSegmentId != null) {
+            text += " • " + shortSegment(activeSegmentId);
+        }
+        updateNotification(text);
+    }
+
+'''
+          if marker not in text:
+              raise SystemExit('service updateNotification marker missing')
+          text = text.replace(marker, method + marker, 1)
+          service.write_text(text)
+
+          main = Path('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+          text = main.read_text()
+          text = text.replace('import com.sktpj.recorder24h.storage.RecorderStateStore\n', 'import com.sktpj.recorder24h.storage.RecorderHealth\nimport com.sktpj.recorder24h.storage.RecorderStateStore\n', 1)
+          old_data = '''private data class DashboardSnapshot(
+    val state: String,
+    val heartbeatMs: Long,
+    val segmentId: String,
+    val error: String,
+    val recordingRequested: Boolean,
+    val audioBytes: Long,
+    val appBytes: Long,
+    val deviceFreeBytes: Long,
+    val modelReady: Boolean,
+    val modelBytes: Long,
+    val pendingAudio: Int,
+    val transcriptCount: Int
+)'''
+          new_data = '''private data class DashboardSnapshot(
+    val state: String,
+    val heartbeatMs: Long,
+    val segmentId: String,
+    val error: String,
+    val recordingRequested: Boolean,
+    val currentSegmentStartedAtMs: Long,
+    val lastAudioReadMs: Long,
+    val lastSegmentId: String,
+    val lastSegmentFinalizedAtMs: Long,
+    val lastSegmentDurationMs: Long,
+    val captureSilenced: Boolean,
+    val health: RecorderHealth.Snapshot,
+    val audioBytes: Long,
+    val appBytes: Long,
+    val deviceFreeBytes: Long,
+    val modelReady: Boolean,
+    val modelBytes: Long,
+    val pendingAudio: Int,
+    val transcriptCount: Int
+)'''
+          if old_data not in text:
+              raise SystemExit('DashboardSnapshot block missing')
+          text = text.replace(old_data, new_data, 1)
+
+          card_pattern = re.compile(r'@Composable\nprivate fun RecordingCard\(.*?\n\}\n\n@Composable\nprivate fun StorageCard', re.S)
+          new_card = r'''@Composable
+private fun RecordingCard(
+    dashboard: DashboardSnapshot,
+    onRequestStart: () -> Unit,
+    onRequestStop: () -> Unit
+) {
+    val health = dashboard.health
+    val active = health.active
+    val dotColor = when {
+        health.problem -> MaterialTheme.colorScheme.error
+        health.healthy -> MaterialTheme.colorScheme.primary
+        dashboard.state in setOf("STARTING", "STOPPING", "ROTATING", "RECOVERING") -> MaterialTheme.colorScheme.tertiary
+        else -> MaterialTheme.colorScheme.outline
+    }
+    val cardColor = when {
+        health.problem -> MaterialTheme.colorScheme.errorContainer
+        health.healthy -> MaterialTheme.colorScheme.primaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val secondaryColor = when {
+        health.problem -> MaterialTheme.colorScheme.onErrorContainer
+        health.healthy -> MaterialTheme.colorScheme.onPrimaryContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Card(colors = CardDefaults.cardColors(containerColor = cardColor)) {
+        Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(14.dp).background(dotColor, CircleShape))
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(health.label, style = MaterialTheme.typography.headlineMedium)
+                    Text(health.detail, color = secondaryColor.copy(alpha = 0.84f))
+                }
+            }
+
+            StatusPill(
+                when {
+                    health.healthy -> "監視正常"
+                    health.problem -> "録音要確認"
+                    active -> "状態確認中"
+                    else -> "停止中"
+                },
+                when {
+                    health.healthy -> StatusTone.SUCCESS
+                    health.problem -> StatusTone.ERROR
+                    active -> StatusTone.WAITING
+                    else -> StatusTone.NEUTRAL
+                }
+            )
+
+            if (dashboard.heartbeatMs > 0L) {
+                InfoRow("最終heartbeat", formatAgo(dashboard.heartbeatMs))
+            }
+            if (dashboard.lastAudioReadMs > 0L) {
+                InfoRow("マイク入力", formatAgo(dashboard.lastAudioReadMs))
+            }
+            if (dashboard.currentSegmentStartedAtMs > 0L) {
+                InfoRow(
+                    "現在の5分音声",
+                    "${formatDuration(System.currentTimeMillis() - dashboard.currentSegmentStartedAtMs)} 経過"
+                )
+            }
+            if (dashboard.segmentId.isNotBlank() && dashboard.segmentId != "null") {
+                InfoRow("segment", dashboard.segmentId.take(8))
+            }
+            if (dashboard.lastSegmentFinalizedAtMs > 0L) {
+                InfoRow(
+                    "直近の正常確定",
+                    "${formatAgo(dashboard.lastSegmentFinalizedAtMs)} / ${formatDuration(dashboard.lastSegmentDurationMs)}"
+                )
+            }
+
+            if (health.problem) {
+                Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.small) {
+                    Text(
+                        "現在は「正常録音中」と判定していません。${health.detail}",
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            }
+            if (dashboard.error.isNotBlank() && dashboard.error != "null") {
+                Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.small) {
+                    Text(dashboard.error, color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.padding(12.dp))
+                }
+            }
+            if (active) {
+                Button(
+                    onClick = onRequestStop,
+                    enabled = dashboard.state != "STOPPING",
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    ),
+                    modifier = Modifier.fillMaxWidth().height(56.dp)
+                ) { Text(if (dashboard.state == "STOPPING") "停止中…" else "録音を停止") }
+            } else {
+                Button(onClick = onRequestStart, modifier = Modifier.fillMaxWidth().height(56.dp)) {
+                    Text("録音を開始")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StorageCard'''
+          text, count = card_pattern.subn(new_card, text, count=1)
+          if count != 1:
+              raise SystemExit(f'RecordingCard replacement count={count}')
+
+          old_dashboard = '''private fun readDashboard(context: Context): DashboardSnapshot {
+    val state: JSONObject = RecorderStateStore.read(context)
+    return DashboardSnapshot(
+        state = state.optString("state", "STOPPED"),
+        heartbeatMs = state.optLong("heartbeatMs", 0L),
+        segmentId = state.optString("segmentId", ""),
+        error = state.optString("error", ""),
+        recordingRequested = RecordingIntentStore.isRequested(context),
+        audioBytes = StoragePolicy.audioBytes(context),
+        appBytes = StoragePolicy.appDataBytes(context),
+        deviceFreeBytes = context.filesDir.usableSpace,
+        modelReady = WhisperModelManager.isReady(context),
+        modelBytes = WhisperModelManager.downloadedBytes(context),
+        pendingAudio = TranscriptionScheduler.pendingAudioCount(context),
+        transcriptCount = TranscriptionRepository.count(context)
+    )
+}'''
+          new_dashboard = '''private fun readDashboard(context: Context): DashboardSnapshot {
+    val state: JSONObject = RecorderStateStore.read(context)
+    val recordingRequested = RecordingIntentStore.isRequested(context)
+    val health = RecorderHealth.evaluate(state, recordingRequested, System.currentTimeMillis())
+    return DashboardSnapshot(
+        state = state.optString("state", "STOPPED"),
+        heartbeatMs = state.optLong("heartbeatMs", 0L),
+        segmentId = state.optString("segmentId", ""),
+        error = state.optString("error", ""),
+        recordingRequested = recordingRequested,
+        currentSegmentStartedAtMs = state.optLong("currentSegmentStartedAtMs", 0L),
+        lastAudioReadMs = state.optLong("lastAudioReadMs", 0L),
+        lastSegmentId = state.optString("lastSegmentId", ""),
+        lastSegmentFinalizedAtMs = state.optLong("lastSegmentFinalizedAtMs", 0L),
+        lastSegmentDurationMs = state.optLong("lastSegmentDurationMs", 0L),
+        captureSilenced = state.optBoolean("captureSilenced", false),
+        health = health,
+        audioBytes = StoragePolicy.audioBytes(context),
+        appBytes = StoragePolicy.appDataBytes(context),
+        deviceFreeBytes = context.filesDir.usableSpace,
+        modelReady = WhisperModelManager.isReady(context),
+        modelBytes = WhisperModelManager.downloadedBytes(context),
+        pendingAudio = TranscriptionScheduler.pendingAudioCount(context),
+        transcriptCount = TranscriptionRepository.count(context)
+    )
+}'''
+          if old_dashboard not in text:
+              raise SystemExit('readDashboard block missing')
+          text = text.replace(old_dashboard, new_dashboard, 1)
+
+          helper_marker = '''private fun recordingStateLabel(state: String) = when (state) {'''
+          helper = '''private fun formatAgo(timestampMs: Long): String {
+    if (timestampMs <= 0L) return "-"
+    val seconds = ((System.currentTimeMillis() - timestampMs).coerceAtLeast(0L) / 1000L)
+    return when {
+        seconds < 2L -> "たった今"
+        seconds < 60L -> "${seconds}秒前"
+        seconds < 3600L -> "${seconds / 60L}分前"
+        else -> formatDateTime(timestampMs)
+    }
+}
+
+'''
+          if helper_marker not in text:
+              raise SystemExit('recordingStateLabel marker missing')
+          text = text.replace(helper_marker, helper + helper_marker, 1)
+          main.write_text(text)
+
+          replace_once('app/build.gradle', "        versionCode 21\n        versionName '0.6.0'", "        versionCode 22\n        versionName '0.6.1'")
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/build.gradle app/src/main/java/com/sktpj/recorder24h/MainActivity.kt app/src/main/java/com/sktpj/recorder24h/audio/AacSegmentRecorder.java app/src/main/java/com/sktpj/recorder24h/service/RecorderService.java app/src/main/java/com/sktpj/recorder24h/storage/RecorderStateStore.java app/src/main/java/com/sktpj/recorder24h/storage/RecorderHealth.java
+          git commit -m "Add continuous recording health monitoring"
+          git push origin HEAD:agent/purge-daily-source
+
+          rm .github/workflows/apply-recording-health.yml
+          git add -u .github/workflows/apply-recording-health.yml
+          git commit -m "Remove temporary recording health workflow"
+          git push origin HEAD:agent/purge-daily-source
