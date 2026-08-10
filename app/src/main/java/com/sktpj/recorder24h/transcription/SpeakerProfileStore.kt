@@ -18,16 +18,20 @@ object SpeakerProfileStore {
     )
 
     @JvmStatic
+    fun enrollmentKey(segmentId: String, editKey: String): String = "$segmentId|$editKey"
+
+    @JvmStatic
     fun load(context: Context): Profile? {
         val file = profileFile(context)
         if (!file.isFile) return null
         return try {
             val root = JSONObject(readUtf8(file))
-            val values = root.optJSONArray("embedding") ?: return null
-            if (values.length() == 0) return null
-            val embedding = FloatArray(values.length()) { index -> values.optDouble(index, 0.0).toFloat() }
-            normalize(embedding)
-            Profile(embedding, root.optInt("enrollmentCount", 1).coerceAtLeast(1))
+            val enrollments = root.optJSONObject("enrollments")
+            if (enrollments != null && enrollments.length() > 0) {
+                profileFromEnrollments(enrollments)
+            } else {
+                profileFromLegacy(root)
+            }
         } catch (_: Exception) {
             null
         }
@@ -37,31 +41,62 @@ object SpeakerProfileStore {
     fun hasProfile(context: Context): Boolean = load(context) != null
 
     @JvmStatic
-    fun addEnrollment(context: Context, newEmbedding: FloatArray) {
+    fun upsertEnrollment(context: Context, enrollmentKey: String, newEmbedding: FloatArray) {
+        require(enrollmentKey.isNotBlank()) { "Enrollment key is empty" }
         require(newEmbedding.isNotEmpty()) { "Speaker embedding is empty" }
         synchronized(lock) {
-            val normalizedNew = newEmbedding.copyOf()
-            normalize(normalizedNew)
-            val existing = load(context)
-            val merged: FloatArray
-            val count: Int
-            if (existing == null || existing.embedding.size != normalizedNew.size) {
-                merged = normalizedNew
-                count = 1
+            val target = profileFile(context)
+            val root = if (target.isFile) {
+                try { JSONObject(readUtf8(target)) } catch (_: Exception) { JSONObject() }
             } else {
-                count = existing.enrollmentCount + 1
-                merged = FloatArray(normalizedNew.size) { index ->
-                    ((existing.embedding[index] * existing.enrollmentCount) + normalizedNew[index]) / count
+                JSONObject()
+            }
+            val enrollments = root.optJSONObject("enrollments") ?: JSONObject().also { created ->
+                val legacy = root.optJSONArray("embedding")
+                if (legacy != null && legacy.length() > 0) {
+                    created.put(
+                        "legacy",
+                        JSONObject()
+                            .put("embedding", JSONArray(legacy.toString()))
+                            .put("updatedAtMs", root.optLong("updatedAtMs", 0L))
+                    )
                 }
-                normalize(merged)
+                root.put("enrollments", created)
+                root.remove("embedding")
+                root.remove("enrollmentCount")
             }
 
-            val root = JSONObject()
-                .put("schemaVersion", 1)
-                .put("updatedAtMs", System.currentTimeMillis())
-                .put("enrollmentCount", count)
-                .put("embedding", JSONArray().also { array -> merged.forEach { array.put(it.toDouble()) } })
-            writeAtomic(profileFile(context), root.toString())
+            val normalized = newEmbedding.copyOf()
+            normalize(normalized)
+            enrollments.put(
+                enrollmentKey,
+                JSONObject()
+                    .put("embedding", JSONArray().also { array ->
+                        normalized.forEach { value -> array.put(value.toDouble()) }
+                    })
+                    .put("updatedAtMs", System.currentTimeMillis())
+            )
+            root.put("schemaVersion", 2)
+            root.put("updatedAtMs", System.currentTimeMillis())
+            writeAtomic(target, root.toString())
+        }
+    }
+
+    @JvmStatic
+    fun removeEnrollment(context: Context, enrollmentKey: String) {
+        if (enrollmentKey.isBlank()) return
+        synchronized(lock) {
+            val target = profileFile(context)
+            if (!target.isFile) return
+            val root = try { JSONObject(readUtf8(target)) } catch (_: Exception) { return }
+            val enrollments = root.optJSONObject("enrollments") ?: return
+            enrollments.remove(enrollmentKey)
+            if (enrollments.length() == 0) {
+                target.delete()
+                return
+            }
+            root.put("updatedAtMs", System.currentTimeMillis())
+            writeAtomic(target, root.toString())
         }
     }
 
@@ -80,6 +115,38 @@ object SpeakerProfileStore {
         }
         if (left <= 0.0 || right <= 0.0) return Double.NaN
         return dot / (sqrt(left) * sqrt(right))
+    }
+
+    private fun profileFromEnrollments(enrollments: JSONObject): Profile? {
+        val vectors = mutableListOf<FloatArray>()
+        val keys = enrollments.keys()
+        var dimension = -1
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val values = enrollments.optJSONObject(key)?.optJSONArray("embedding") ?: continue
+            if (values.length() == 0) continue
+            if (dimension < 0) dimension = values.length()
+            if (values.length() != dimension) continue
+            val vector = FloatArray(values.length()) { index -> values.optDouble(index, 0.0).toFloat() }
+            normalize(vector)
+            vectors += vector
+        }
+        if (vectors.isEmpty() || dimension <= 0) return null
+        val centroid = FloatArray(dimension)
+        for (vector in vectors) {
+            for (index in centroid.indices) centroid[index] += vector[index]
+        }
+        for (index in centroid.indices) centroid[index] /= vectors.size.toFloat()
+        normalize(centroid)
+        return Profile(centroid, vectors.size)
+    }
+
+    private fun profileFromLegacy(root: JSONObject): Profile? {
+        val values = root.optJSONArray("embedding") ?: return null
+        if (values.length() == 0) return null
+        val embedding = FloatArray(values.length()) { index -> values.optDouble(index, 0.0).toFloat() }
+        normalize(embedding)
+        return Profile(embedding, root.optInt("enrollmentCount", 1).coerceAtLeast(1))
     }
 
     private fun normalize(values: FloatArray) {
