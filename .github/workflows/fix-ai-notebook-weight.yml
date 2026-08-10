@@ -1,0 +1,30 @@
+name: Fix AI notebook weight import
+
+on:
+  push:
+    branches:
+      - agent/purge-daily-source
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remove invalid Compose weight import
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="app/src/main/java/com/sktpj/recorder24h/AiAnalysisScreen.kt"
+          sed -i '/^import androidx\.compose\.foundation\.layout\.weight$/d' "$FILE"
+          rm -f .github/workflows/fix-ai-notebook-weight.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$FILE" .github/workflows/fix-ai-notebook-weight.yml
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Fix Compose weight import"
+          git push origin HEAD:agent/purge-daily-source
