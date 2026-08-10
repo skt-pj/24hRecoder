@@ -77,8 +77,14 @@ object SpeakerIdentifier {
     }
 
     @JvmStatic
-    fun enroll(context: Context, audioFile: File, startMs: Long, endMs: Long): Boolean {
-        if (!audioFile.isFile || endMs <= startMs) return false
+    fun enroll(
+        context: Context,
+        audioFile: File,
+        startMs: Long,
+        endMs: Long,
+        enrollmentKey: String
+    ): Boolean {
+        if (!audioFile.isFile || endMs <= startMs || enrollmentKey.isBlank()) return false
         if (!SpeakerModelManager.isReady(context)) SpeakerModelManager.download(context)
         var extractor: SpeakerEmbeddingExtractor? = null
         return try {
@@ -86,7 +92,7 @@ object SpeakerIdentifier {
             val chunk = slice(samples, startMs, endMs)
             extractor = createExtractor(context)
             val embedding = computeEmbedding(extractor, chunk) ?: return false
-            SpeakerProfileStore.addEnrollment(context, embedding)
+            SpeakerProfileStore.upsertEnrollment(context, enrollmentKey, embedding)
             true
         } finally {
             extractor?.release()
