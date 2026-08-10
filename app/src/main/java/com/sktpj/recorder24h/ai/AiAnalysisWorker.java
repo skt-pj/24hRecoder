@@ -42,7 +42,8 @@ public final class AiAnalysisWorker extends Worker {
                 : AiAnalysisRepository.hourlyFile(context, periodStartMs);
 
         // Once cleanup has started, the saved daily note is final. Never rebuild it from a
-        // partially deleted source; just continue the cleanup until it succeeds.
+        // partially deleted source; just continue the cleanup until it succeeds. Cleanup also
+        // continues if the API key was removed after the note was already saved.
         if (daily) {
             String cleanupStatus = AiDailySourceCleanup.cleanupStatus(target);
             if (AiDailySourceCleanup.STATUS_PENDING.equals(cleanupStatus)) {
@@ -52,19 +53,6 @@ public final class AiAnalysisWorker extends Worker {
                 log(context, "AI_DAILY_ANALYSIS_ALREADY_FINALIZED", kind,
                         periodStartMs, periodEndMs, null, null);
                 return Result.success();
-            }
-
-            // Give the final recording segment time to close after midnight. Then wait until
-            // all still-processable audio for the day has left READY/QUEUED/TRANSCRIBING states.
-            if (System.currentTimeMillis() < periodEndMs + DAILY_FINALIZATION_GRACE_MS) {
-                log(context, "AI_DAILY_ANALYSIS_WAITING_FOR_DAY_CLOSE", kind,
-                        periodStartMs, periodEndMs, null, null);
-                return Result.retry();
-            }
-            if (AiDailySourceCleanup.hasPendingTranscription(context, periodStartMs, periodEndMs)) {
-                log(context, "AI_DAILY_ANALYSIS_WAITING_FOR_TRANSCRIPTION", kind,
-                        periodStartMs, periodEndMs, null, null);
-                return Result.retry();
             }
         }
 
@@ -77,6 +65,21 @@ public final class AiAnalysisWorker extends Worker {
         }
         if (apiKey == null || apiKey.trim().isEmpty()) {
             return Result.success();
+        }
+
+        if (daily) {
+            // Give the final recording segment time to close after midnight. Then wait until
+            // all still-processable audio for the day has left READY/QUEUED/TRANSCRIBING states.
+            if (System.currentTimeMillis() < periodEndMs + DAILY_FINALIZATION_GRACE_MS) {
+                log(context, "AI_DAILY_ANALYSIS_WAITING_FOR_DAY_CLOSE", kind,
+                        periodStartMs, periodEndMs, null, null);
+                return Result.retry();
+            }
+            if (AiDailySourceCleanup.hasPendingTranscription(context, periodStartMs, periodEndMs)) {
+                log(context, "AI_DAILY_ANALYSIS_WAITING_FOR_TRANSCRIPTION", kind,
+                        periodStartMs, periodEndMs, null, null);
+                return Result.retry();
+            }
         }
 
         AiAnalysisRepository.SourceWindow source =
