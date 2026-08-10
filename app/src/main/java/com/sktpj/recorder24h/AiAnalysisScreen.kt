@@ -9,11 +9,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -63,15 +65,23 @@ internal fun AiAnalysisScreen(
     var snapshot by remember {
         mutableStateOf(AiAnalysisSnapshot(OpenAiKeyStore.hasKey(context), emptyList(), emptyList()))
     }
+    var selectedDailyStartMs by remember { mutableStateOf<Long?>(null) }
 
     LaunchedEffect(refreshToken) {
         while (true) {
-            snapshot = withContext(Dispatchers.IO) {
+            val next = withContext(Dispatchers.IO) {
                 loadAiAnalysisSnapshot(context.filesDir, OpenAiKeyStore.hasKey(context))
+            }
+            snapshot = next
+            if (selectedDailyStartMs == null || next.daily.none { it.periodStartMs == selectedDailyStartMs }) {
+                selectedDailyStartMs = next.daily.firstOrNull()?.periodStartMs
             }
             delay(5_000L)
         }
     }
+
+    val selectedDaily = snapshot.daily.firstOrNull { it.periodStartMs == selectedDailyStartMs }
+        ?: snapshot.daily.firstOrNull()
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -99,13 +109,18 @@ internal fun AiAnalysisScreen(
             }
         } else {
             item { Text("1日のノート", style = MaterialTheme.typography.headlineMedium) }
-            item { DailyAnalysisCard(snapshot.daily.first()) }
-            if (snapshot.daily.size > 1) {
-                item { Text("過去の日次ノート", style = MaterialTheme.typography.titleLarge) }
-                items(snapshot.daily.drop(1).take(13), key = { "daily-${it.periodStartMs}" }) { doc ->
-                    CompactDailyCard(doc)
+            item {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(snapshot.daily.take(30), key = { "day-chip-${it.periodStartMs}" }) { doc ->
+                        FilterChip(
+                            selected = doc.periodStartMs == selectedDaily?.periodStartMs,
+                            onClick = { selectedDailyStartMs = doc.periodStartMs },
+                            label = { Text(formatDayShort(doc.periodStartMs)) }
+                        )
+                    }
                 }
             }
+            selectedDaily?.let { doc -> item { DailyAnalysisCard(doc) } }
         }
 
         item { Text("時間別まとめ", style = MaterialTheme.typography.headlineMedium) }
@@ -201,7 +216,7 @@ private fun DailyAnalysisCard(doc: AiAnalysisDocument) {
         ObjectListCard("タイムライン", analysis.optJSONArray("timeline")) { row ->
             val time = row.optString("time", "").trim()
             val event = row.optString("event", "").trim()
-            listOf(time, event).filter { it.isNotEmpty() }.joinToString("  ")
+            listOf(time, event).filter(String::isNotEmpty).joinToString("  ")
         }
         StringListCard("重要イベント", analysis.optJSONArray("keyEvents"))
         MindMapCard(analysis.optJSONArray("mindMap"))
@@ -240,25 +255,10 @@ private fun DailyAnalysisCard(doc: AiAnalysisDocument) {
 }
 
 @Composable
-private fun CompactDailyCard(doc: AiAnalysisDocument) {
-    Card {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-            Text(formatDay(doc.periodStartMs), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            val summary = doc.analysis.optString("summary", "").trim()
-            Text(
-                if (summary.isEmpty()) "要約なし" else summary,
-                maxLines = 5,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
 private fun HourlyAnalysisCard(doc: AiAnalysisDocument) {
     val analysis = doc.analysis
     Card {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(
                     formatHourRange(doc.periodStartMs, doc.periodEndMs),
@@ -270,19 +270,50 @@ private fun HourlyAnalysisCard(doc: AiAnalysisDocument) {
             val summary = analysis.optString("summary", "").trim()
             if (summary.isNotEmpty()) Text(summary)
 
-            val topics = analysis.optJSONArray("topics").stringValues()
-            if (topics.isNotEmpty()) {
-                Text("話題: ${topics.take(6).joinToString(" / ")}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            InlineStringSection("話題", analysis.optJSONArray("topics").stringValues())
+            InlineObjectSection("重要イベント", analysis.optJSONArray("keyEvents").objectValues()) { row ->
+                val time = row.optString("time", "").trim()
+                val event = row.optString("event", "").trim()
+                listOf(time, event).filter(String::isNotEmpty).joinToString("  ")
             }
-            val decisions = analysis.optJSONArray("decisions").stringValues()
-            if (decisions.isNotEmpty()) Text("決定: ${decisions.take(3).joinToString(" / ")}")
-            val todos = analysis.optJSONArray("todos").objectValues()
-                .mapNotNull { it.optString("task", "").trim().takeIf(String::isNotEmpty) }
-            if (todos.isNotEmpty()) Text("TODO: ${todos.take(3).joinToString(" / ")}")
-            val unresolved = analysis.optJSONArray("unresolved").stringValues()
-            if (unresolved.isNotEmpty()) Text("未解決: ${unresolved.take(3).joinToString(" / ")}")
+            InlineStringSection("決定", analysis.optJSONArray("decisions").stringValues())
+            InlineObjectSection("TODO", analysis.optJSONArray("todos").objectValues()) { row ->
+                val task = row.optString("task", "").trim()
+                val evidence = row.optString("evidence", "").trim()
+                if (evidence.isEmpty()) task else "$task\n根拠: $evidence"
+            }
+            InlineStringSection("アイデア", analysis.optJSONArray("ideas").stringValues())
+            InlineStringSection("未解決", analysis.optJSONArray("unresolved").stringValues())
+            InlineStringSection("人物", analysis.optJSONArray("people").stringValues())
+            InlineStringSection("場所", analysis.optJSONArray("places").stringValues())
+            InlineObjectSection("引用", analysis.optJSONArray("notableQuotes").objectValues()) { row ->
+                val time = row.optString("time", "").trim()
+                val text = row.optString("text", "").trim()
+                listOf(time, text).filter(String::isNotEmpty).joinToString("  ")
+            }
         }
     }
+}
+
+@Composable
+private fun InlineStringSection(title: String, values: List<String>) {
+    if (values.isEmpty()) return
+    HorizontalDivider()
+    Text(title, fontWeight = FontWeight.SemiBold)
+    values.forEach { Text("• $it") }
+}
+
+@Composable
+private fun InlineObjectSection(
+    title: String,
+    rows: List<JSONObject>,
+    formatter: (JSONObject) -> String
+) {
+    val values = rows.map(formatter).map(String::trim).filter(String::isNotEmpty)
+    if (values.isEmpty()) return
+    HorizontalDivider()
+    Text(title, fontWeight = FontWeight.SemiBold)
+    values.forEach { Text("• $it") }
 }
 
 @Composable
@@ -419,6 +450,9 @@ private fun JSONArray?.objectValues(): List<JSONObject> {
 
 private fun formatDay(ms: Long): String =
     SimpleDateFormat("yyyy年M月d日", Locale.JAPAN).format(Date(ms))
+
+private fun formatDayShort(ms: Long): String =
+    SimpleDateFormat("M/d", Locale.JAPAN).format(Date(ms))
 
 private fun formatShortDate(ms: Long): String =
     SimpleDateFormat("M/d", Locale.JAPAN).format(Date(ms))
