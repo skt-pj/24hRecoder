@@ -5,7 +5,7 @@ import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OneTimeWorkRequest
 import androidx.work.WorkManager
 import java.io.File
 import java.io.FileOutputStream
@@ -33,7 +33,7 @@ object SpeakerModelManager {
     @JvmStatic
     fun enqueueDownload(context: Context) {
         if (isReady(context)) return
-        val request = OneTimeWorkRequestBuilder<SpeakerModelDownloadWorker>()
+        val request = OneTimeWorkRequest.Builder(SpeakerModelDownloadWorker::class.java)
             .setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(NetworkType.CONNECTED)
