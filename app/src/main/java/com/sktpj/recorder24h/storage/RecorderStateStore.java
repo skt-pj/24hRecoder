@@ -43,13 +43,61 @@ public final class RecorderStateStore {
         return new String(buffer, 0, offset, StandardCharsets.UTF_8);
     }
 
-    public static void write(Context context, String state, String segmentId, String error) {
-        JSONObject json = new JSONObject();
+    public static synchronized void write(Context context, String state, String segmentId, String error) {
+        JSONObject json = read(context);
+        long now = System.currentTimeMillis();
         try {
+            String previousState = json.optString("state", "STOPPED");
             json.put("state", state);
+            if (!state.equals(previousState)) {
+                json.put("stateChangedAtMs", now);
+            }
             json.put("segmentId", segmentId == null ? JSONObject.NULL : segmentId);
-            json.put("heartbeatMs", System.currentTimeMillis());
+            json.put("heartbeatMs", now);
             json.put("error", error == null ? JSONObject.NULL : error);
+            if ("STOPPED".equals(state) || "STARTING".equals(state) || "ERROR".equals(state)) {
+                json.put("currentSegmentStartedAtMs", 0L);
+            }
+            if ("STOPPED".equals(state) || "ERROR".equals(state)) {
+                json.put("captureSilenced", false);
+            }
+        } catch (Exception ignored) {
+        }
+        writeJson(context, json);
+    }
+
+    public static synchronized void segmentStarted(Context context, String segmentId,
+                                                   long startedAtMs, long lastAudioReadMs) {
+        JSONObject json = read(context);
+        long now = System.currentTimeMillis();
+        try {
+            String previousState = json.optString("state", "STOPPED");
+            json.put("state", "RECORDING");
+            if (!"RECORDING".equals(previousState)) {
+                json.put("stateChangedAtMs", now);
+            }
+            json.put("segmentId", segmentId == null ? JSONObject.NULL : segmentId);
+            json.put("currentSegmentStartedAtMs", startedAtMs);
+            json.put("heartbeatMs", now);
+            if (lastAudioReadMs > 0L) {
+                json.put("lastAudioReadMs", lastAudioReadMs);
+            }
+            json.put("error", JSONObject.NULL);
+        } catch (Exception ignored) {
+        }
+        writeJson(context, json);
+    }
+
+    public static synchronized void segmentFinalized(Context context, String segmentId,
+                                                     long endedAtMs, long durationMs) {
+        JSONObject json = read(context);
+        try {
+            json.put("lastSegmentId", segmentId == null ? JSONObject.NULL : segmentId);
+            json.put("lastSegmentFinalizedAtMs", endedAtMs);
+            json.put("lastSegmentDurationMs", Math.max(0L, durationMs));
+            json.put("segmentId", JSONObject.NULL);
+            json.put("currentSegmentStartedAtMs", 0L);
+            json.put("heartbeatMs", System.currentTimeMillis());
         } catch (Exception ignored) {
         }
         writeJson(context, json);
@@ -57,10 +105,36 @@ public final class RecorderStateStore {
 
     public static void heartbeat(Context context, String state, String segmentId) {
         JSONObject current = read(context);
+        heartbeat(context, state, segmentId,
+                current.optLong("currentSegmentStartedAtMs", 0L),
+                current.optLong("lastAudioReadMs", 0L));
+    }
+
+    public static synchronized void heartbeat(Context context, String state, String segmentId,
+                                              long currentSegmentStartedAtMs, long lastAudioReadMs) {
+        JSONObject current = read(context);
+        long now = System.currentTimeMillis();
         try {
+            String previousState = current.optString("state", "STOPPED");
             current.put("state", state);
+            if (!state.equals(previousState)) {
+                current.put("stateChangedAtMs", now);
+            }
             current.put("segmentId", segmentId == null ? JSONObject.NULL : segmentId);
-            current.put("heartbeatMs", System.currentTimeMillis());
+            current.put("currentSegmentStartedAtMs", Math.max(0L, currentSegmentStartedAtMs));
+            current.put("heartbeatMs", now);
+            if (lastAudioReadMs > 0L) {
+                current.put("lastAudioReadMs", lastAudioReadMs);
+            }
+        } catch (Exception ignored) {
+        }
+        writeJson(context, current);
+    }
+
+    public static synchronized void setCaptureSilenced(Context context, boolean silenced) {
+        JSONObject current = read(context);
+        try {
+            current.put("captureSilenced", silenced);
         } catch (Exception ignored) {
         }
         writeJson(context, current);
@@ -70,8 +144,15 @@ public final class RecorderStateStore {
         JSONObject json = new JSONObject();
         try {
             json.put("state", "STOPPED");
+            json.put("stateChangedAtMs", 0L);
             json.put("segmentId", JSONObject.NULL);
+            json.put("currentSegmentStartedAtMs", 0L);
             json.put("heartbeatMs", 0L);
+            json.put("lastAudioReadMs", 0L);
+            json.put("lastSegmentId", JSONObject.NULL);
+            json.put("lastSegmentFinalizedAtMs", 0L);
+            json.put("lastSegmentDurationMs", 0L);
+            json.put("captureSilenced", false);
             json.put("error", JSONObject.NULL);
         } catch (Exception ignored) {
         }

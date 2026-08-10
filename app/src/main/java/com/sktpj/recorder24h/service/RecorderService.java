@@ -9,11 +9,14 @@ import android.app.Service;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 
 import com.sktpj.recorder24h.MainActivity;
 import com.sktpj.recorder24h.R;
 import com.sktpj.recorder24h.audio.AacSegmentRecorder;
+import com.sktpj.recorder24h.storage.RecorderHealth;
 import com.sktpj.recorder24h.storage.RecorderStateStore;
 import com.sktpj.recorder24h.storage.RecordingIntentStore;
 import com.sktpj.recorder24h.storage.StoragePolicy;
@@ -34,6 +37,14 @@ public final class RecorderService extends Service {
     private Thread recorderThread;
     private AacSegmentRecorder recorder;
     private volatile String activeSegmentId;
+    private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
+    private final Runnable watchdog = new Runnable() {
+        @Override
+        public void run() {
+            updateRecordingHealthNotification();
+            watchdogHandler.postDelayed(this, 5_000L);
+        }
+    };
 
     @Override
     public void onCreate() {
@@ -41,6 +52,7 @@ public final class RecorderService extends Service {
         createNotificationChannel();
         StoragePolicy.recoverOrphanParts(this);
         AppLogger.event(this, "RECORDER_SERVICE_CREATED");
+        watchdogHandler.postDelayed(watchdog, 5_000L);
     }
 
     @Override
@@ -96,6 +108,7 @@ public final class RecorderService extends Service {
 
     @Override
     public void onDestroy() {
+        watchdogHandler.removeCallbacks(watchdog);
         AppLogger.event(this, "RECORDER_SERVICE_DESTROYED");
         stopRecorder(false);
         super.onDestroy();
@@ -118,7 +131,7 @@ public final class RecorderService extends Service {
                 public void onSegmentChanged(String segmentId, File file) {
                     activeSegmentId = segmentId;
                     RecorderStateStore.write(RecorderService.this, "RECORDING", segmentId, null);
-                    updateNotification("録音中: " + shortSegment(segmentId));
+                    updateRecordingHealthNotification();
                 }
 
                 @Override
@@ -176,6 +189,20 @@ public final class RecorderService extends Service {
                 NOTIFICATION_ID,
                 notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
+    }
+
+    private void updateRecordingHealthNotification() {
+        if (!RecordingIntentStore.isRequested(this)) {
+            return;
+        }
+        JSONObject state = RecorderStateStore.read(this);
+        RecorderHealth.Snapshot health = RecorderHealth.evaluate(
+                state, true, System.currentTimeMillis());
+        String text = health.label;
+        if (health.healthy && activeSegmentId != null) {
+            text += " • " + shortSegment(activeSegmentId);
+        }
+        updateNotification(text);
     }
 
     private void updateNotification(String text) {

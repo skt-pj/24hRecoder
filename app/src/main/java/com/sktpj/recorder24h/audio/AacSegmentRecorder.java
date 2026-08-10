@@ -57,6 +57,7 @@ public final class AacSegmentRecorder {
     private long currentSegmentBasePtsUs;
     private long totalPcmFrames;
     private long lastHeartbeatMs;
+    private volatile long lastAudioReadMs;
     private AudioManager.AudioRecordingCallback recordingCallback;
 
     public AacSegmentRecorder(Context context, Listener listener) {
@@ -238,6 +239,7 @@ public final class AacSegmentRecorder {
             return;
         }
 
+        lastAudioReadMs = System.currentTimeMillis();
         inputBuffer.clear();
         inputBuffer.put(pcm, 0, read);
         long ptsUs = pcmPresentationTimeUs();
@@ -266,6 +268,7 @@ public final class AacSegmentRecorder {
         if (muxer == null) {
             openSegment(info.presentationTimeUs);
         } else if ((info.presentationTimeUs - currentSegmentBasePtsUs) >= SEGMENT_DURATION_US) {
+            RecorderStateStore.write(context, "ROTATING", currentSegmentId, null);
             closeCurrentSegment("READY");
             StoragePolicy.enforce(context);
             openSegment(info.presentationTimeUs);
@@ -296,7 +299,8 @@ public final class AacSegmentRecorder {
         muxerStarted = true;
         wroteSamples = false;
 
-        RecorderStateStore.write(context, "RECORDING", currentSegmentId, null);
+        RecorderStateStore.segmentStarted(
+                context, currentSegmentId, currentSegmentStartedAtMs, lastAudioReadMs);
         if (listener != null) {
             listener.onSegmentChanged(currentSegmentId, currentPartFile);
         }
@@ -365,12 +369,13 @@ public final class AacSegmentRecorder {
             AppLogger.event(context, "SEGMENT_FINALIZED", d);
         } catch (Exception ignored) {
         }
+        RecorderStateStore.segmentFinalized(
+                context, segmentId, endedAt, Math.max(0L, endedAt - startedAt));
 
         currentPartFile = null;
         currentSegmentId = null;
         currentSegmentStartedAtMs = 0L;
         currentSegmentBasePtsUs = 0L;
-        RecorderStateStore.write(context, "RECORDING", null, null);
     }
 
     private void registerRecordingCallback(AudioRecord record) {
@@ -388,6 +393,7 @@ public final class AacSegmentRecorder {
                             d.put("audioSource", config.getAudioSource());
                             d.put("silenced", config.isClientSilenced());
                             d.put("deviceId", config.getAudioDevice() == null ? JSONObject.NULL : config.getAudioDevice().getId());
+                            RecorderStateStore.setCaptureSilenced(context, config.isClientSilenced());
                             AppLogger.event(context,
                                     config.isClientSilenced() ? "CAPTURE_SILENCED" : "CAPTURE_CONFIGURATION",
                                     d);
@@ -403,11 +409,12 @@ public final class AacSegmentRecorder {
 
     private void heartbeatIfNeeded() {
         long now = System.currentTimeMillis();
-        if (now - lastHeartbeatMs < 30_000L) {
+        if (now - lastHeartbeatMs < 5_000L) {
             return;
         }
         lastHeartbeatMs = now;
-        RecorderStateStore.heartbeat(context, "RECORDING", currentSegmentId);
+        RecorderStateStore.heartbeat(
+                context, "RECORDING", currentSegmentId, currentSegmentStartedAtMs, lastAudioReadMs);
         try {
             JSONObject d = new JSONObject();
             d.put("segmentId", currentSegmentId == null ? JSONObject.NULL : currentSegmentId);
