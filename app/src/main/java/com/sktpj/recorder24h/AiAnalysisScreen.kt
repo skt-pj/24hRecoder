@@ -41,7 +41,6 @@ import java.util.Date
 import java.util.Locale
 
 private data class AiAnalysisDocument(
-    val kind: String,
     val periodStartMs: Long,
     val periodEndMs: Long,
     val generatedAtMs: Long,
@@ -67,7 +66,9 @@ internal fun AiAnalysisScreen(
 
     LaunchedEffect(refreshToken) {
         while (true) {
-            snapshot = withContext(Dispatchers.IO) { loadAiAnalysisSnapshot(context.filesDir) }
+            snapshot = withContext(Dispatchers.IO) {
+                loadAiAnalysisSnapshot(context.filesDir, OpenAiKeyStore.hasKey(context))
+            }
             delay(5_000L)
         }
     }
@@ -97,23 +98,17 @@ internal fun AiAnalysisScreen(
                 )
             }
         } else {
-            item {
-                Text("1日のノート", style = MaterialTheme.typography.headlineMedium)
-            }
+            item { Text("1日のノート", style = MaterialTheme.typography.headlineMedium) }
             item { DailyAnalysisCard(snapshot.daily.first()) }
             if (snapshot.daily.size > 1) {
-                item {
-                    Text("過去の日次ノート", style = MaterialTheme.typography.titleLarge)
-                }
+                item { Text("過去の日次ノート", style = MaterialTheme.typography.titleLarge) }
                 items(snapshot.daily.drop(1).take(13), key = { "daily-${it.periodStartMs}" }) { doc ->
                     CompactDailyCard(doc)
                 }
             }
         }
 
-        item {
-            Text("時間別まとめ", style = MaterialTheme.typography.headlineMedium)
-        }
+        item { Text("時間別まとめ", style = MaterialTheme.typography.headlineMedium) }
         if (snapshot.hourly.isEmpty()) {
             item {
                 EmptyAnalysisCard(
@@ -208,11 +203,7 @@ private fun DailyAnalysisCard(doc: AiAnalysisDocument) {
             val event = row.optString("event", "").trim()
             listOf(time, event).filter { it.isNotEmpty() }.joinToString("  ")
         }
-        ObjectListCard("重要イベント", analysis.optJSONArray("keyEvents")) { row ->
-            val time = row.optString("time", "").trim()
-            val event = row.optString("event", "").trim()
-            listOf(time, event).filter { it.isNotEmpty() }.joinToString("  ")
-        }
+        StringListCard("重要イベント", analysis.optJSONArray("keyEvents"))
         MindMapCard(analysis.optJSONArray("mindMap"))
         ObjectListCard("時間配分", analysis.optJSONArray("timeAllocation")) { row ->
             val category = row.optString("category", "").trim()
@@ -269,7 +260,11 @@ private fun HourlyAnalysisCard(doc: AiAnalysisDocument) {
     Card {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(formatHourRange(doc.periodStartMs, doc.periodEndMs), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    formatHourRange(doc.periodStartMs, doc.periodEndMs),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
                 Text(formatShortDate(doc.periodStartMs), style = MaterialTheme.typography.labelMedium)
             }
             val summary = analysis.optString("summary", "").trim()
@@ -280,13 +275,12 @@ private fun HourlyAnalysisCard(doc: AiAnalysisDocument) {
                 Text("話題: ${topics.take(6).joinToString(" / ")}", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             val decisions = analysis.optJSONArray("decisions").stringValues()
-            if (decisions.isNotEmpty()) {
-                Text("決定: ${decisions.take(3).joinToString(" / ")}")
-            }
-            val todos = analysis.optJSONArray("todos").objectValues().mapNotNull { it.optString("task", "").trim().takeIf(String::isNotEmpty) }
-            if (todos.isNotEmpty()) {
-                Text("TODO: ${todos.take(3).joinToString(" / ")}")
-            }
+            if (decisions.isNotEmpty()) Text("決定: ${decisions.take(3).joinToString(" / ")}")
+            val todos = analysis.optJSONArray("todos").objectValues()
+                .mapNotNull { it.optString("task", "").trim().takeIf(String::isNotEmpty) }
+            if (todos.isNotEmpty()) Text("TODO: ${todos.take(3).joinToString(" / ")}")
+            val unresolved = analysis.optJSONArray("unresolved").stringValues()
+            if (unresolved.isNotEmpty()) Text("未解決: ${unresolved.take(3).joinToString(" / ")}")
         }
     }
 }
@@ -326,14 +320,14 @@ private fun MindMapCard(array: JSONArray?) {
     val byId = nodes.associateBy { it.optString("id", "") }
     fun depth(node: JSONObject): Int {
         var current = node.optString("parentId", "").trim()
-        var depth = 0
+        var level = 0
         val visited = mutableSetOf<String>()
-        while (current.isNotEmpty() && depth < 6 && visited.add(current)) {
+        while (current.isNotEmpty() && level < 6 && visited.add(current)) {
             val parent = byId[current] ?: break
-            depth++
+            level++
             current = parent.optString("parentId", "").trim()
         }
-        return depth
+        return level
     }
 
     AnalysisSectionCard("マインドマップ") {
@@ -344,7 +338,11 @@ private fun MindMapCard(array: JSONArray?) {
                 Surface(
                     tonalElevation = if (level == 0) 2.dp else 0.dp,
                     shape = MaterialTheme.shapes.small,
-                    modifier = Modifier.fillMaxWidth().padding(start = (level * 18).dp, top = 4.dp, bottom = 4.dp)
+                    modifier = Modifier.fillMaxWidth().padding(
+                        start = (level * 18).dp,
+                        top = 4.dp,
+                        bottom = 4.dp
+                    )
                 ) {
                     Text(
                         if (level == 0) label else "↳ $label",
@@ -367,18 +365,13 @@ private fun AnalysisSectionCard(title: String, content: @Composable () -> Unit) 
     }
 }
 
-private fun loadAiAnalysisSnapshot(filesDir: File): AiAnalysisSnapshot {
+private fun loadAiAnalysisSnapshot(filesDir: File, hasApiKey: Boolean): AiAnalysisSnapshot {
     val analysisDir = File(filesDir, "analysis")
-    val daily = loadAnalysisDocuments(File(analysisDir, "daily"), "daily", 30)
-    val hourly = loadAnalysisDocuments(File(analysisDir, "hourly"), "hourly", 72)
-    val contextDir = filesDir.parentFile
-    val hasKey = contextDir != null && try {
-        // API-key state is read in the Composable; this fallback is replaced below by caller state.
-        true
-    } catch (_: Exception) {
-        false
-    }
-    return AiAnalysisSnapshot(hasApiKey = hasKey, daily = daily, hourly = hourly)
+    return AiAnalysisSnapshot(
+        hasApiKey = hasApiKey,
+        daily = loadAnalysisDocuments(File(analysisDir, "daily"), "daily", 30),
+        hourly = loadAnalysisDocuments(File(analysisDir, "hourly"), "hourly", 72)
+    )
 }
 
 private fun loadAnalysisDocuments(root: File, expectedKind: String, limit: Int): List<AiAnalysisDocument> {
@@ -393,7 +386,6 @@ private fun loadAnalysisDocuments(root: File, expectedKind: String, limit: Int):
                 if (wrapper.optString("kind", "") != expectedKind) return@mapNotNull null
                 val analysis = wrapper.optJSONObject("analysis") ?: return@mapNotNull null
                 AiAnalysisDocument(
-                    kind = expectedKind,
                     periodStartMs = wrapper.optLong("periodStartMs", 0L),
                     periodEndMs = wrapper.optLong("periodEndMs", 0L),
                     generatedAtMs = wrapper.optLong("generatedAtMs", file.lastModified()),
@@ -421,9 +413,7 @@ private fun JSONArray?.stringValues(): List<String> {
 private fun JSONArray?.objectValues(): List<JSONObject> {
     if (this == null) return emptyList()
     val result = ArrayList<JSONObject>(length())
-    for (index in 0 until length()) {
-        optJSONObject(index)?.let(result::add)
-    }
+    for (index in 0 until length()) optJSONObject(index)?.let(result::add)
     return result
 }
 
