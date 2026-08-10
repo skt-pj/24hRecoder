@@ -23,7 +23,8 @@ jobs:
           python3 .github/apply_recording_health.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout HEAD^ -- .github/workflows/build-apk.yml
+          git fetch origin main --depth=1
+          git checkout FETCH_HEAD -- .github/workflows/build-apk.yml
           git rm .github/apply_recording_health.py .github/workflows/apply-recording-health.yml
           git add app/build.gradle \
             app/src/main/java/com/sktpj/recorder24h/MainActivity.kt \
