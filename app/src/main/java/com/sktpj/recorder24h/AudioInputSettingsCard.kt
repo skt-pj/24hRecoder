@@ -50,8 +50,12 @@ fun AudioInputSettingsCard() {
         .takeUnless { it.isBlank() || it == "null" }
     val preferredLabel = routeState.optString("preferredDeviceLabel", "")
         .takeUnless { it.isBlank() || it == "null" }
+    val desiredLabel = routeState.optString("desiredDeviceLabel", "")
+        .takeUnless { it.isBlank() || it == "null" }
     val fallbackReason = routeState.optString("fallbackReason", "")
         .takeUnless { it.isBlank() || it == "null" }
+    val routeStatus = routeState.optString("routeStatus", "")
+    val retryCount = routeState.optInt("routeRetryCount", 0)
 
     Card {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -94,7 +98,7 @@ fun AudioInputSettingsCard() {
                     if (bluetoothInputs.isEmpty())
                         "現在はBluetoothマイクが見つからないため、端末マイクを使用します。"
                     else
-                        "Bluetoothマイクを検出中: ${bluetoothInputs.joinToString { it.label }}。自動ではBluetoothを優先します。",
+                        "Bluetoothマイク検出: ${bluetoothInputs.joinToString { it.label }}。実際の録音ルートがBluetoothへ切り替わったことを確認して使用します。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -152,15 +156,33 @@ fun AudioInputSettingsCard() {
                 }
             }
 
-            Text(
-                "現在の入力: ${actualLabel ?: preferredLabel ?: "録音開始後に確認できます"}",
-                fontWeight = FontWeight.SemiBold
-            )
+            when (routeStatus) {
+                "PENDING", "PENDING_RETRY" -> {
+                    Text(
+                        "Bluetoothへ切替中: ${desiredLabel ?: "Bluetoothマイク"}",
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        "現在の実入力: ${actualLabel ?: "確認中"}${if (retryCount > 0) "（再試行中）" else ""}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                "VERIFIED" -> Text(
+                    "現在の入力: ${actualLabel ?: preferredLabel ?: "確認中"}（実ルート確認済み）",
+                    fontWeight = FontWeight.SemiBold
+                )
+                else -> Text(
+                    "現在の入力: ${actualLabel ?: preferredLabel ?: "録音開始後に確認できます"}",
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
             fallbackReasonLabel(fallbackReason)?.let { reason ->
                 Text(reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Text(
-                "設定変更は録音中でも反映します。設定変更は最大約5秒、Bluetooth機器の接続・切断はデバイス変更通知を受けて再ルーティングします。",
+                "設定変更は録音中でも反映します。Bluetoothは検出だけで成功扱いにせず、Androidの通信オーディオ経路を要求した後、実際の録音入力まで確認します。切替失敗時は録音を止めず端末マイクへ戻します。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -171,6 +193,10 @@ fun AudioInputSettingsCard() {
 private fun fallbackReasonLabel(reason: String?): String? {
     if (reason == null) return null
     return when {
+        reason.contains("BT_ROUTE_TIMEOUT") -> "Bluetoothマイクへの実ルート切替を確認できなかったため、端末マイクへ戻しました。"
+        reason.contains("COMMUNICATION_DEVICE_NOT_AVAILABLE") -> "Bluetoothの通話・マイク経路をAndroid側で選択できないため、端末マイクを使用中です。"
+        reason.contains("SET_COMMUNICATION_DEVICE") || reason.contains("BT_COMMUNICATION_ROUTE_REJECTED") || reason.contains("BT_COMMUNICATION_RETRY_REJECTED") ->
+            "Bluetoothの通話・マイク経路を確立できなかったため、端末マイクを使用中です。"
         reason.contains("MANUAL_BT_NOT_AVAILABLE") -> "選択したBluetoothマイクが未接続のため端末マイクを使用中です。"
         reason.contains("AUTO_BT_NOT_AVAILABLE") -> "Bluetoothマイクがないため端末マイクを使用中です。"
         reason.contains("PREFERRED_BT_REJECTED") -> "Bluetooth入力をAndroidが受理しなかったため端末マイクへ戻しました。"
