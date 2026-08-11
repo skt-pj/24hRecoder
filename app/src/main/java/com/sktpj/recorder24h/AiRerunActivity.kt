@@ -28,13 +28,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.sktpj.recorder24h.ai.AiAnalysisScheduler
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZonedDateTime
-import java.time.temporal.ChronoUnit
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import java.util.Locale
 
 class AiRerunActivity : ComponentActivity() {
@@ -71,6 +72,7 @@ private fun AiRerunScreen(
     onCancel: () -> Unit,
     onSubmit: (String, Long, Long) -> Unit
 ) {
+    val context = LocalContext.current
     val zone = remember { ZoneId.systemDefault() }
     val now = remember { ZonedDateTime.now(zone) }
     val previousHour = remember { now.truncatedTo(ChronoUnit.HOURS).minusHours(1) }
@@ -128,7 +130,7 @@ private fun AiRerunScreen(
                 OutlinedButton(
                     onClick = {
                         DatePickerDialog(
-                            LocalContextHolder.current,
+                            context,
                             { _, year, month, day -> selectedDate = LocalDate.of(year, month + 1, day) },
                             selectedDate.year,
                             selectedDate.monthValue - 1,
@@ -145,7 +147,7 @@ private fun AiRerunScreen(
                     OutlinedButton(
                         onClick = {
                             TimePickerDialog(
-                                LocalContextHolder.current,
+                                context,
                                 { _, hour, _ -> selectedHour = hour },
                                 selectedHour,
                                 0,
@@ -180,9 +182,4 @@ private fun AiRerunScreen(
         }
         Spacer(Modifier.height(8.dp))
     }
-}
-
-/** Keeps the Activity context available to platform date/time picker dialogs. */
-private object LocalContextHolder {
-    lateinit var current: android.content.Context
 }
