@@ -30,16 +30,23 @@ public final class AiHourlyDetailPreserver {
             }
         }
 
+        JSONArray topics = analysis.optJSONArray("topics");
+        if (topics != null) {
+            for (int i = 0; i < topics.length() && details.size() < 6; i++) {
+                addUnique(details, summary, topics.optString(i, ""));
+            }
+        }
+
         JSONArray decisions = analysis.optJSONArray("decisions");
         if (decisions != null) {
-            for (int i = 0; i < decisions.length() && details.size() < 6; i++) {
+            for (int i = 0; i < decisions.length() && details.size() < 8; i++) {
                 addUnique(details, summary, decisions.optString(i, ""));
             }
         }
 
         JSONArray todos = analysis.optJSONArray("todos");
         if (todos != null) {
-            for (int i = 0; i < todos.length() && details.size() < 8; i++) {
+            for (int i = 0; i < todos.length() && details.size() < 10; i++) {
                 JSONObject row = todos.optJSONObject(i);
                 if (row == null) continue;
                 addUnique(details, summary, row.optString("task", ""));
@@ -48,8 +55,18 @@ public final class AiHourlyDetailPreserver {
 
         JSONArray ideas = analysis.optJSONArray("ideas");
         if (ideas != null) {
-            for (int i = 0; i < ideas.length() && details.size() < 10; i++) {
+            for (int i = 0; i < ideas.length() && details.size() < 12; i++) {
                 addUnique(details, summary, ideas.optString(i, ""));
+            }
+        }
+
+        JSONArray quotes = analysis.optJSONArray("notableQuotes");
+        if (quotes != null) {
+            for (int i = 0; i < quotes.length() && details.size() < 14; i++) {
+                JSONObject row = quotes.optJSONObject(i);
+                if (row == null) continue;
+                String text = row.optString("text", "").trim();
+                if (!text.isEmpty()) addUnique(details, summary, "発言「" + text + "」");
             }
         }
 
