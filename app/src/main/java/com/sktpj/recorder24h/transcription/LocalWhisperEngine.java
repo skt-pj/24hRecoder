@@ -50,13 +50,23 @@ public final class LocalWhisperEngine {
                 ? RealtimeSpeechGateStore.Snapshot.missing()
                 : RealtimeSpeechGateStore.read(context, segmentId);
 
-        // A realtime gate is allowed to skip decoding/VAD only for very low-level definite silence.
-        // Ambiguous old/noisy recordings fall back to the full legacy Silero pass for recall safety.
-        if (gate.available && gate.definiteSilence) {
-            return realtimeSilenceResponse(context, modelId, gate);
+        // New recordings can skip even M4A decode when AudioRecord PCM already proved definite
+        // silence. This happens before Silero and before the Whisper model is touched.
+        if (gate.available && gate.isRealtime() && gate.definiteSilence) {
+            return gateSilenceResponse(context, modelId, gate, null);
         }
 
         PreparedAudio prepared = prepareAudio(audioFile);
+
+        // Retained audio from older builds has no realtime sidecar. Run the same cheap gate on the
+        // decoded PCM so backlog items also avoid scanning all five minutes with Silero.
+        if (!gate.available) {
+            gate = RealtimeSpeechGateStore.analyzeFloatPcm(prepared.frontEnd.samples);
+        }
+        if (gate.available && gate.definiteSilence) {
+            return gateSilenceResponse(context, modelId, gate, prepared);
+        }
+
         VadDiagnostics vad = gate.available && !gate.ranges.isEmpty()
                 ? analyzeVad(context, prepared, gate)
                 : analyzeVad(context, prepared);
@@ -72,7 +82,7 @@ public final class LocalWhisperEngine {
         return new PreparedAudio(frontEnd, decodedAt - decodeStarted, preprocessedAt - decodedAt);
     }
 
-    /** Full-audio fallback used for old recordings and ambiguous realtime-gate results. */
+    /** Full-audio safety fallback for an activity gate that cannot produce usable candidate ranges. */
     static VadDiagnostics analyzeVad(Context context, PreparedAudio prepared) throws Exception {
         File vadModel = WhisperModelManager.vadModelFile(context);
         if (!WhisperModelManager.isVadReady(context)) {
@@ -84,13 +94,13 @@ public final class LocalWhisperEngine {
             throw new IllegalStateException("Local VAD diagnostics returned null");
         }
         JSONObject json = new JSONObject(raw);
-        json.put("vadScope", "full-audio");
+        json.put("vadScope", "full-audio-fallback");
         json.put("vadInputMs", prepared.durationMs());
-        json.put("realtimeGateUsed", false);
+        json.put("activityGateSource", "none-or-ambiguous");
         return new VadDiagnostics(json);
     }
 
-    /** Run Silero only over the original-timeline ranges selected while recording. */
+    /** Run Silero only over the original-timeline ranges selected by the cheap activity gate. */
     private static VadDiagnostics analyzeVad(Context context,
                                              PreparedAudio prepared,
                                              RealtimeSpeechGateStore.Snapshot gate) throws Exception {
@@ -186,11 +196,11 @@ public final class LocalWhisperEngine {
         json.put("segments", mappedSegments);
         json.put("totalSpeechMs", totalSpeechMs);
         json.put("lastEndMs", lastEndMs);
-        json.put("vadScope", "realtime-candidates");
+        json.put("vadScope", gate.isRealtime() ? "realtime-candidates" : "offline-candidates");
         json.put("vadInputMs", vadInputMs);
-        json.put("realtimeGateUsed", true);
-        json.put("realtimeCandidateCount", gate.candidateCount);
-        json.put("realtimeCandidateMs", gate.candidateMs);
+        json.put("activityGateSource", gate.source);
+        json.put("activityCandidateCount", gate.candidateCount);
+        json.put("activityCandidateMs", gate.candidateMs);
         return new VadDiagnostics(json);
     }
 
@@ -211,7 +221,7 @@ public final class LocalWhisperEngine {
                                                String modelId,
                                                VadDiagnostics vad,
                                                RealtimeSpeechGateStore.Snapshot gate,
-                                               boolean skippedByRealtimeGate) throws Exception {
+                                               boolean skippedByActivityGate) throws Exception {
         WhisperModelManager.ModelSpec spec = WhisperModelManager.modelSpec(modelId);
         if (spec == null) {
             throw new IllegalArgumentException("Unknown model: " + modelId);
@@ -226,7 +236,7 @@ public final class LocalWhisperEngine {
                     prepared.decodeMs, prepared.preprocessMs, 0L, prepared.frontEnd,
                     modelId, spec.label, modelBytes, 0, 0L, new JSONArray(),
                     0L, 0L, 0L, vad, chunks, prepared.durationMs(), true,
-                    gate, skippedByRealtimeGate);
+                    gate, skippedByActivityGate);
         }
 
         if (!WhisperModelManager.isComparisonReady(context, modelId)) {
@@ -263,18 +273,23 @@ public final class LocalWhisperEngine {
                 nativeResult.optLong("modelLoadMs", -1L),
                 nativeResult.optLong("whisperFullMs", -1L),
                 nativeResult.optLong("lastOutputEndMs", 0L),
-                vad, chunks, prepared.durationMs(), false, gate, skippedByRealtimeGate);
+                vad, chunks, prepared.durationMs(), false, gate, skippedByActivityGate);
     }
 
-    private static Response realtimeSilenceResponse(Context context,
-                                                    String modelId,
-                                                    RealtimeSpeechGateStore.Snapshot gate) {
+    private static Response gateSilenceResponse(Context context,
+                                                String modelId,
+                                                RealtimeSpeechGateStore.Snapshot gate,
+                                                PreparedAudio prepared) {
         WhisperModelManager.ModelSpec spec = WhisperModelManager.modelSpec(modelId);
         String label = spec == null ? modelId : spec.label;
         File model = WhisperModelManager.modelFile(context, modelId);
         long modelBytes = model.isFile() ? model.length() : 0L;
-        long durationMs = Math.max(0L, gate.segmentDurationMs);
-        int sampleCount = (int) Math.min(Integer.MAX_VALUE, durationMs * 16L);
+        long durationMs = prepared == null
+                ? Math.max(0L, gate.segmentDurationMs)
+                : prepared.durationMs();
+        int sampleCount = prepared == null
+                ? (int) Math.min(Integer.MAX_VALUE, durationMs * 16L)
+                : prepared.frontEnd.samples.length;
         JSONObject vadJson = new JSONObject();
         try {
             vadJson.put("vadInitMs", 0L);
@@ -288,17 +303,21 @@ public final class LocalWhisperEngine {
             vadJson.put("segments", new JSONArray());
             vadJson.put("totalSpeechMs", 0L);
             vadJson.put("lastEndMs", 0L);
-            vadJson.put("vadScope", "realtime-definite-silence");
+            vadJson.put("vadScope", gate.isRealtime()
+                    ? "realtime-definite-silence" : "offline-definite-silence");
             vadJson.put("vadInputMs", 0L);
-            vadJson.put("realtimeGateUsed", true);
-            vadJson.put("realtimeCandidateCount", gate.candidateCount);
-            vadJson.put("realtimeCandidateMs", gate.candidateMs);
+            vadJson.put("activityGateSource", gate.source);
+            vadJson.put("activityCandidateCount", gate.candidateCount);
+            vadJson.put("activityCandidateMs", gate.candidateMs);
         } catch (Exception ignored) {
         }
         VadDiagnostics vad = new VadDiagnostics(vadJson);
         SpeechChunks chunks = new SpeechChunks(new int[0], new int[0], 0L);
         return new Response("", sampleCount, threadCount(),
-                0L, 0L, 0L, null,
+                prepared == null ? 0L : prepared.decodeMs,
+                prepared == null ? 0L : prepared.preprocessMs,
+                0L,
+                prepared == null ? null : prepared.frontEnd,
                 modelId, label, modelBytes, 0, 0L, new JSONArray(),
                 0L, 0L, 0L, vad, chunks, durationMs, true, gate, true);
     }
@@ -476,6 +495,10 @@ public final class LocalWhisperEngine {
         public final long skippedSilenceMs;
         public final long audioDurationMs;
         public final boolean skippedNoSpeech;
+        public final String activityGateSource;
+        public final int activityCandidateCount;
+        public final long activityCandidateMs;
+        public final boolean skippedByActivityGate;
         public final boolean realtimeGateUsed;
         public final int realtimeCandidateCount;
         public final long realtimeCandidateMs;
@@ -488,7 +511,7 @@ public final class LocalWhisperEngine {
                  long modelLoadMs, long whisperFullMs, long lastOutputEndMs,
                  VadDiagnostics vad, SpeechChunks chunks, long audioDurationMs,
                  boolean skippedNoSpeech, RealtimeSpeechGateStore.Snapshot gate,
-                 boolean skippedByRealtimeGate) {
+                 boolean skippedByActivityGate) {
             this.text = text;
             this.sampleCount = sampleCount;
             this.threads = threads;
@@ -529,10 +552,14 @@ public final class LocalWhisperEngine {
             this.audioDurationMs = Math.max(0L, audioDurationMs);
             this.skippedSilenceMs = Math.max(0L, this.audioDurationMs - this.speechInputMs);
             this.skippedNoSpeech = skippedNoSpeech;
-            this.realtimeGateUsed = gate != null && gate.available;
-            this.realtimeCandidateCount = gate == null ? 0 : gate.candidateCount;
-            this.realtimeCandidateMs = gate == null ? 0L : gate.candidateMs;
-            this.skippedByRealtimeGate = skippedByRealtimeGate;
+            this.activityGateSource = gate == null ? "missing" : gate.source;
+            this.activityCandidateCount = gate == null ? 0 : gate.candidateCount;
+            this.activityCandidateMs = gate == null ? 0L : gate.candidateMs;
+            this.skippedByActivityGate = skippedByActivityGate;
+            this.realtimeGateUsed = gate != null && gate.available && gate.isRealtime();
+            this.realtimeCandidateCount = this.realtimeGateUsed ? gate.candidateCount : 0;
+            this.realtimeCandidateMs = this.realtimeGateUsed ? gate.candidateMs : 0L;
+            this.skippedByRealtimeGate = skippedByActivityGate && this.realtimeGateUsed;
         }
     }
 }
