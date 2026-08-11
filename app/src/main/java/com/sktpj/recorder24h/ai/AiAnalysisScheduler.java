@@ -33,6 +33,7 @@ public final class AiAnalysisScheduler {
     static final String KIND_MONTHLY = "monthly";
     static final String KIND_YEARLY = "yearly";
 
+    private static final long DAILY_READY_GRACE_MS = 15L * 60L * 1000L;
     private static final String PERIODIC_HOURLY = "ai-analysis-hourly";
     private static final String PERIODIC_DAILY = "ai-analysis-daily";
     private static final String PERIODIC_ROLLUP = "ai-analysis-rollup";
@@ -173,6 +174,17 @@ public final class AiAnalysisScheduler {
         }
     }
 
+    public static void removeTarget(
+            Context context,
+            String kind,
+            long periodStartMs,
+            long periodEndMs) {
+        Context app = context.getApplicationContext();
+        String uniqueName = targetWorkName(kind, periodStartMs, periodEndMs);
+        WorkManager.getInstance(app).cancelUniqueWork(uniqueName);
+        AiQueueStore.remove(app, targetQueueId(kind, periodStartMs, periodEndMs));
+    }
+
     private static boolean enqueueTarget(
             Context context,
             String kind,
@@ -187,16 +199,27 @@ public final class AiAnalysisScheduler {
         if (periodStartMs <= 0L || periodEndMs <= periodStartMs) return false;
 
         String queueId = targetQueueId(kind, periodStartMs, periodEndMs);
+        String effectiveRequestType = requestType;
+        boolean effectiveForce = force;
+        for (AiQueueStore.Entry existing : AiQueueStore.load(app)) {
+            if (queueId.equals(existing.id)
+                    && AiQueueStore.REQUEST_MANUAL.equals(existing.requestType)) {
+                effectiveRequestType = AiQueueStore.REQUEST_MANUAL;
+                effectiveForce = true;
+                break;
+            }
+        }
+
         AiQueueStore.upsert(
                 app,
                 queueId,
                 kind,
                 periodStartMs,
                 periodEndMs,
-                requestType,
+                effectiveRequestType,
                 AiQueueStore.STATE_QUEUED,
                 0,
-                AiQueueStore.REQUEST_MANUAL.equals(requestType)
+                AiQueueStore.REQUEST_MANUAL.equals(effectiveRequestType)
                         ? "ユーザー指定期間" : "定期実行対象");
 
         Data input = new Data.Builder()
@@ -204,25 +227,40 @@ public final class AiAnalysisScheduler {
                 .putLong(EXTRA_PERIOD_START_MS, periodStartMs)
                 .putLong(EXTRA_PERIOD_END_MS, periodEndMs)
                 .putString(EXTRA_QUEUE_ID, queueId)
-                .putString(EXTRA_REQUEST_TYPE, requestType)
-                .putBoolean(EXTRA_FORCE, force)
+                .putString(EXTRA_REQUEST_TYPE, effectiveRequestType)
+                .putBoolean(EXTRA_FORCE, effectiveForce)
                 .build();
 
-        String uniqueName = TARGET_PREFIX + safeId(kind + "-" + periodStartMs + "-" + periodEndMs);
         String kindTag = KIND_HOURLY.equals(kind)
                 ? "ai-analysis-target-hourly" : "ai-analysis-target-daily";
-        OneTimeWorkRequest request = oneTime(
-                AiAnalysisWorker.class,
-                input,
-                analysisConstraints(app),
-                "ai-analysis-target",
-                kindTag);
-        WorkManager.getInstance(app).enqueueUniqueWork(uniqueName, policy, request);
+        OneTimeWorkRequest.Builder builder = new OneTimeWorkRequest.Builder(AiAnalysisWorker.class)
+                .setInputData(input)
+                .setConstraints(analysisConstraints(app))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag("ai-analysis")
+                .addTag("ai-analysis-target")
+                .addTag(kindTag);
+
+        long notBeforeMs = KIND_DAILY.equals(kind)
+                ? periodEndMs + DAILY_READY_GRACE_MS : periodEndMs;
+        long delayMs = Math.max(0L, notBeforeMs - System.currentTimeMillis());
+        if (delayMs > 0L) {
+            builder.setInitialDelay(delayMs, TimeUnit.MILLISECONDS);
+        }
+
+        WorkManager.getInstance(app).enqueueUniqueWork(
+                targetWorkName(kind, periodStartMs, periodEndMs),
+                policy,
+                builder.build());
         return true;
     }
 
     static String targetQueueId(String kind, long periodStartMs, long periodEndMs) {
         return kind + ":" + periodStartMs + ":" + periodEndMs;
+    }
+
+    private static String targetWorkName(String kind, long periodStartMs, long periodEndMs) {
+        return TARGET_PREFIX + safeId(kind + "-" + periodStartMs + "-" + periodEndMs);
     }
 
     static void enqueueRollup(Context context) {
