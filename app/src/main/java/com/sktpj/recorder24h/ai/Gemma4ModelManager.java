@@ -28,7 +28,17 @@ public final class Gemma4ModelManager {
             "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/" +
                     MODEL_FILE_NAME + "?download=true";
 
-    static final String DOWNLOAD_WORK_NAME = "gemma4-e2b-model-download";
+    public static final String DOWNLOAD_WORK_NAME = "gemma4-e2b-model-download";
+    public static final String PROGRESS_DOWNLOADED_BYTES = "downloadedBytes";
+    public static final String PROGRESS_EXPECTED_BYTES = "expectedBytes";
+    public static final String PROGRESS_PHASE = "phase";
+    public static final String PROGRESS_MESSAGE = "message";
+    public static final String OUTPUT_ERROR = "error";
+    public static final String PHASE_STARTING = "starting";
+    public static final String PHASE_DOWNLOADING = "downloading";
+    public static final String PHASE_VERIFYING = "verifying";
+    public static final String PHASE_RETRYING = "retrying";
+
     private static final String VERIFIED_FILE_NAME = MODEL_FILE_NAME + ".verified";
 
     private Gemma4ModelManager() {
@@ -99,9 +109,13 @@ public final class Gemma4ModelManager {
                 request);
     }
 
+    public static void cancelDownload(Context context) {
+        WorkManager.getInstance(context.getApplicationContext()).cancelUniqueWork(DOWNLOAD_WORK_NAME);
+    }
+
     public static boolean deleteModel(Context context) {
         Context app = context.getApplicationContext();
-        WorkManager.getInstance(app).cancelUniqueWork(DOWNLOAD_WORK_NAME);
+        cancelDownload(app);
         boolean ok = true;
         File[] files = new File[]{modelFile(app), partialFile(app), verifiedFile(app)};
         for (File file : files) {
