@@ -13,8 +13,8 @@ android {
         applicationId 'com.sktpj.recorder24h'
         minSdk 29
         targetSdk 36
-        versionCode 32
-        versionName '0.6.11'
+        versionCode 33
+        versionName '0.6.12'
         // Normal local transcription model is user-selectable in Settings.
         // Recording input verifies actual Bluetooth routing and falls back to the device mic if routing fails.
         // User-triggered queue requests run immediately in a mediaProcessing FGS.

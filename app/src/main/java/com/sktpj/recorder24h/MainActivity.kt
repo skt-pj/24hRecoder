@@ -36,8 +36,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -287,6 +289,7 @@ private fun RecorderApp(
     var records by remember { mutableStateOf<List<SegmentRecord>>(emptyList()) }
     var refresh by remember { mutableIntStateOf(0) }
     var dashboard by remember { mutableStateOf(readDashboard(context)) }
+    val historyListState = rememberLazyListState()
 
     LaunchedEffect(Unit) {
         val hasQueuedTranscription = withContext(Dispatchers.IO) {
@@ -398,7 +401,11 @@ private fun RecorderApp(
                                 }
                             }
                         )
-                        section == AppSection.HISTORY -> HistoryScreen(records) { selectedId = it.segmentId }
+                        section == AppSection.HISTORY -> HistoryScreen(
+                            records = records,
+                            listState = historyListState,
+                            onSelect = { selectedId = it.segmentId }
+                        )
                         section == AppSection.AI -> AiAnalysisScreen(
                             refreshToken = refresh,
                             onOpenSettings = { section = AppSection.SETTINGS }
@@ -769,7 +776,11 @@ private fun formatQueueDateTime(record: SegmentRecord): String {
 }
 
 @Composable
-private fun HistoryScreen(records: List<SegmentRecord>, onSelect: (SegmentRecord) -> Unit) {
+private fun HistoryScreen(
+    records: List<SegmentRecord>,
+    listState: LazyListState,
+    onSelect: (SegmentRecord) -> Unit
+) {
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(HistoryFilter.ALL) }
     val filtered = remember(records, query, filter) {
@@ -808,7 +819,8 @@ private fun HistoryScreen(records: List<SegmentRecord>, onSelect: (SegmentRecord
             EmptyHistory(query, filter)
         } else {
             LazyColumn(
-                Modifier.fillMaxSize(),
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
