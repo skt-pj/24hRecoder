@@ -93,11 +93,21 @@ public final class AiAnalysisScheduler {
         manager.enqueueUniqueWork(
                 NOW_HOURLY,
                 ExistingWorkPolicy.REPLACE,
-                oneTime(AiAnalysisWorker.class, data(KIND_HOURLY), constraints, "ai-analysis-now"));
+                oneTime(
+                        AiAnalysisWorker.class,
+                        data(KIND_HOURLY),
+                        constraints,
+                        "ai-analysis-now",
+                        NOW_HOURLY));
         manager.enqueueUniqueWork(
                 NOW_DAILY,
                 ExistingWorkPolicy.REPLACE,
-                oneTime(AiAnalysisWorker.class, data(KIND_DAILY), constraints, "ai-analysis-now"));
+                oneTime(
+                        AiAnalysisWorker.class,
+                        data(KIND_DAILY),
+                        constraints,
+                        "ai-analysis-now",
+                        NOW_DAILY));
         enqueueRollup(app);
     }
 
@@ -109,7 +119,12 @@ public final class AiAnalysisScheduler {
         WorkManager.getInstance(app).enqueueUniqueWork(
                 NOW_ROLLUP,
                 ExistingWorkPolicy.REPLACE,
-                oneTime(AiRollupWorker.class, null, analysisConstraints(app), "ai-rollup-now"));
+                oneTime(
+                        AiRollupWorker.class,
+                        null,
+                        analysisConstraints(app),
+                        "ai-rollup-now",
+                        NOW_ROLLUP));
     }
 
     public static void cancel(Context context) {
@@ -134,12 +149,14 @@ public final class AiAnalysisScheduler {
             Class<? extends androidx.work.ListenableWorker> workerClass,
             Data inputData,
             Constraints constraints,
-            String tag) {
+            String... tags) {
         OneTimeWorkRequest.Builder builder = new OneTimeWorkRequest.Builder(workerClass)
                 .setConstraints(constraints)
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-                .addTag("ai-analysis")
-                .addTag(tag);
+                .addTag("ai-analysis");
+        for (String tag : tags) {
+            builder.addTag(tag);
+        }
         if (inputData != null) {
             builder.setInputData(inputData);
         }
