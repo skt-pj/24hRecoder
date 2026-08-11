@@ -2,6 +2,8 @@ package com.sktpj.recorder24h.transcription;
 
 import android.content.Context;
 
+import com.sktpj.recorder24h.ai.AiAnalysisScheduler;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -89,6 +91,14 @@ public final class TranscriptionRepository {
             if (!temp.renameTo(target)) {
                 throw new IllegalStateException("Unable to finalize transcript file");
             }
+        }
+
+        // AI inference is never run here. This only wakes semantic AI queue items whose target
+        // period was waiting for transcription, so they do not sit on exponential backoff after
+        // the required source has become available.
+        try {
+            AiAnalysisScheduler.wakeWaitingTargets(context);
+        } catch (RuntimeException ignored) {
         }
     }
 
