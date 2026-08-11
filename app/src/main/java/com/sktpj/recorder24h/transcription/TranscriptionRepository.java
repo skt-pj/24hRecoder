@@ -94,10 +94,9 @@ public final class TranscriptionRepository {
         }
 
         // AI inference is never run here. This only wakes semantic AI queue items whose target
-        // period was waiting for transcription, so they do not sit on exponential backoff after
-        // the required source has become available.
+        // period overlaps the transcript that just became durable.
         try {
-            AiAnalysisScheduler.wakeWaitingTargets(context);
+            AiAnalysisScheduler.wakeWaitingTargets(context, segmentId);
         } catch (RuntimeException ignored) {
         }
     }
