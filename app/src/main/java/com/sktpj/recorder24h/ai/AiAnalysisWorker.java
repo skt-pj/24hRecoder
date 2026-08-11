@@ -54,16 +54,10 @@ public final class AiAnalysisWorker extends Worker {
             }
         }
 
-        String apiKey;
-        try {
-            apiKey = OpenAiKeyStore.load(context);
-        } catch (Exception error) {
-            log(context, "AI_ANALYSIS_KEY_READ_FAILED", kind, periodStartMs, periodEndMs, null, error);
-            return Result.failure();
-        }
-        if (apiKey == null || apiKey.trim().isEmpty()) {
+        if (!AiInferenceClient.isConfigured(context)) {
             return Result.success();
         }
+        String modelId = AiInferenceClient.modelId(context);
 
         if (daily) {
             if (System.currentTimeMillis() < periodEndMs + DAILY_FINALIZATION_GRACE_MS) {
@@ -89,7 +83,7 @@ public final class AiAnalysisWorker extends Worker {
             }
             return Result.success();
         }
-        if (AiAnalysisRepository.isCurrent(target, source.sourceHash)) {
+        if (AiAnalysisRepository.isCurrent(target, source.sourceHash, modelId)) {
             log(context, "AI_ANALYSIS_SKIPPED_CURRENT", kind,
                     periodStartMs, periodEndMs, source, null);
             if (daily) {
@@ -102,9 +96,9 @@ public final class AiAnalysisWorker extends Worker {
                 periodStartMs, periodEndMs, source, null);
         try {
             OpenAiLunaClient.Response response = daily
-                    ? OpenAiLunaClient.analyzeDaily(apiKey, source)
-                    : OpenAiLunaClient.analyzeHourly(apiKey, source);
-            AiAnalysisRepository.save(target, kind, source, response);
+                    ? AiInferenceClient.analyzeDaily(context, source)
+                    : AiInferenceClient.analyzeHourly(context, source);
+            AiAnalysisRepository.save(target, kind, source, response, modelId);
             log(context, "AI_ANALYSIS_SAVED", kind,
                     periodStartMs, periodEndMs, source, null);
             if (daily) {
@@ -169,7 +163,8 @@ public final class AiAnalysisWorker extends Worker {
         try {
             JSONObject details = new JSONObject();
             details.put("kind", kind);
-            details.put("model", OpenAiLunaClient.MODEL);
+            details.put("model", AiInferenceClient.modelId(context));
+            details.put("provider", AiProviderStore.getProvider(context));
             if (periodStartMs > 0L) details.put("periodStartMs", periodStartMs);
             if (periodEndMs > 0L) details.put("periodEndMs", periodEndMs);
             if (source != null) {
