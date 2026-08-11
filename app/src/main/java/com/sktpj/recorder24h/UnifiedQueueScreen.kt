@@ -1,6 +1,5 @@
 package com.sktpj.recorder24h
 
-import android.content.Context
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
@@ -34,8 +33,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.work.WorkInfo
-import androidx.work.WorkManager
+import com.sktpj.recorder24h.ai.AiAnalysisScheduler
+import com.sktpj.recorder24h.ai.AiQueueStore
 import com.sktpj.recorder24h.ui.SegmentRecord
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -49,13 +48,6 @@ private enum class QueueTab(val label: String) {
     AI_SUMMARY("AI要約")
 }
 
-private data class AiQueueWorkItem(
-    val id: String,
-    val state: WorkInfo.State,
-    val runAttemptCount: Int,
-    val tags: Set<String>
-)
-
 @Composable
 internal fun UnifiedQueueScreen(
     records: List<SegmentRecord>,
@@ -64,11 +56,11 @@ internal fun UnifiedQueueScreen(
 ) {
     val context = LocalContext.current
     var selectedTab by remember { mutableStateOf(QueueTab.TRANSCRIPTION) }
-    var aiQueue by remember { mutableStateOf<List<AiQueueWorkItem>>(emptyList()) }
+    var aiQueue by remember { mutableStateOf<List<AiQueueStore.Entry>>(emptyList()) }
 
     LaunchedEffect(Unit) {
         while (true) {
-            aiQueue = withContext(Dispatchers.IO) { readAiQueue(context) }
+            aiQueue = withContext(Dispatchers.IO) { AiQueueStore.load(context) }
             delay(1_000L)
         }
     }
@@ -157,7 +149,7 @@ private fun TranscriptionQueueRow(
             )
             Spacer(Modifier.width(12.dp))
             Text(
-                queueSourceLabel(record),
+                transcriptionQueueSourceLabel(record),
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1
@@ -181,7 +173,8 @@ private fun TranscriptionQueueRow(
 }
 
 @Composable
-private fun AiSummaryQueueTab(items: List<AiQueueWorkItem>) {
+private fun AiSummaryQueueTab(items: List<AiQueueStore.Entry>) {
+    val context = LocalContext.current
     if (items.isEmpty()) {
         EmptyQueue("AI要約キューは空です")
         return
@@ -192,27 +185,80 @@ private fun AiSummaryQueueTab(items: List<AiQueueWorkItem>) {
         contentPadding = PaddingValues(vertical = 4.dp)
     ) {
         itemsIndexed(items, key = { _, item -> item.id }) { _, item ->
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 15.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(aiQueueLabel(item), style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        aiQueueSourceLabel(item),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+            AiSummaryQueueRow(
+                item = item,
+                onRemove = {
+                    AiAnalysisScheduler.removeTarget(
+                        context,
+                        item.kind,
+                        item.periodStartMs,
+                        item.periodEndMs
                     )
                 }
-                Spacer(Modifier.width(12.dp))
+            )
+            HorizontalDivider()
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AiSummaryQueueRow(
+    item: AiQueueStore.Entry,
+    onRemove: () -> Unit
+) {
+    var menuExpanded by remember(item.id) { mutableStateOf(false) }
+
+    Box {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = {},
+                    onLongClick = { menuExpanded = true }
+                )
+                .padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
                 Text(
-                    aiQueueStateLabel(item),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
+                    "${aiKindLabel(item.kind)}  ${aiPeriodLabel(item)}",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    buildString {
+                        append(if (item.requestType == AiQueueStore.REQUEST_MANUAL) "ユーザー指定" else "定期実行")
+                        if (item.message.isNotBlank()) append(" • ").append(item.message)
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            HorizontalDivider()
+            Spacer(Modifier.width(12.dp))
+            Text(
+                aiQueueStateLabel(item.state),
+                style = MaterialTheme.typography.labelLarge,
+                color = if (item.state == AiQueueStore.STATE_FAILED) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1
+            )
+        }
+
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text("AI要約キューから削除") },
+                leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+                onClick = {
+                    menuExpanded = false
+                    onRemove()
+                }
+            )
         }
     }
 }
@@ -224,76 +270,40 @@ private fun EmptyQueue(message: String) {
     }
 }
 
-private fun readAiQueue(context: Context): List<AiQueueWorkItem> {
-    return try {
-        WorkManager.getInstance(context.applicationContext)
-            .getWorkInfosByTag("ai-analysis")
-            .get()
-            .asSequence()
-            .filter {
-                it.state == WorkInfo.State.RUNNING ||
-                    it.state == WorkInfo.State.BLOCKED ||
-                    it.state == WorkInfo.State.ENQUEUED
-            }
-            .map {
-                AiQueueWorkItem(
-                    id = it.id.toString(),
-                    state = it.state,
-                    runAttemptCount = it.runAttemptCount,
-                    tags = it.tags
-                )
-            }
-            .sortedWith(
-                compareBy<AiQueueWorkItem>(
-                    { aiQueueStateOrder(it.state) },
-                    { aiQueueLabel(it) },
-                    { it.id }
-                )
-            )
-            .toList()
-    } catch (_: Exception) {
-        emptyList()
+private fun aiKindLabel(kind: String): String = when (kind) {
+    "hourly" -> "1時間要約"
+    "daily" -> "1日要約"
+    "weekly" -> "週まとめ"
+    "monthly" -> "月まとめ"
+    "yearly" -> "年まとめ"
+    else -> "AI要約"
+}
+
+private fun aiPeriodLabel(item: AiQueueStore.Entry): String {
+    if (item.periodStartMs <= 0L || item.periodEndMs <= item.periodStartMs) return "対象期間不明"
+    val day = SimpleDateFormat("M/d", Locale.JAPAN)
+    val time = SimpleDateFormat("HH:mm", Locale.JAPAN)
+    val startDay = day.format(Date(item.periodStartMs))
+    val endDay = day.format(Date(item.periodEndMs))
+    return when (item.kind) {
+        "hourly" -> "$startDay ${time.format(Date(item.periodStartMs))}–${time.format(Date(item.periodEndMs))}"
+        "daily" -> "$startDay 1日"
+        "monthly" -> SimpleDateFormat("yyyy年M月", Locale.JAPAN).format(Date(item.periodStartMs))
+        "yearly" -> SimpleDateFormat("yyyy年", Locale.JAPAN).format(Date(item.periodStartMs))
+        else -> if (startDay == endDay) startDay else "$startDay–$endDay"
     }
 }
 
-private fun aiQueueLabel(item: AiQueueWorkItem): String {
-    return when {
-        "ai-analysis-hourly" in item.tags -> "1時間要約"
-        "ai-analysis-daily" in item.tags -> "1日要約"
-        "ai-analysis-rollup" in item.tags || "ai-rollup" in item.tags || "ai-rollup-now" in item.tags ->
-            "週・月・年の集約"
-        "ai-analysis-now" in item.tags -> "AI要約"
-        else -> "AI要約"
-    }
+private fun aiQueueStateLabel(state: String): String = when (state) {
+    AiQueueStore.STATE_RUNNING -> "処理中"
+    AiQueueStore.STATE_WAITING_DATA -> "データ待ち"
+    AiQueueStore.STATE_RETRY_WAIT -> "再試行待ち"
+    AiQueueStore.STATE_QUEUED -> "実行待ち"
+    AiQueueStore.STATE_FAILED -> "失敗"
+    else -> state
 }
 
-private fun aiQueueSourceLabel(item: AiQueueWorkItem): String {
-    return if ("ai-analysis-now" in item.tags || "ai-rollup-now" in item.tags) {
-        "今すぐ実行"
-    } else {
-        "定期実行"
-    }
-}
-
-private fun aiQueueStateLabel(item: AiQueueWorkItem): String {
-    return when (item.state) {
-        WorkInfo.State.RUNNING -> "処理中"
-        WorkInfo.State.BLOCKED -> "待機中"
-        WorkInfo.State.ENQUEUED -> if (item.runAttemptCount > 0) "再試行待ち" else "待機中"
-        else -> item.state.name
-    }
-}
-
-private fun aiQueueStateOrder(state: WorkInfo.State): Int {
-    return when (state) {
-        WorkInfo.State.RUNNING -> 0
-        WorkInfo.State.BLOCKED -> 1
-        WorkInfo.State.ENQUEUED -> 2
-        else -> 3
-    }
-}
-
-private fun queueSourceLabel(record: SegmentRecord): String =
+private fun transcriptionQueueSourceLabel(record: SegmentRecord): String =
     if (record.reason.orEmpty().startsWith("MANUAL_")) "ユーザー追加" else "自動追加"
 
 private fun formatQueueDateTime(record: SegmentRecord): String {

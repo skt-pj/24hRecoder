@@ -1,6 +1,5 @@
 package com.sktpj.recorder24h
 
-import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,7 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.sktpj.recorder24h.ai.AiAnalysisScheduler
-import com.sktpj.recorder24h.ai.OpenAiKeyStore
+import com.sktpj.recorder24h.ai.AiProviderStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -72,7 +71,7 @@ private data class AiAnalysisDocument(
 )
 
 private data class AiAnalysisSnapshot(
-    val hasApiKey: Boolean,
+    val aiConfigured: Boolean,
     val daily: List<AiAnalysisDocument>,
     val weekly: List<AiAnalysisDocument>,
     val monthly: List<AiAnalysisDocument>,
@@ -97,7 +96,7 @@ internal fun AiAnalysisScreen(
     var snapshot by remember {
         mutableStateOf(
             AiAnalysisSnapshot(
-                OpenAiKeyStore.hasKey(context),
+                AiProviderStore.isConfigured(context),
                 emptyList(),
                 emptyList(),
                 emptyList(),
@@ -116,7 +115,7 @@ internal fun AiAnalysisScreen(
     LaunchedEffect(refreshToken) {
         while (true) {
             val next = withContext(Dispatchers.IO) {
-                loadAiAnalysisSnapshot(context.filesDir, OpenAiKeyStore.hasKey(context))
+                loadAiAnalysisSnapshot(context.filesDir, AiProviderStore.isConfigured(context))
             }
             snapshot = next
 
@@ -155,12 +154,11 @@ internal fun AiAnalysisScreen(
     ) {
         item {
             AiStatusCard(
-                hasApiKey = snapshot.hasApiKey,
+                aiConfigured = snapshot.aiConfigured,
                 hasAnyResult = snapshot.hasAnyResult,
                 onOpenSettings = onOpenSettings,
                 onAnalyzeNow = {
                     AiAnalysisScheduler.enqueueNow(context)
-                    Toast.makeText(context, "Luna分析を登録しました", Toast.LENGTH_SHORT).show()
                 }
             )
         }
@@ -292,28 +290,28 @@ internal fun AiAnalysisScreen(
 
 @Composable
 private fun AiStatusCard(
-    hasApiKey: Boolean,
+    aiConfigured: Boolean,
     hasAnyResult: Boolean,
     onOpenSettings: () -> Unit,
     onAnalyzeNow: () -> Unit
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("GPT-5.6 Luna", style = MaterialTheme.typography.titleLarge)
+            Text("AIノート", style = MaterialTheme.typography.titleLarge)
             Text(
-                if (hasApiKey) {
+                if (aiConfigured) {
                     "時間別・日次ノートを生成し、完了した日次ノートから週・月・年の振り返りを段階的に作ります。"
                 } else {
-                    "分析を使うには設定でOpenAI API keyを登録してください。"
+                    "分析を使うには設定でAIプロバイダを設定してください。"
                 }
             )
-            if (!hasApiKey) {
+            if (!aiConfigured) {
                 Button(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
-                    Text("API keyを設定する")
+                    Text("AI設定を開く")
                 }
             } else {
                 FilledTonalButton(onClick = onAnalyzeNow, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (hasAnyResult) "分析を今すぐ更新" else "今すぐ分析")
+                    Text(if (hasAnyResult) "期間を指定して再分析" else "期間を指定して分析")
                 }
             }
         }
@@ -400,7 +398,7 @@ private fun DayNotebook(
             } else {
                 EmptyAnalysisCard(
                     title = "今日の日次ノートはまだ確定していません",
-                    message = "日次ノートは1日が完了した後に生成します。今日については、下に1時間ごとのLuna更新結果を表示します。"
+                    message = "日次ノートは1日が完了した後に生成します。今日については、下に1時間ごとのAI更新結果を表示します。"
                 )
             }
 
@@ -411,7 +409,7 @@ private fun DayNotebook(
             if (hourly.isEmpty()) {
                 EmptyAnalysisCard(
                     title = "今日の時間別まとめはまだありません",
-                    message = "1時間単位のLuna分析が完了すると、最新の時間帯からここに表示されます。"
+                    message = "1時間単位のAI分析が完了すると、最新の時間帯からここに表示されます。"
                 )
             } else {
                 hourly.sortedByDescending { it.periodStartMs }.forEach { HourlySummaryCard(it) }
@@ -444,7 +442,7 @@ private fun WeekNotebook(
         if (selected == null) {
             EmptyAnalysisCard(
                 title = "週のまとめはまだありません",
-                message = "1週間が完了すると、その週の日次ノートをLunaがまとめます。"
+                message = "1週間が完了すると、その週の日次ノートをAIがまとめます。"
             )
         } else {
             val index = weekly.indexOfFirst { it.periodStartMs == selected.periodStartMs }
@@ -516,7 +514,7 @@ private fun MonthNotebook(
             EmptyAnalysisCard(
                 title = if (month == currentMonth) "今月は進行中です" else "月のまとめはありません",
                 message = if (month == currentMonth) {
-                    "月が完了すると、その月の日次ノートをLunaがまとめます。日ごとのノートは下のカレンダーから確認できます。"
+                    "月が完了すると、その月の日次ノートをAIがまとめます。日ごとのノートは下のカレンダーから確認できます。"
                 } else {
                     "この月に保存済み日次ノートがないか、月次まとめがまだ生成されていません。"
                 }
@@ -563,7 +561,7 @@ private fun YearNotebook(
             EmptyAnalysisCard(
                 title = if (year == currentYear) "今年は進行中です" else "年のまとめはありません",
                 message = if (year == currentYear) {
-                    "年が完了すると、月次ノートを中心にLunaが年間の振り返りを生成します。"
+                    "年が完了すると、月次ノートを中心にAIが年間の振り返りを生成します。"
                 } else {
                     "この年の年間まとめはまだ生成されていません。"
                 }
@@ -1042,10 +1040,10 @@ private fun AnalysisSectionCard(title: String, content: @Composable () -> Unit) 
     }
 }
 
-private fun loadAiAnalysisSnapshot(filesDir: File, hasApiKey: Boolean): AiAnalysisSnapshot {
+private fun loadAiAnalysisSnapshot(filesDir: File, aiConfigured: Boolean): AiAnalysisSnapshot {
     val analysisDir = File(filesDir, "analysis")
     return AiAnalysisSnapshot(
-        hasApiKey = hasApiKey,
+        aiConfigured = aiConfigured,
         daily = loadAnalysisDocuments(File(analysisDir, "daily"), "daily", 2_000),
         weekly = loadAnalysisDocuments(File(analysisDir, "weekly"), "weekly", 600),
         monthly = loadAnalysisDocuments(File(analysisDir, "monthly"), "monthly", 240),
@@ -1074,7 +1072,7 @@ private fun loadAnalysisDocuments(
                     periodStartMs = wrapper.optLong("periodStartMs", 0L),
                     periodEndMs = wrapper.optLong("periodEndMs", 0L),
                     generatedAtMs = wrapper.optLong("generatedAtMs", file.lastModified()),
-                    model = wrapper.optString("model", "GPT-5.6 Luna"),
+                    model = wrapper.optString("model", "AI"),
                     sourceCount = when {
                         wrapper.has("sourceAnalysisCount") ->
                             wrapper.optInt("sourceAnalysisCount", 0)
