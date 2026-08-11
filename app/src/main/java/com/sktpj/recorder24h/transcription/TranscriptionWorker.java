@@ -121,12 +121,17 @@ public final class TranscriptionWorker extends Worker {
             JSONObject startedMetrics = forceMetrics(
                     forceRetranscribe, selectedModelId, selectedEngineId);
             try {
+                RealtimeSpeechGateStore.Snapshot gate = RealtimeSpeechGateStore.read(context, segmentId);
                 startedMetrics.put("queueWaitMs", queueWaitMs);
                 startedMetrics.put("vadModel", WhisperModelManager.VAD_MODEL_ID);
                 startedMetrics.put("vadEnabled", true);
                 startedMetrics.put("vadBeforeWhisper", true);
                 startedMetrics.put("audioFrontend", "adaptive-gain-v1");
                 startedMetrics.put("replacingOldTranscript", replacingOldTranscript);
+                startedMetrics.put("realtimeGateAvailable", gate.available);
+                startedMetrics.put("realtimeDefiniteSilence", gate.definiteSilence);
+                startedMetrics.put("realtimeCandidateCount", gate.candidateCount);
+                startedMetrics.put("realtimeCandidateMs", gate.candidateMs);
             } catch (Exception ignored) {
             }
             log(context,
@@ -192,14 +197,22 @@ public final class TranscriptionWorker extends Worker {
                 metrics.put("vadBeforeWhisper", true);
                 metrics.put("vadInitMs", response.vadInitMs);
                 metrics.put("vadDetectMs", response.vadDetectMs);
+                metrics.put("vadInputMs", response.vadInputMs);
+                metrics.put("vadScope", response.vadScope);
                 metrics.put("vadSegmentCount", response.vadSegmentCount);
                 metrics.put("vadSpeechMs", response.vadSpeechMs);
                 metrics.put("speechChunkCount", response.speechChunkCount);
+                metrics.put("whisperFullCallCount", response.speechChunkCount);
                 metrics.put("speechInputMs", response.speechInputMs);
                 metrics.put("audioDurationMs", response.audioDurationMs);
                 metrics.put("skippedSilenceMs", response.skippedSilenceMs);
                 metrics.put("skippedNoSpeech", response.skippedNoSpeech);
                 metrics.put("whisperInvoked", !response.skippedNoSpeech);
+                metrics.put("realtimeGateUsed", response.realtimeGateUsed);
+                metrics.put("realtimeCandidateCount", response.realtimeCandidateCount);
+                metrics.put("realtimeCandidateMs", response.realtimeCandidateMs);
+                metrics.put("skippedByRealtimeGate", response.skippedByRealtimeGate);
+                metrics.put("originalTimelinePreserved", true);
                 metrics.put("replacedOldTranscript", replacingOldTranscript);
                 metrics.put("audioRetained", true);
 
