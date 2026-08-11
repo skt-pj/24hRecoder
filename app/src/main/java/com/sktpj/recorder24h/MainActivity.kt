@@ -36,8 +36,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -287,6 +289,9 @@ private fun RecorderApp(
     var records by remember { mutableStateOf<List<SegmentRecord>>(emptyList()) }
     var refresh by remember { mutableIntStateOf(0) }
     var dashboard by remember { mutableStateOf(readDashboard(context)) }
+    val historyListState = rememberLazyListState()
+    var historyQuery by remember { mutableStateOf("") }
+    var historyFilter by remember { mutableStateOf(HistoryFilter.ALL) }
 
     LaunchedEffect(Unit) {
         val hasQueuedTranscription = withContext(Dispatchers.IO) {
@@ -398,7 +403,15 @@ private fun RecorderApp(
                                 }
                             }
                         )
-                        section == AppSection.HISTORY -> HistoryScreen(records) { selectedId = it.segmentId }
+                        section == AppSection.HISTORY -> HistoryScreen(
+                            records = records,
+                            listState = historyListState,
+                            query = historyQuery,
+                            filter = historyFilter,
+                            onQueryChange = { historyQuery = it },
+                            onFilterChange = { historyFilter = it },
+                            onSelect = { selectedId = it.segmentId }
+                        )
                         section == AppSection.AI -> AiAnalysisScreen(
                             refreshToken = refresh,
                             onOpenSettings = { section = AppSection.SETTINGS }
@@ -769,9 +782,15 @@ private fun formatQueueDateTime(record: SegmentRecord): String {
 }
 
 @Composable
-private fun HistoryScreen(records: List<SegmentRecord>, onSelect: (SegmentRecord) -> Unit) {
-    var query by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf(HistoryFilter.ALL) }
+private fun HistoryScreen(
+    records: List<SegmentRecord>,
+    listState: LazyListState,
+    query: String,
+    filter: HistoryFilter,
+    onQueryChange: (String) -> Unit,
+    onFilterChange: (HistoryFilter) -> Unit,
+    onSelect: (SegmentRecord) -> Unit
+) {
     val filtered = remember(records, query, filter) {
         records.filter { record ->
             val statusOk = when (filter) {
@@ -792,7 +811,7 @@ private fun HistoryScreen(records: List<SegmentRecord>, onSelect: (SegmentRecord
         Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedTextField(
                 value = query,
-                onValueChange = { query = it },
+                onValueChange = onQueryChange,
                 singleLine = true,
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 placeholder = { Text("文字起こし・segment IDを検索") },
@@ -800,7 +819,7 @@ private fun HistoryScreen(records: List<SegmentRecord>, onSelect: (SegmentRecord
             )
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 itemsIndexed(HistoryFilter.entries) { _, item ->
-                    FilterChip(selected = filter == item, onClick = { filter = item }, label = { Text(item.label) })
+                    FilterChip(selected = filter == item, onClick = { onFilterChange(item) }, label = { Text(item.label) })
                 }
             }
         }
@@ -808,7 +827,8 @@ private fun HistoryScreen(records: List<SegmentRecord>, onSelect: (SegmentRecord
             EmptyHistory(query, filter)
         } else {
             LazyColumn(
-                Modifier.fillMaxSize(),
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
