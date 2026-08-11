@@ -35,8 +35,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.sktpj.recorder24h.ai.AiAnalysisRepository
 import com.sktpj.recorder24h.ai.AiAnalysisScheduler
-import com.sktpj.recorder24h.ai.AiDailySourceCleanup
 import com.sktpj.recorder24h.ai.AiQueueStore
+import com.sktpj.recorder24h.ui.SegmentHistoryRepository
+import com.sktpj.recorder24h.ui.SegmentRecord
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
@@ -280,6 +281,7 @@ private fun loadHourlyActionRows(
     val queueEntries = AiQueueStore.load(context)
         .filter { it.kind == AiAnalysisScheduler.KIND_HOURLY }
         .associateBy { it.periodStartMs }
+    val records = SegmentHistoryRepository.load(context)
     val nowMs = System.currentTimeMillis()
 
     return (0..23).map { hour ->
@@ -287,8 +289,8 @@ private fun loadHourlyActionRows(
         val end = start.plusHours(1)
         val startMs = start.toInstant().toEpochMilli()
         val endMs = end.toInstant().toEpochMilli()
-        val source = AiAnalysisRepository.buildSource(context, startMs, endMs)
-        val pending = AiDailySourceCleanup.hasPendingTranscription(context, startMs, endMs)
+        val hasSource = hasTranscriptSource(records, startMs, endMs)
+        val pending = hasPendingTranscription(records, startMs, endMs)
         val hasResult = AiAnalysisRepository.hourlyFile(context, startMs).isFile
         val queueEntry = queueEntries[startMs]
 
@@ -296,7 +298,7 @@ private fun loadHourlyActionRows(
             hour = hour,
             periodStartMs = startMs,
             periodEndMs = endMs,
-            hasSource = !source.isEmpty,
+            hasSource = hasSource,
             hasResult = hasResult,
             pendingTranscription = pending,
             queueState = queueEntry?.state,
@@ -304,6 +306,63 @@ private fun loadHourlyActionRows(
             periodStarted = startMs <= nowMs
         )
     }
+}
+
+private fun hasTranscriptSource(
+    records: List<SegmentRecord>,
+    periodStartMs: Long,
+    periodEndMs: Long
+): Boolean {
+    for (record in records) {
+        val transcript = record.transcriptText?.trim().orEmpty()
+        if (transcript.isEmpty()) continue
+
+        val chunks = record.transcriptChunks
+        if (chunks.isNotEmpty() && record.startedAtMs > 0L) {
+            for (chunk in chunks) {
+                if (chunk.text.isBlank()) continue
+                val absoluteStart = record.startedAtMs + chunk.startMs
+                val absoluteEnd = record.startedAtMs + chunk.endMs
+                if (absoluteEnd > periodStartMs && absoluteStart < periodEndMs) {
+                    return true
+                }
+            }
+        } else if (recordOverlaps(record, periodStartMs, periodEndMs)) {
+            return true
+        }
+    }
+    return false
+}
+
+private fun hasPendingTranscription(
+    records: List<SegmentRecord>,
+    periodStartMs: Long,
+    periodEndMs: Long
+): Boolean {
+    for (record in records) {
+        if (!recordOverlaps(record, periodStartMs, periodEndMs)) continue
+        if (!record.audioAvailable) continue
+        if (!record.hasTranscript ||
+            record.status == "READY" ||
+            record.status == "QUEUED" ||
+            record.status == "RETRY_WAIT" ||
+            record.status == "TRANSCRIBING"
+        ) {
+            return true
+        }
+    }
+    return false
+}
+
+private fun recordOverlaps(
+    record: SegmentRecord,
+    periodStartMs: Long,
+    periodEndMs: Long
+): Boolean {
+    val start = if (record.startedAtMs > 0L) record.startedAtMs else record.sortTimeMs
+    if (start <= 0L) return false
+    val end = if (record.endedAtMs > start) record.endedAtMs else start + 1L
+    return start < periodEndMs && end > periodStartMs
 }
 
 private fun queueStateLabel(state: String?): String = when (state) {
