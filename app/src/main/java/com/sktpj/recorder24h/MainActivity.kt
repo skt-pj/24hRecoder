@@ -943,7 +943,7 @@ private fun RecordDetailScreen(record: SegmentRecord) {
             }
         }
         item { TranscriptCard(record) }
-        item { ModelComparisonCard(record) }
+        item { TranscriptionProcessingCard(record) }
         item {
             Card {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -955,7 +955,6 @@ private fun RecordDetailScreen(record: SegmentRecord) {
                     InfoRow("ファイル", record.fileName ?: "-")
                     InfoRow("サイズ", SegmentHistoryRepository.formatBytes(record.fileSizeBytes))
                     InfoRow("文字起こし", record.transcriptModel?.ifBlank { "-" } ?: "-")
-                    if (record.transcribedAtMs > 0L) InfoRow("処理日時", formatDateTime(record.transcribedAtMs))
                     if (!record.reason.isNullOrBlank()) InfoRow("理由", record.reason)
                 }
             }
@@ -1191,7 +1190,7 @@ private fun isManualRetranscriptionState(record: SegmentRecord): Boolean {
 private fun transcriptionActivityMessage(record: SegmentRecord): String? {
     return when {
         record.status == "QUEUED" && record.reason.orEmpty().endsWith("SLOT_WAIT") ->
-            "Worker起動済み。現在はWhisper実行枠を待っています。他のWhisper処理またはモデル比較が実行枠を使用中です。"
+            "Worker起動済み。現在はWhisper実行枠を待っています。他のWhisper処理が実行枠を使用中です。"
         record.status == "QUEUED" && record.reason.orEmpty().endsWith("WORK_ENQUEUED") ->
             "WorkManager登録済み・Worker未開始です。明示制約はbattery-not-lowです。OSスケジューラ待ちとの区別は現時点では計測していません。"
         record.status == "TRANSCRIBING" ->
