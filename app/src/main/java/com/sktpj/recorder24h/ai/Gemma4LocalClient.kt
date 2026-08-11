@@ -95,7 +95,7 @@ object Gemma4LocalClient {
             )
             engine.createConversation(conversationConfig).use { conversation ->
                 val message = conversation.sendMessage(prompt)
-                val analysis = parseJsonObject(message.text)
+                val analysis = parseJsonObject(message.toString())
                 validateRequiredKeys(analysis, requiredKeys)
                 OpenAiLunaClient.Response(
                     "local-${UUID.randomUUID()}",
