@@ -34,13 +34,13 @@ public final class AiAnalysisScheduler {
 
     public static void ensureScheduled(Context context) {
         Context app = context.getApplicationContext();
-        if (!OpenAiKeyStore.hasKey(app)) {
+        if (!AiProviderStore.isConfigured(app)) {
             cancel(app);
             return;
         }
 
         WorkManager manager = WorkManager.getInstance(app);
-        Constraints constraints = networkConstraints();
+        Constraints constraints = analysisConstraints(app);
 
         PeriodicWorkRequest hourly = new PeriodicWorkRequest.Builder(
                 AiAnalysisWorker.class, 1, TimeUnit.HOURS)
@@ -84,11 +84,11 @@ public final class AiAnalysisScheduler {
 
     public static void enqueueNow(Context context) {
         Context app = context.getApplicationContext();
-        if (!OpenAiKeyStore.hasKey(app)) {
+        if (!AiProviderStore.isConfigured(app)) {
             return;
         }
         WorkManager manager = WorkManager.getInstance(app);
-        Constraints constraints = networkConstraints();
+        Constraints constraints = analysisConstraints(app);
 
         manager.enqueueUniqueWork(
                 NOW_HOURLY,
@@ -103,13 +103,13 @@ public final class AiAnalysisScheduler {
 
     static void enqueueRollup(Context context) {
         Context app = context.getApplicationContext();
-        if (!OpenAiKeyStore.hasKey(app)) {
+        if (!AiProviderStore.isConfigured(app)) {
             return;
         }
         WorkManager.getInstance(app).enqueueUniqueWork(
                 NOW_ROLLUP,
                 ExistingWorkPolicy.REPLACE,
-                oneTime(AiRollupWorker.class, null, networkConstraints(), "ai-rollup-now"));
+                oneTime(AiRollupWorker.class, null, analysisConstraints(app), "ai-rollup-now"));
     }
 
     public static void cancel(Context context) {
@@ -122,9 +122,11 @@ public final class AiAnalysisScheduler {
         manager.cancelUniqueWork(NOW_ROLLUP);
     }
 
-    private static Constraints networkConstraints() {
+    private static Constraints analysisConstraints(Context context) {
+        NetworkType networkType = AiInferenceClient.requiresNetwork(context)
+                ? NetworkType.CONNECTED : NetworkType.NOT_REQUIRED;
         return new Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .setRequiredNetworkType(networkType)
                 .build();
     }
 
