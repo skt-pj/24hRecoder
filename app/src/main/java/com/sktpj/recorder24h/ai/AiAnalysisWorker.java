@@ -239,7 +239,6 @@ public final class AiAnalysisWorker extends Worker {
             long periodEndMs,
             String requestType,
             String state,
-            int attempt,
             String message) {
         AiQueueStore.upsert(
                 context,
