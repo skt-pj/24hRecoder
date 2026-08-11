@@ -95,10 +95,11 @@ public final class AiAnalysisWorker extends Worker {
             }
         }
 
-        // Scheduled generation waits until every non-corrupt recording in the target period has
-        // finished transcription. Explicit user generation/re-generation may use any transcripts
-        // already available in the period and does not wait for the remaining recordings.
-        if (!manualRequest && hasPendingScheduledTranscription(context, periodStartMs, periodEndMs)) {
+        // Scheduled generation, and all daily finalization, wait until every non-corrupt
+        // recording in the target period has finished transcription. Explicit manual hourly
+        // generation/re-generation may use any transcripts already available in that hour.
+        if ((daily || !manualRequest)
+                && hasPendingScheduledTranscription(context, periodStartMs, periodEndMs)) {
             setQueueState(context, queueId, kind, periodStartMs, periodEndMs, requestType,
                     AiQueueStore.STATE_WAITING_DATA, "対象期間の文字起こし待ち");
             log(context, "AI_ANALYSIS_WAITING_FOR_TRANSCRIPTION", kind,

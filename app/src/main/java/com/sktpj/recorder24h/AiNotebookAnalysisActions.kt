@@ -94,6 +94,7 @@ internal fun AiNotebookDayAnalysisActions(
         snapshot.dailyQueueState != AiQueueStore.STATE_FAILED
     val dailyActionLabel = when {
         dailyActiveQueue -> notebookQueueStateLabel(snapshot.dailyQueueState)
+        snapshot.dailyPendingTranscription -> "待機"
         snapshot.dailyQueueState == AiQueueStore.STATE_FAILED && snapshot.dailyHasSource -> "再試行"
         dailyHasResult && snapshot.dailyHasSource -> "再分析"
         snapshot.dailyHasSource -> "分析"
@@ -102,6 +103,7 @@ internal fun AiNotebookDayAnalysisActions(
     val dailyCanRun = snapshot.configured &&
         date <= LocalDate.now(zone) &&
         !dailyActiveQueue &&
+        !snapshot.dailyPendingTranscription &&
         snapshot.dailyHasSource
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -123,14 +125,14 @@ internal fun AiNotebookDayAnalysisActions(
                 Text(
                     when {
                         dailyActiveQueue -> notebookQueueStateLabel(snapshot.dailyQueueState)
+                        snapshot.dailyPendingTranscription && dailyHasResult ->
+                            "生成済み・文字起こし待ち"
+                        snapshot.dailyPendingTranscription -> "文字起こし待ち"
                         snapshot.dailyQueueState == AiQueueStore.STATE_FAILED && snapshot.dailyHasSource ->
                             "前回失敗・再試行可能"
                         dailyHasResult && snapshot.dailyHasSource -> "生成済み"
                         dailyHasResult -> "生成済み・元データなし"
-                        snapshot.dailyHasSource && snapshot.dailyPendingTranscription ->
-                            "一部文字起こし待ち・手動分析可能"
                         snapshot.dailyHasSource -> "日次ノート未生成・分析可能"
-                        snapshot.dailyPendingTranscription -> "文字起こし待ち"
                         else -> "データなし"
                     },
                     color = MaterialTheme.colorScheme.onSurfaceVariant
