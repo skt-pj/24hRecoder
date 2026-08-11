@@ -13,11 +13,15 @@ import androidx.work.WorkManager;
 
 import com.sktpj.recorder24h.storage.SegmentRepository;
 import com.sktpj.recorder24h.storage.StoragePolicy;
+import com.sktpj.recorder24h.ui.SegmentHistoryRepository;
+import com.sktpj.recorder24h.ui.SegmentRecord;
 import com.sktpj.recorder24h.util.AppLogger;
 
 import org.json.JSONObject;
 
 import java.io.File;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 public final class TranscriptionScheduler {
@@ -178,6 +182,10 @@ public final class TranscriptionScheduler {
             return 0;
         }
         String currentEngine = LocalWhisperEngine.engineId(context);
+        Map<String, String> currentStates = new HashMap<>();
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            currentStates.put(record.getSegmentId(), record.getStatus());
+        }
         int count = 0;
         for (File file : files) {
             String segmentId = extractSegmentId(file.getName());
@@ -185,8 +193,15 @@ public final class TranscriptionScheduler {
                     TranscriptionRepository.isCurrentEngine(context, segmentId, currentEngine)) {
                 continue;
             }
-            enqueue(context, segmentId, file);
-            count++;
+            String status = currentStates.get(segmentId);
+            if ("QUEUED".equals(status)
+                    || "RETRY_WAIT".equals(status)
+                    || "TRANSCRIBING".equals(status)) {
+                continue;
+            }
+            if (enqueueInternal(context, segmentId, file, false, ExistingWorkPolicy.KEEP)) {
+                count++;
+            }
         }
         return count;
     }

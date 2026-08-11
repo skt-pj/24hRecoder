@@ -50,6 +50,8 @@ private data class NotebookHourlyActionRow(
 
 private data class NotebookDayActionSnapshot(
     val configured: Boolean,
+    val dailyHasSource: Boolean,
+    val dailyPendingTranscription: Boolean,
     val dailyQueueState: String?,
     val rows: List<NotebookHourlyActionRow>
 )
@@ -67,6 +69,8 @@ internal fun AiNotebookDayAnalysisActions(
         mutableStateOf(
             NotebookDayActionSnapshot(
                 configured = AiProviderStore.isConfigured(context),
+                dailyHasSource = false,
+                dailyPendingTranscription = false,
                 dailyQueueState = null,
                 rows = emptyList()
             )
@@ -90,13 +94,15 @@ internal fun AiNotebookDayAnalysisActions(
         snapshot.dailyQueueState != AiQueueStore.STATE_FAILED
     val dailyActionLabel = when {
         dailyActiveQueue -> notebookQueueStateLabel(snapshot.dailyQueueState)
-        snapshot.dailyQueueState == AiQueueStore.STATE_FAILED -> "再試行"
-        dailyHasResult -> "再分析"
-        else -> "分析"
+        snapshot.dailyQueueState == AiQueueStore.STATE_FAILED && snapshot.dailyHasSource -> "再試行"
+        dailyHasResult && snapshot.dailyHasSource -> "再分析"
+        snapshot.dailyHasSource -> "分析"
+        else -> "実行不可"
     }
     val dailyCanRun = snapshot.configured &&
         date <= LocalDate.now(zone) &&
-        !dailyActiveQueue
+        !dailyActiveQueue &&
+        snapshot.dailyHasSource
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
@@ -117,9 +123,15 @@ internal fun AiNotebookDayAnalysisActions(
                 Text(
                     when {
                         dailyActiveQueue -> notebookQueueStateLabel(snapshot.dailyQueueState)
-                        snapshot.dailyQueueState == AiQueueStore.STATE_FAILED -> "前回失敗・再試行可能"
-                        dailyHasResult -> "生成済み"
-                        else -> "日次ノート未生成"
+                        snapshot.dailyQueueState == AiQueueStore.STATE_FAILED && snapshot.dailyHasSource ->
+                            "前回失敗・再試行可能"
+                        dailyHasResult && snapshot.dailyHasSource -> "生成済み"
+                        dailyHasResult -> "生成済み・元データなし"
+                        snapshot.dailyHasSource && snapshot.dailyPendingTranscription ->
+                            "一部文字起こし待ち・手動分析可能"
+                        snapshot.dailyHasSource -> "日次ノート未生成・分析可能"
+                        snapshot.dailyPendingTranscription -> "文字起こし待ち"
+                        else -> "データなし"
                     },
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -193,7 +205,6 @@ private fun NotebookHourlyActionCard(
     val activeQueue = row.queueState != null && row.queueState != AiQueueStore.STATE_FAILED
     val canRun = configured &&
         row.periodFinished &&
-        !row.pendingTranscription &&
         !activeQueue &&
         row.hasSource
 
@@ -201,12 +212,13 @@ private fun NotebookHourlyActionCard(
         activeQueue -> notebookQueueStateLabel(row.queueState)
         !row.periodFinished && row.periodStarted -> "進行中"
         !row.periodStarted -> "未到達"
-        row.pendingTranscription -> "文字起こし待ち"
         row.queueState == AiQueueStore.STATE_FAILED && row.hasSource -> "前回失敗・再試行可能"
         row.queueState == AiQueueStore.STATE_FAILED -> "前回失敗・元データなし"
         row.hasResult && row.hasSource -> "生成済み"
         row.hasResult -> "生成済み・元データなし"
+        row.hasSource && row.pendingTranscription -> "一部文字起こし待ち・手動実行可能"
         row.hasSource -> "未生成・実行可能"
+        row.pendingTranscription -> "文字起こし待ち"
         else -> "データなし"
     }
 
@@ -214,11 +226,11 @@ private fun NotebookHourlyActionCard(
         activeQueue -> notebookQueueStateLabel(row.queueState)
         !row.periodFinished && row.periodStarted -> "進行中"
         !row.periodStarted -> "未到達"
-        row.pendingTranscription -> "待機"
         row.queueState == AiQueueStore.STATE_FAILED && row.hasSource -> "再試行"
         row.hasResult && row.hasSource -> "再実行"
         row.hasResult -> "再実行不可"
         row.hasSource -> "実行"
+        row.pendingTranscription -> "待機"
         else -> "実行不可"
     }
 
@@ -269,6 +281,7 @@ private fun loadNotebookDayActionSnapshot(
     val dailyStart = date.atStartOfDay(zone)
     val dailyEnd = dailyStart.plusDays(1)
     val dailyStartMs = dailyStart.toInstant().toEpochMilli()
+    val dailyEndMs = dailyEnd.toInstant().toEpochMilli()
     val dailyQueueState = queueEntries.firstOrNull {
         it.kind == AiAnalysisScheduler.KIND_DAILY && it.periodStartMs == dailyStartMs
     }?.state
@@ -296,6 +309,8 @@ private fun loadNotebookDayActionSnapshot(
 
     return NotebookDayActionSnapshot(
         configured = AiProviderStore.isConfigured(context),
+        dailyHasSource = notebookHasTranscriptSource(records, dailyStartMs, dailyEndMs),
+        dailyPendingTranscription = notebookHasPendingTranscription(records, dailyStartMs, dailyEndMs),
         dailyQueueState = dailyQueueState,
         rows = rows
     )
@@ -334,6 +349,7 @@ private fun notebookHasPendingTranscription(
 ): Boolean {
     for (record in records) {
         if (!notebookRecordOverlaps(record, periodStartMs, periodEndMs)) continue
+        if (record.status == "CORRUPT") continue
         if (!record.audioAvailable) continue
         if (!record.hasTranscript ||
             record.status == "READY" ||

@@ -95,10 +95,18 @@ private fun TranscriptionQueueTab(
 ) {
     val queued = remember(records) {
         records
-            .filter { it.status == "QUEUED" || it.status == "RETRY_WAIT" }
-            .sortedBy {
-                if (it.queueEnqueuedAtMs > 0L) it.queueEnqueuedAtMs else it.stateChangedAtMs
+            .filter {
+                it.status == "QUEUED" ||
+                    it.status == "RETRY_WAIT" ||
+                    it.status == "TRANSCRIBING"
             }
+            .sortedWith(
+                compareBy<SegmentRecord> {
+                    if (it.status == "TRANSCRIBING") 0 else 1
+                }.thenBy {
+                    if (it.queueEnqueuedAtMs > 0L) it.queueEnqueuedAtMs else it.stateChangedAtMs
+                }
+            )
     }
 
     if (queued.isEmpty()) {
@@ -136,7 +144,11 @@ private fun TranscriptionQueueRow(
                 .fillMaxWidth()
                 .combinedClickable(
                     onClick = onOpen,
-                    onLongClick = { menuExpanded = true }
+                    onLongClick = {
+                        if (record.status != "TRANSCRIBING") {
+                            menuExpanded = true
+                        }
+                    }
                 )
                 .padding(horizontal = 18.dp, vertical = 15.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -149,7 +161,7 @@ private fun TranscriptionQueueRow(
             )
             Spacer(Modifier.width(12.dp))
             Text(
-                transcriptionQueueSourceLabel(record),
+                transcriptionQueueStatusLabel(record),
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1
@@ -301,6 +313,16 @@ private fun aiQueueStateLabel(state: String): String = when (state) {
     AiQueueStore.STATE_QUEUED -> "実行待ち"
     AiQueueStore.STATE_FAILED -> "失敗"
     else -> state
+}
+
+private fun transcriptionQueueStatusLabel(record: SegmentRecord): String {
+    val source = transcriptionQueueSourceLabel(record)
+    val state = when (record.status) {
+        "TRANSCRIBING" -> "文字起こし中"
+        "RETRY_WAIT" -> "再試行待ち"
+        else -> "実行待ち"
+    }
+    return "$state • $source"
 }
 
 private fun transcriptionQueueSourceLabel(record: SegmentRecord): String =

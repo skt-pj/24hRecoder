@@ -60,6 +60,7 @@ public final class AiAnalysisWorker extends Worker {
         if (requestType == null || requestType.isEmpty()) {
             requestType = AiQueueStore.REQUEST_SCHEDULED;
         }
+        boolean manualRequest = AiQueueStore.REQUEST_MANUAL.equals(requestType);
         boolean force = getInputData().getBoolean(AiAnalysisScheduler.EXTRA_FORCE, false);
         boolean daily = AiAnalysisScheduler.KIND_DAILY.equals(kind);
 
@@ -94,7 +95,10 @@ public final class AiAnalysisWorker extends Worker {
             }
         }
 
-        if (AiDailySourceCleanup.hasPendingTranscription(context, periodStartMs, periodEndMs)) {
+        // Scheduled generation waits until every non-corrupt recording in the target period has
+        // finished transcription. Explicit user generation/re-generation may use any transcripts
+        // already available in the period and does not wait for the remaining recordings.
+        if (!manualRequest && hasPendingScheduledTranscription(context, periodStartMs, periodEndMs)) {
             setQueueState(context, queueId, kind, periodStartMs, periodEndMs, requestType,
                     AiQueueStore.STATE_WAITING_DATA, "対象期間の文字起こし待ち");
             log(context, "AI_ANALYSIS_WAITING_FOR_TRANSCRIPTION", kind,
@@ -246,6 +250,33 @@ public final class AiAnalysisWorker extends Worker {
                 state,
                 getRunAttemptCount(),
                 message);
+    }
+
+    private static boolean hasPendingScheduledTranscription(
+            Context context,
+            long periodStartMs,
+            long periodEndMs) {
+        List<SegmentRecord> records = SegmentHistoryRepository.load(context);
+        for (SegmentRecord record : records) {
+            if (!overlaps(record, periodStartMs, periodEndMs)) {
+                continue;
+            }
+            if ("CORRUPT".equals(record.getStatus())) {
+                continue;
+            }
+            if (!record.getAudioAvailable()) {
+                continue;
+            }
+            String status = record.getStatus();
+            if (!record.getHasTranscript()
+                    || "READY".equals(status)
+                    || "QUEUED".equals(status)
+                    || "RETRY_WAIT".equals(status)
+                    || "TRANSCRIBING".equals(status)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean hasAnyRecording(Context context, long periodStartMs, long periodEndMs) {
