@@ -1,6 +1,5 @@
 package com.sktpj.recorder24h
 
-import android.content.Context
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
@@ -34,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.sktpj.recorder24h.ai.AiAnalysisScheduler
 import com.sktpj.recorder24h.ai.AiQueueStore
 import com.sktpj.recorder24h.ui.SegmentRecord
 import kotlinx.coroutines.Dispatchers
@@ -174,6 +174,7 @@ private fun TranscriptionQueueRow(
 
 @Composable
 private fun AiSummaryQueueTab(items: List<AiQueueStore.Entry>) {
+    val context = LocalContext.current
     if (items.isEmpty()) {
         EmptyQueue("AI要約キューは空です")
         return
@@ -184,37 +185,80 @@ private fun AiSummaryQueueTab(items: List<AiQueueStore.Entry>) {
         contentPadding = PaddingValues(vertical = 4.dp)
     ) {
         itemsIndexed(items, key = { _, item -> item.id }) { _, item ->
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        "${aiKindLabel(item.kind)}  ${aiPeriodLabel(item)}",
-                        style = MaterialTheme.typography.bodyLarge
-                    )
-                    Text(
-                        buildString {
-                            append(if (item.requestType == AiQueueStore.REQUEST_MANUAL) "ユーザー指定" else "定期実行")
-                            if (item.message.isNotBlank()) append(" • ").append(item.message)
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+            AiSummaryQueueRow(
+                item = item,
+                onRemove = {
+                    AiAnalysisScheduler.removeTarget(
+                        context,
+                        item.kind,
+                        item.periodStartMs,
+                        item.periodEndMs
                     )
                 }
-                Spacer(Modifier.width(12.dp))
+            )
+            HorizontalDivider()
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AiSummaryQueueRow(
+    item: AiQueueStore.Entry,
+    onRemove: () -> Unit
+) {
+    var menuExpanded by remember(item.id) { mutableStateOf(false) }
+
+    Box {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = {},
+                    onLongClick = { menuExpanded = true }
+                )
+                .padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
                 Text(
-                    aiQueueStateLabel(item.state),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (item.state == AiQueueStore.STATE_FAILED) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
+                    "${aiKindLabel(item.kind)}  ${aiPeriodLabel(item)}",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    buildString {
+                        append(if (item.requestType == AiQueueStore.REQUEST_MANUAL) "ユーザー指定" else "定期実行")
+                        if (item.message.isNotBlank()) append(" • ").append(item.message)
                     },
-                    maxLines = 1
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            HorizontalDivider()
+            Spacer(Modifier.width(12.dp))
+            Text(
+                aiQueueStateLabel(item.state),
+                style = MaterialTheme.typography.labelLarge,
+                color = if (item.state == AiQueueStore.STATE_FAILED) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1
+            )
+        }
+
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text("AI要約キューから削除") },
+                leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+                onClick = {
+                    menuExpanded = false
+                    onRemove()
+                }
+            )
         }
     }
 }
