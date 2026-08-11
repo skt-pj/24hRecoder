@@ -37,7 +37,7 @@ import java.util.Locale
  * elapsed successful transcription processing time derived from the segment journal.
  */
 @Composable
-fun ModelComparisonCard(record: SegmentRecord) {
+fun TranscriptionProcessingCard(record: SegmentRecord) {
     val context = LocalContext.current
     var processingMs by remember(record.segmentId, record.transcribedAtMs) {
         mutableStateOf<Long?>(null)
