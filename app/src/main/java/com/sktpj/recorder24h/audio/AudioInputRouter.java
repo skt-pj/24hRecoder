@@ -21,8 +21,8 @@ public final class AudioInputRouter {
     private AudioInputRouter() {
     }
 
-    private static final long BT_RETRY_AFTER_MS = 5_000L;
-    private static final long BT_FAIL_AFTER_MS = 30_000L;
+    // Android's communication-routing guide explicitly allows up to 30 seconds for route activation.
+    private static final long BT_ROUTE_TIMEOUT_MS = 30_000L;
     private static volatile WeakReference<AudioRecord> activeRecordRef = new WeakReference<>(null);
 
     public static final class DeviceOption {
@@ -50,8 +50,10 @@ public final class AudioInputRouter {
         public final String fallbackReason;
         public final boolean accepted;
 
-        ApplyResult(long settingsUpdatedAtMs, AudioDeviceInfo preferred,
-                    String fallbackReason, boolean accepted) {
+        ApplyResult(long settingsUpdatedAtMs,
+                    AudioDeviceInfo preferred,
+                    String fallbackReason,
+                    boolean accepted) {
             this.settingsUpdatedAtMs = settingsUpdatedAtMs;
             this.preferredKey = preferred == null ? "system-default" : deviceKey(preferred);
             this.preferredLabel = preferred == null ? "システム既定" : deviceLabel(preferred);
@@ -76,15 +78,18 @@ public final class AudioInputRouter {
         final AudioDeviceInfo requestedDevice;
         final AudioDeviceInfo currentDevice;
         final boolean accepted;
+        final int attempts;
         final String failureReason;
 
         CommunicationResult(AudioDeviceInfo requestedDevice,
                             AudioDeviceInfo currentDevice,
                             boolean accepted,
+                            int attempts,
                             String failureReason) {
             this.requestedDevice = requestedDevice;
             this.currentDevice = currentDevice;
             this.accepted = accepted;
+            this.attempts = attempts;
             this.failureReason = failureReason;
         }
     }
@@ -111,14 +116,15 @@ public final class AudioInputRouter {
         boolean communicationRequired = isBluetoothMic(desired);
         boolean communicationAccepted = !communicationRequired;
         AudioDeviceInfo communicationDevice = null;
+        int communicationAttempts = 0;
         long now = System.currentTimeMillis();
-        int retryCount = 0;
         String routeStatus = communicationRequired ? "PENDING" : "REQUESTED";
 
         if (communicationRequired) {
-            CommunicationResult communication = requestCommunicationRoute(context, desired, trigger, false);
+            CommunicationResult communication = requestCommunicationRoute(context, desired, trigger);
             communicationDevice = communication.requestedDevice;
             communicationAccepted = communication.accepted;
+            communicationAttempts = communication.attempts;
             fallbackReason = appendReason(fallbackReason, communication.failureReason);
             if (!communicationAccepted) {
                 preferred = selection.builtIn;
@@ -158,11 +164,19 @@ public final class AudioInputRouter {
                 fallbackReason,
                 now,
                 now,
-                retryCount,
+                communicationAttempts,
                 routeStatus);
-        logRequested(context, settings, desired, preferred, preferredAccepted,
-                communicationDevice, communicationRequired, communicationAccepted,
-                fallbackReason, trigger);
+        logRequested(context,
+                settings,
+                desired,
+                preferred,
+                preferredAccepted,
+                communicationDevice,
+                communicationRequired,
+                communicationAccepted,
+                communicationAttempts,
+                fallbackReason,
+                trigger);
 
         try {
             AudioDeviceInfo routed = record.getRoutedDevice();
@@ -192,6 +206,12 @@ public final class AudioInputRouter {
         verifyActualRoute(context, actual, trigger);
     }
 
+    /** Clear a communication-route request when the recorder session ends. */
+    public static void releaseCommunicationRoute(Context context, String trigger) {
+        clearCommunicationRoute(context, trigger);
+        activeRecordRef = new WeakReference<>(null);
+    }
+
     private static void verifyActualRoute(Context context, AudioDeviceInfo actual, String trigger) {
         JSONObject state = AudioInputRouteStateStore.read(context);
         String desiredKey = state.optString("desiredDeviceKey", "");
@@ -208,7 +228,8 @@ public final class AudioInputRouter {
                 try {
                     JSONObject d = new JSONObject();
                     d.put("trigger", trigger);
-                    d.put("elapsedMs", Math.max(0L, now - state.optLong("routeRequestStartedAtMs", now)));
+                    d.put("elapsedMs", Math.max(0L,
+                            now - state.optLong("routeRequestStartedAtMs", now)));
                     putDevice(d, "actual", actual);
                     AppLogger.event(context, "AUDIO_INPUT_ROUTE_VERIFIED", d);
                 } catch (Exception ignored) {
@@ -222,82 +243,24 @@ public final class AudioInputRouter {
         long now = System.currentTimeMillis();
         long startedAt = state.optLong("routeRequestStartedAtMs", now);
         long ageMs = Math.max(0L, now - startedAt);
-        int retryCount = state.optInt("routeRetryCount", 0);
-
-        if (retryCount == 0 && ageMs >= BT_RETRY_AFTER_MS) {
-            retryBluetoothRoute(context, state, actual, trigger);
-            return;
-        }
-
-        if (ageMs >= BT_FAIL_AFTER_MS) {
+        if (ageMs >= BT_ROUTE_TIMEOUT_MS) {
             fallbackBluetoothRoute(context, state, actual, "BT_ROUTE_TIMEOUT");
             return;
         }
 
-        if (!"HEARTBEAT".equals(trigger) || retryCount == 0) {
+        // setCommunicationDevice() returning true only means Android accepted the request.
+        // Keep the route pending until getRoutedDevice/AudioRecordingConfiguration proves the source.
+        if (!"HEARTBEAT".equals(trigger)) {
             try {
                 JSONObject d = new JSONObject();
                 d.put("trigger", trigger);
                 d.put("elapsedMs", ageMs);
-                d.put("retryCount", retryCount);
+                d.put("communicationAttempts", state.optInt("routeRetryCount", 0));
                 d.put("desiredKey", desiredKey);
                 putDevice(d, "actual", actual);
                 AppLogger.event(context, "AUDIO_INPUT_ROUTE_PENDING", d);
             } catch (Exception ignored) {
             }
-        }
-    }
-
-    private static void retryBluetoothRoute(Context context,
-                                            JSONObject state,
-                                            AudioDeviceInfo actual,
-                                            String trigger) {
-        AudioRecord record = activeRecordRef.get();
-        AudioInputSettingsStore.Settings settings = AudioInputSettingsStore.read(context);
-        Selection selection = resolve(context, settings);
-        AudioDeviceInfo desired = selection.device;
-        if (record == null || !isBluetoothMic(desired)) {
-            fallbackBluetoothRoute(context, state, actual, "BT_ROUTE_RETRY_SOURCE_UNAVAILABLE");
-            return;
-        }
-
-        CommunicationResult communication = requestCommunicationRoute(
-                context, desired, "VERIFY_RETRY_" + trigger, true);
-        boolean preferredAccepted = setPreferred(record, desired);
-        String failureReason = communication.failureReason;
-        if (!communication.accepted) {
-            failureReason = appendReason(failureReason, "BT_COMMUNICATION_RETRY_REJECTED");
-        }
-        if (!preferredAccepted) {
-            failureReason = appendReason(failureReason, "PREFERRED_BT_RETRY_REJECTED");
-        }
-
-        if (!communication.accepted || !preferredAccepted) {
-            fallbackBluetoothRoute(context, state, actual,
-                    failureReason == null ? "BT_ROUTE_RETRY_REJECTED" : failureReason);
-            return;
-        }
-
-        long now = System.currentTimeMillis();
-        AudioInputRouteStateStore.updateAttempt(
-                context,
-                desired,
-                true,
-                communication.requestedDevice,
-                true,
-                now,
-                1,
-                "PENDING_RETRY",
-                null);
-        try {
-            JSONObject d = new JSONObject();
-            d.put("trigger", trigger);
-            d.put("elapsedMs", Math.max(0L, now - state.optLong("routeRequestStartedAtMs", now)));
-            putDevice(d, "desired", desired);
-            putDevice(d, "actual", actual);
-            putDevice(d, "communication", communication.requestedDevice);
-            AppLogger.event(context, "AUDIO_INPUT_ROUTE_RETRY", d);
-        } catch (Exception ignored) {
         }
     }
 
@@ -331,7 +294,8 @@ public final class AudioInputRouter {
         try {
             JSONObject d = new JSONObject();
             d.put("reason", reason);
-            d.put("elapsedMs", Math.max(0L, now - state.optLong("routeRequestStartedAtMs", now)));
+            d.put("elapsedMs", Math.max(0L,
+                    now - state.optLong("routeRequestStartedAtMs", now)));
             putDevice(d, "actual", actual);
             putDevice(d, "fallback", preferred);
             AppLogger.event(context, "AUDIO_INPUT_ROUTE_FALLBACK", d);
@@ -341,58 +305,129 @@ public final class AudioInputRouter {
 
     private static CommunicationResult requestCommunicationRoute(Context context,
                                                                  AudioDeviceInfo bluetoothSource,
-                                                                 String trigger,
-                                                                 boolean clearBeforeRequest) {
+                                                                 String trigger) {
         AudioManager manager = context.getSystemService(AudioManager.class);
         if (manager == null) {
-            return new CommunicationResult(null, null, false, "AUDIO_MANAGER_UNAVAILABLE");
+            return new CommunicationResult(null, null, false, 0, "AUDIO_MANAGER_UNAVAILABLE");
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             AudioDeviceInfo requested = findMatchingCommunicationDevice(manager, bluetoothSource);
             if (requested == null) {
-                logCommunicationRequest(context, trigger, bluetoothSource, null, null,
-                        false, "COMMUNICATION_DEVICE_NOT_AVAILABLE", manager);
-                return new CommunicationResult(null, manager.getCommunicationDevice(), false,
+                AudioDeviceInfo current = manager.getCommunicationDevice();
+                logCommunicationRequest(context,
+                        trigger,
+                        bluetoothSource,
+                        null,
+                        current,
+                        false,
+                        0,
+                        "COMMUNICATION_DEVICE_NOT_AVAILABLE",
+                        manager);
+                return new CommunicationResult(null,
+                        current,
+                        false,
+                        0,
                         "COMMUNICATION_DEVICE_NOT_AVAILABLE");
             }
 
             try {
-                if (clearBeforeRequest) manager.clearCommunicationDevice();
                 boolean accepted = manager.setCommunicationDevice(requested);
                 AudioDeviceInfo current = manager.getCommunicationDevice();
-                String failure = accepted ? null : "SET_COMMUNICATION_DEVICE_REJECTED";
-                logCommunicationRequest(context, trigger, bluetoothSource, requested, current,
-                        accepted, failure, manager);
-                return new CommunicationResult(requested, current, accepted, failure);
+                logCommunicationRequest(context,
+                        trigger,
+                        bluetoothSource,
+                        requested,
+                        current,
+                        accepted,
+                        1,
+                        accepted ? null : "SET_COMMUNICATION_DEVICE_REJECTED",
+                        manager);
+                if (accepted) {
+                    return new CommunicationResult(requested, current, true, 1, null);
+                }
+
+                // Android's guide says that on an error, clear the communication device and retry.
+                manager.clearCommunicationDevice();
+                boolean retryAccepted = manager.setCommunicationDevice(requested);
+                AudioDeviceInfo retryCurrent = manager.getCommunicationDevice();
+                String failure = retryAccepted ? null : "SET_COMMUNICATION_DEVICE_RETRY_REJECTED";
+                logCommunicationRequest(context,
+                        trigger + "_RETRY_AFTER_ERROR",
+                        bluetoothSource,
+                        requested,
+                        retryCurrent,
+                        retryAccepted,
+                        2,
+                        failure,
+                        manager);
+                return new CommunicationResult(requested,
+                        retryCurrent,
+                        retryAccepted,
+                        2,
+                        failure);
             } catch (SecurityException security) {
-                String failure = "SET_COMMUNICATION_DEVICE_SECURITY_" + security.getClass().getSimpleName();
-                logCommunicationRequest(context, trigger, bluetoothSource, requested, null,
-                        false, failure, manager);
-                return new CommunicationResult(requested, null, false, failure);
+                String failure = "SET_COMMUNICATION_DEVICE_SECURITY_"
+                        + security.getClass().getSimpleName();
+                logCommunicationRequest(context,
+                        trigger,
+                        bluetoothSource,
+                        requested,
+                        null,
+                        false,
+                        1,
+                        failure,
+                        manager);
+                return new CommunicationResult(requested, null, false, 1, failure);
             } catch (RuntimeException error) {
-                String failure = "SET_COMMUNICATION_DEVICE_EXCEPTION_" + error.getClass().getSimpleName();
-                logCommunicationRequest(context, trigger, bluetoothSource, requested, null,
-                        false, failure, manager);
-                return new CommunicationResult(requested, null, false, failure);
+                String failure = "SET_COMMUNICATION_DEVICE_EXCEPTION_"
+                        + error.getClass().getSimpleName();
+                logCommunicationRequest(context,
+                        trigger,
+                        bluetoothSource,
+                        requested,
+                        null,
+                        false,
+                        1,
+                        failure,
+                        manager);
+                return new CommunicationResult(requested, null, false, 1, failure);
             }
         }
 
         if (bluetoothSource.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) {
             try {
-                if (clearBeforeRequest) manager.stopBluetoothSco();
                 manager.startBluetoothSco();
-                logCommunicationRequest(context, trigger, bluetoothSource, null, null,
-                        true, null, manager);
-                return new CommunicationResult(null, null, true, null);
+                logCommunicationRequest(context,
+                        trigger,
+                        bluetoothSource,
+                        null,
+                        null,
+                        true,
+                        1,
+                        null,
+                        manager);
+                return new CommunicationResult(null, null, true, 1, null);
             } catch (RuntimeException error) {
-                String failure = "START_BLUETOOTH_SCO_EXCEPTION_" + error.getClass().getSimpleName();
-                logCommunicationRequest(context, trigger, bluetoothSource, null, null,
-                        false, failure, manager);
-                return new CommunicationResult(null, null, false, failure);
+                String failure = "START_BLUETOOTH_SCO_EXCEPTION_"
+                        + error.getClass().getSimpleName();
+                logCommunicationRequest(context,
+                        trigger,
+                        bluetoothSource,
+                        null,
+                        null,
+                        false,
+                        1,
+                        failure,
+                        manager);
+                return new CommunicationResult(null, null, false, 1, failure);
             }
         }
-        return new CommunicationResult(null, null, false, "BT_COMMUNICATION_API_UNAVAILABLE");
+        return new CommunicationResult(null,
+                null,
+                false,
+                0,
+                "BT_COMMUNICATION_API_UNAVAILABLE");
     }
 
     private static void clearCommunicationRoute(Context context, String trigger) {
@@ -403,10 +438,13 @@ public final class AudioInputRouter {
                 AudioDeviceInfo before = manager.getCommunicationDevice();
                 manager.clearCommunicationDevice();
                 if (before != null && isBluetoothAudioDevice(before)) {
-                    JSONObject d = new JSONObject();
-                    d.put("trigger", trigger);
-                    putDevice(d, "previousCommunication", before);
-                    AppLogger.event(context, "AUDIO_INPUT_COMMUNICATION_ROUTE_CLEARED", d);
+                    try {
+                        JSONObject d = new JSONObject();
+                        d.put("trigger", trigger);
+                        putDevice(d, "previousCommunication", before);
+                        AppLogger.event(context, "AUDIO_INPUT_COMMUNICATION_ROUTE_CLEARED", d);
+                    } catch (Exception ignored) {
+                    }
                 }
             } else {
                 manager.stopBluetoothSco();
@@ -528,14 +566,6 @@ public final class AudioInputRouter {
         return null;
     }
 
-    private static AudioDeviceInfo findInputByKey(Context context, String key) {
-        if (key == null || key.isEmpty()) return null;
-        for (AudioDeviceInfo device : getInputs(context)) {
-            if (key.equals(deviceKey(device))) return device;
-        }
-        return null;
-    }
-
     private static List<AudioDeviceInfo> getInputs(Context context) {
         List<AudioDeviceInfo> inputs = new ArrayList<>();
         AudioManager manager = context.getSystemService(AudioManager.class);
@@ -573,6 +603,7 @@ public final class AudioInputRouter {
                                      AudioDeviceInfo communicationDevice,
                                      boolean communicationRequired,
                                      boolean communicationAccepted,
+                                     int communicationAttempts,
                                      String fallbackReason,
                                      String trigger) {
         try {
@@ -584,6 +615,7 @@ public final class AudioInputRouter {
             d.put("preferredAccepted", preferredAccepted);
             d.put("communicationRequired", communicationRequired);
             d.put("communicationAccepted", communicationAccepted);
+            d.put("communicationAttempts", communicationAttempts);
             d.put("fallbackReason", fallbackReason == null ? JSONObject.NULL : fallbackReason);
             putDevice(d, "desired", desired);
             putDevice(d, "preferred", preferred);
@@ -608,12 +640,14 @@ public final class AudioInputRouter {
                                                 AudioDeviceInfo requested,
                                                 AudioDeviceInfo current,
                                                 boolean accepted,
+                                                int attempt,
                                                 String failureReason,
                                                 AudioManager manager) {
         try {
             JSONObject d = new JSONObject();
             d.put("trigger", trigger);
             d.put("accepted", accepted);
+            d.put("attempt", attempt);
             d.put("failureReason", failureReason == null ? JSONObject.NULL : failureReason);
             putDevice(d, "source", source);
             putDevice(d, "requestedCommunication", requested);
