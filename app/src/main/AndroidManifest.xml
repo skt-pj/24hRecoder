@@ -41,6 +41,10 @@
         </activity>
 
         <activity
+            android:name=".AiRerunActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".DriveLogSetupActivity"
             android:exported="false" />
 
