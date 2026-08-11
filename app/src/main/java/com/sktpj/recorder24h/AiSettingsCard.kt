@@ -31,12 +31,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.sktpj.recorder24h.ai.AiAnalysisScheduler
 import com.sktpj.recorder24h.ai.AiProviderStore
 import com.sktpj.recorder24h.ai.Gemma4ModelManager
 import com.sktpj.recorder24h.ai.OpenAiKeyStore
 import com.sktpj.recorder24h.util.AppLogger
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 @Composable
 fun AiSettingsCard() {
@@ -46,12 +50,46 @@ fun AiSettingsCard() {
     var provider by remember { mutableStateOf(AiProviderStore.getProvider(context)) }
     var gemmaReady by remember { mutableStateOf(Gemma4ModelManager.isReady(context)) }
     var gemmaBytes by remember { mutableStateOf(Gemma4ModelManager.downloadedBytes(context)) }
+    var gemmaWorkState by remember { mutableStateOf<WorkInfo.State?>(null) }
+    var gemmaPhase by remember { mutableStateOf<String?>(null) }
+    var gemmaProgressMessage by remember { mutableStateOf<String?>(null) }
+    var gemmaError by remember { mutableStateOf<String?>(null) }
+    var downloadRequested by remember { mutableStateOf(false) }
 
     LaunchedEffect(provider) {
         while (true) {
-            gemmaReady = Gemma4ModelManager.isReady(context)
-            gemmaBytes = Gemma4ModelManager.downloadedBytes(context)
-            delay(1_500L)
+            val readyNow = Gemma4ModelManager.isReady(context)
+            val fileBytes = Gemma4ModelManager.downloadedBytes(context)
+            val workInfo = try {
+                withContext(Dispatchers.IO) {
+                    WorkManager.getInstance(context)
+                        .getWorkInfosForUniqueWork(Gemma4ModelManager.DOWNLOAD_WORK_NAME)
+                        .get()
+                        .lastOrNull()
+                }
+            } catch (_: Exception) {
+                null
+            }
+
+            gemmaReady = readyNow
+            gemmaWorkState = workInfo?.state
+            gemmaPhase = workInfo?.progress?.getString(Gemma4ModelManager.PROGRESS_PHASE)
+            gemmaProgressMessage = workInfo?.progress?.getString(Gemma4ModelManager.PROGRESS_MESSAGE)
+            gemmaError = workInfo?.outputData?.getString(Gemma4ModelManager.OUTPUT_ERROR)
+            val workerBytes = workInfo?.progress?.getLong(
+                Gemma4ModelManager.PROGRESS_DOWNLOADED_BYTES,
+                -1L
+            ) ?: -1L
+            gemmaBytes = maxOf(fileBytes, workerBytes.coerceAtLeast(0L))
+
+            downloadRequested = when {
+                readyNow -> false
+                workInfo?.state == WorkInfo.State.ENQUEUED -> true
+                workInfo?.state == WorkInfo.State.BLOCKED -> true
+                workInfo?.state == WorkInfo.State.RUNNING -> true
+                else -> downloadRequested && workInfo == null
+            }
+            delay(500L)
         }
     }
 
@@ -146,10 +184,38 @@ fun AiSettingsCard() {
             } else {
                 val progress = (gemmaBytes.toFloat() /
                     Gemma4ModelManager.EXPECTED_BYTES.toFloat()).coerceIn(0f, 1f)
+                val percent = (progress * 100f).toInt()
+                val isDownloadActive = downloadRequested ||
+                    gemmaWorkState == WorkInfo.State.ENQUEUED ||
+                    gemmaWorkState == WorkInfo.State.BLOCKED ||
+                    gemmaWorkState == WorkInfo.State.RUNNING
+
                 Text(
                     when {
                         gemmaReady -> "Gemma 4 E2Bモデルは準備済みです。"
-                        gemmaBytes > 0L -> "Gemma 4 E2Bモデルを取得中です。"
+                        gemmaWorkState == WorkInfo.State.RUNNING &&
+                            gemmaPhase == Gemma4ModelManager.PHASE_VERIFYING ->
+                            "ダウンロード完了。モデルファイルを検証中です。"
+                        gemmaWorkState == WorkInfo.State.RUNNING &&
+                            gemmaPhase == Gemma4ModelManager.PHASE_STARTING ->
+                            "モデル取得を開始しています。配布サーバーへ接続中です。"
+                        gemmaWorkState == WorkInfo.State.RUNNING ->
+                            "モデル取得中: ${percent}%"
+                        gemmaWorkState == WorkInfo.State.ENQUEUED &&
+                            gemmaPhase == Gemma4ModelManager.PHASE_RETRYING ->
+                            "一時的な失敗が発生しました。自動再試行を待っています。"
+                        gemmaWorkState == WorkInfo.State.ENQUEUED ->
+                            "モデル取得の開始待ちです。ネットワーク接続を確認しています。"
+                        gemmaWorkState == WorkInfo.State.BLOCKED ->
+                            "モデル取得の開始条件を待っています。"
+                        gemmaWorkState == WorkInfo.State.FAILED ->
+                            "モデル取得に失敗しました。"
+                        gemmaWorkState == WorkInfo.State.CANCELLED ->
+                            "モデル取得はキャンセルされました。続きから再開できます。"
+                        isDownloadActive ->
+                            "モデル取得を開始しています。"
+                        gemmaBytes > 0L ->
+                            "取得途中のモデルがあります。続きから再開できます。"
                         else -> "Gemma 4 E2Bモデルを端末へ取得してください。"
                     },
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -158,34 +224,89 @@ fun AiSettingsCard() {
                     "モデルサイズ: 2.59 GB / 保存後のAI分析はオフラインで実行できます。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (!gemmaReady && gemmaBytes > 0L) {
-                    LinearProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier.fillMaxWidth()
-                    )
+
+                if (!gemmaReady && (isDownloadActive || gemmaBytes > 0L)) {
+                    if (gemmaBytes > 0L) {
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            "${percent}%  ${formatModelGb(gemmaBytes)} / ${formatModelGb(Gemma4ModelManager.EXPECTED_BYTES)}",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text(
+                            "接続準備中…",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                if (gemmaWorkState == WorkInfo.State.FAILED && !gemmaError.isNullOrBlank()) {
                     Text(
-                        "${formatModelGb(gemmaBytes)} / ${formatModelGb(Gemma4ModelManager.EXPECTED_BYTES)}",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        gemmaError!!,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                } else if (gemmaPhase == Gemma4ModelManager.PHASE_RETRYING &&
+                    !gemmaProgressMessage.isNullOrBlank()) {
+                    Text(
+                        gemmaProgressMessage!!,
+                        color = MaterialTheme.colorScheme.error
                     )
                 }
+
                 if (!gemmaReady) {
                     Button(
                         onClick = {
+                            downloadRequested = true
+                            gemmaWorkState = null
+                            gemmaPhase = Gemma4ModelManager.PHASE_STARTING
+                            gemmaProgressMessage = null
+                            gemmaError = null
                             Gemma4ModelManager.enqueueDownload(context)
                             AppLogger.event(context, "UI_GEMMA4_MODEL_DOWNLOAD_REQUESTED")
                             Toast.makeText(context, "Gemma 4モデルの取得を開始します", Toast.LENGTH_SHORT).show()
                         },
+                        enabled = !isDownloadActive,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(if (gemmaBytes > 0L) "Gemma 4モデルの取得を再開" else "Gemma 4モデルを取得")
+                        Text(
+                            when {
+                                isDownloadActive -> "Gemma 4モデルを取得中…"
+                                gemmaBytes > 0L -> "Gemma 4モデルの取得を再開"
+                                else -> "Gemma 4モデルを取得"
+                            }
+                        )
                     }
                 }
-                if (gemmaReady || gemmaBytes > 0L) {
+
+                if (!gemmaReady && isDownloadActive) {
+                    OutlinedButton(
+                        onClick = {
+                            Gemma4ModelManager.cancelDownload(context)
+                            downloadRequested = false
+                            gemmaWorkState = WorkInfo.State.CANCELLED
+                            AppLogger.event(context, "UI_GEMMA4_MODEL_DOWNLOAD_CANCELLED")
+                            Toast.makeText(context, "モデル取得をキャンセルしました", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("取得をキャンセル")
+                    }
+                }
+
+                if ((gemmaReady || gemmaBytes > 0L) && !isDownloadActive) {
                     OutlinedButton(
                         onClick = {
                             val deleted = Gemma4ModelManager.deleteModel(context)
                             gemmaReady = Gemma4ModelManager.isReady(context)
                             gemmaBytes = Gemma4ModelManager.downloadedBytes(context)
+                            gemmaWorkState = null
+                            gemmaPhase = null
+                            gemmaProgressMessage = null
+                            gemmaError = null
                             AiAnalysisScheduler.ensureScheduled(context)
                             AppLogger.event(
                                 context,
