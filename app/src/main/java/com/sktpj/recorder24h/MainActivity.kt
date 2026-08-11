@@ -391,7 +391,7 @@ private fun RecorderApp(
                             onStop,
                             onOpenHistory = { section = AppSection.HISTORY; refresh++ }
                         )
-                        section == AppSection.QUEUE -> QueueScreen(
+                        section == AppSection.QUEUE -> UnifiedQueueScreen(
                             records = records,
                             onSelect = { selectedId = it.segmentId },
                             onRemove = { record ->
@@ -447,7 +447,7 @@ private fun RecorderApp(
 
 private fun sectionTitle(section: AppSection) = when (section) {
     AppSection.HOME -> "24hRecoder"
-    AppSection.QUEUE -> "文字起こしキュー"
+    AppSection.QUEUE -> "キュー"
     AppSection.HISTORY -> "記録"
     AppSection.AI -> "AIノート"
     AppSection.SETTINGS -> "設定"
