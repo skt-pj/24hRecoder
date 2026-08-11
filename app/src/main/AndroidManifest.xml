@@ -45,6 +45,10 @@
             android:exported="false" />
 
         <activity
+            android:name=".AiQueueTargetActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".DriveLogSetupActivity"
             android:exported="false" />
 

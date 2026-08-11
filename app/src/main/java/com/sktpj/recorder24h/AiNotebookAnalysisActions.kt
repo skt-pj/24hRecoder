@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.sktpj.recorder24h.ai.AiAnalysisRepository
 import com.sktpj.recorder24h.ai.AiAnalysisScheduler
+import com.sktpj.recorder24h.ai.AiProcessingDurationStore
 import com.sktpj.recorder24h.ai.AiProviderStore
 import com.sktpj.recorder24h.ai.AiQueueStore
 import com.sktpj.recorder24h.ui.SegmentHistoryRepository
@@ -45,7 +47,8 @@ private data class NotebookHourlyActionRow(
     val pendingTranscription: Boolean,
     val queueState: String?,
     val periodFinished: Boolean,
-    val periodStarted: Boolean
+    val periodStarted: Boolean,
+    val processingDurationMs: Long
 )
 
 private data class NotebookDayActionSnapshot(
@@ -53,6 +56,7 @@ private data class NotebookDayActionSnapshot(
     val dailyHasSource: Boolean,
     val dailyPendingTranscription: Boolean,
     val dailyQueueState: String?,
+    val dailyProcessingDurationMs: Long,
     val rows: List<NotebookHourlyActionRow>
 )
 
@@ -60,7 +64,8 @@ private data class NotebookDayActionSnapshot(
 internal fun AiNotebookDayAnalysisActions(
     date: LocalDate,
     hourlySummaries: Map<Long, String>,
-    dailyHasResult: Boolean
+    dailyHasResult: Boolean,
+    highlightPeriodStartMs: Long? = null
 ) {
     val context = LocalContext.current
     val zone = remember { ZoneId.systemDefault() }
@@ -72,6 +77,7 @@ internal fun AiNotebookDayAnalysisActions(
                 dailyHasSource = false,
                 dailyPendingTranscription = false,
                 dailyQueueState = null,
+                dailyProcessingDurationMs = 0L,
                 rows = emptyList()
             )
         )
@@ -137,6 +143,13 @@ internal fun AiNotebookDayAnalysisActions(
                     },
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (dailyHasResult && snapshot.dailyProcessingDurationMs > 0L) {
+                    Text(
+                        "処理時間: ${formatAiProcessingDuration(snapshot.dailyProcessingDurationMs)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Button(
                     onClick = {
                         val queued = AiAnalysisScheduler.enqueuePeriod(
@@ -172,11 +185,21 @@ internal fun AiNotebookDayAnalysisActions(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         } else {
-            snapshot.rows.asReversed().forEach { row ->
+            val normalOrder = snapshot.rows.asReversed()
+            val orderedRows = if (highlightPeriodStartMs == null) {
+                normalOrder
+            } else {
+                val target = normalOrder.firstOrNull { it.periodStartMs == highlightPeriodStartMs }
+                if (target == null) normalOrder else listOf(target) + normalOrder.filterNot {
+                    it.periodStartMs == highlightPeriodStartMs
+                }
+            }
+            orderedRows.forEach { row ->
                 NotebookHourlyActionCard(
                     row = row,
                     summary = hourlySummaries[row.periodStartMs].orEmpty(),
                     configured = snapshot.configured,
+                    highlighted = row.periodStartMs == highlightPeriodStartMs,
                     onRun = {
                         val queued = AiAnalysisScheduler.enqueuePeriod(
                             context,
@@ -202,6 +225,7 @@ private fun NotebookHourlyActionCard(
     row: NotebookHourlyActionRow,
     summary: String,
     configured: Boolean,
+    highlighted: Boolean,
     onRun: () -> Unit
 ) {
     val activeQueue = row.queueState != null && row.queueState != AiQueueStore.STATE_FAILED
@@ -236,7 +260,13 @@ private fun NotebookHourlyActionCard(
         else -> "実行不可"
     }
 
-    Card {
+    Card(
+        colors = if (highlighted) {
+            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        } else {
+            CardDefaults.cardColors()
+        }
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(14.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -256,11 +286,25 @@ private fun NotebookHourlyActionCard(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
+                if (highlighted) {
+                    Text(
+                        "キューから開いた対象時間",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 Text(
                     statusText,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (row.hasResult && row.processingDurationMs > 0L) {
+                    Text(
+                        "処理時間: ${formatAiProcessingDuration(row.processingDurationMs)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 if (summary.isNotBlank()) {
                     Text(summary.trim())
                 }
@@ -305,7 +349,13 @@ private fun loadNotebookDayActionSnapshot(
             pendingTranscription = notebookHasPendingTranscription(records, startMs, endMs),
             queueState = hourlyQueue[startMs]?.state,
             periodFinished = endMs <= nowMs,
-            periodStarted = startMs <= nowMs
+            periodStarted = startMs <= nowMs,
+            processingDurationMs = AiProcessingDurationStore.get(
+                context,
+                AiAnalysisScheduler.KIND_HOURLY,
+                startMs,
+                endMs
+            )
         )
     }
 
@@ -314,6 +364,12 @@ private fun loadNotebookDayActionSnapshot(
         dailyHasSource = notebookHasTranscriptSource(records, dailyStartMs, dailyEndMs),
         dailyPendingTranscription = notebookHasPendingTranscription(records, dailyStartMs, dailyEndMs),
         dailyQueueState = dailyQueueState,
+        dailyProcessingDurationMs = AiProcessingDurationStore.get(
+            context,
+            AiAnalysisScheduler.KIND_DAILY,
+            dailyStartMs,
+            dailyEndMs
+        ),
         rows = rows
     )
 }
@@ -383,4 +439,14 @@ private fun notebookQueueStateLabel(state: String?): String = when (state) {
     AiQueueStore.STATE_QUEUED -> "実行待ち"
     AiQueueStore.STATE_FAILED -> "失敗"
     else -> "待機中"
+}
+
+internal fun formatAiProcessingDuration(durationMs: Long): String {
+    if (durationMs < 1_000L) return "${durationMs}ms"
+    if (durationMs < 60_000L) {
+        return String.format(Locale.JAPAN, "%.1f秒", durationMs / 1_000.0)
+    }
+    val minutes = durationMs / 60_000L
+    val seconds = (durationMs % 60_000L) / 1_000L
+    return "${minutes}分${seconds}秒"
 }

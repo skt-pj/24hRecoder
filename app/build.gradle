@@ -13,8 +13,8 @@ android {
         applicationId 'com.sktpj.recorder24h'
         minSdk 29
         targetSdk 36
-        versionCode 1009
-        versionName '0.7.9'
+        versionCode 1010
+        versionName '0.7.10'
         // Normal local transcription model is user-selectable in Settings.
         // AI analysis can switch between OpenAI GPT-5.6 Luna and local Gemma 4 E2B.
         // Recording input verifies actual Bluetooth routing and falls back to the device mic if routing fails.
@@ -22,7 +22,7 @@ android {
         // User-triggered queue requests run immediately in a mediaProcessing FGS.
         // Automatic background transcription still uses WorkManager with battery-not-low.
         // AI queue items represent exact target periods and semantic data-wait/retry state.
-        // Hourly AI reruns select an hour directly; minute selection is intentionally unavailable.
+        // Queue order is user-editable; the top item has the highest execution priority.
 
         ndk {
             abiFilters 'arm64-v8a'

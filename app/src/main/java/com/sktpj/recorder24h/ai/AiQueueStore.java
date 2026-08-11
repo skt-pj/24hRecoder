@@ -61,7 +61,8 @@ public final class AiQueueStore {
                         now,
                         now,
                         attempt,
-                        message));
+                        message,
+                        nextPriority(entries)));
             } else {
                 existing.kind = kind;
                 existing.periodStartMs = periodStartMs;
@@ -72,27 +73,68 @@ public final class AiQueueStore {
                 existing.attempt = attempt;
                 existing.message = message == null ? "" : message;
             }
+            normalizePriorities(entries);
             writeLocked(context, entries);
         }
+        AiPriorityGate.signalChanged();
     }
 
     public static void remove(Context context, String id) {
+        boolean changed;
         synchronized (LOCK) {
             List<Entry> entries = loadLocked(context);
-            boolean changed = entries.removeIf(entry -> entry.id.equals(id));
+            changed = entries.removeIf(entry -> entry.id.equals(id));
             if (changed) {
+                normalizePriorities(entries);
                 writeLocked(context, entries);
             }
         }
+        if (changed) AiPriorityGate.signalChanged();
+    }
+
+    public static boolean moveUp(Context context, String id) {
+        return move(context, id, -1);
+    }
+
+    public static boolean moveDown(Context context, String id) {
+        return move(context, id, 1);
+    }
+
+    private static boolean move(Context context, String id, int direction) {
+        if (id == null || id.isEmpty() || AiPriorityGate.isActive(id)) return false;
+        boolean changed = false;
+        synchronized (LOCK) {
+            List<Entry> entries = loadLocked(context);
+            entries.sort(priorityComparator());
+            int index = -1;
+            for (int i = 0; i < entries.size(); i++) {
+                if (id.equals(entries.get(i).id)) {
+                    index = i;
+                    break;
+                }
+            }
+            int target = index + direction;
+            if (index >= 0 && target >= 0 && target < entries.size()) {
+                Entry first = entries.get(index);
+                Entry second = entries.get(target);
+                if (!AiPriorityGate.isActive(second.id)) {
+                    long priority = first.priority;
+                    first.priority = second.priority;
+                    second.priority = priority;
+                    normalizePriorities(entries);
+                    writeLocked(context, entries);
+                    changed = true;
+                }
+            }
+        }
+        if (changed) AiPriorityGate.signalChanged();
+        return changed;
     }
 
     public static List<Entry> load(Context context) {
         synchronized (LOCK) {
             List<Entry> entries = loadLocked(context);
-            entries.sort(Comparator
-                    .comparingInt((Entry entry) -> stateOrder(entry.state))
-                    .thenComparingLong(entry -> entry.periodStartMs)
-                    .thenComparing(entry -> entry.id));
+            entries.sort(priorityComparator());
             return entries;
         }
     }
@@ -125,8 +167,10 @@ public final class AiQueueStore {
                         row.optLong("createdAtMs", 0L),
                         row.optLong("updatedAtMs", 0L),
                         row.optInt("attempt", 0),
-                        row.optString("message", "")));
+                        row.optString("message", ""),
+                        row.has("priority") ? row.optLong("priority", index) : index));
             }
+            normalizePriorities(result);
         } catch (Exception ignored) {
         }
         return result;
@@ -140,6 +184,7 @@ public final class AiQueueStore {
                 //noinspection ResultOfMethodCallIgnored
                 parent.mkdirs();
             }
+            entries.sort(priorityComparator());
             JSONArray rows = new JSONArray();
             for (Entry entry : entries) {
                 JSONObject row = new JSONObject();
@@ -153,10 +198,11 @@ public final class AiQueueStore {
                 row.put("updatedAtMs", entry.updatedAtMs);
                 row.put("attempt", entry.attempt);
                 row.put("message", entry.message);
+                row.put("priority", entry.priority);
                 rows.put(row);
             }
             JSONObject root = new JSONObject();
-            root.put("schemaVersion", 1);
+            root.put("schemaVersion", 2);
             root.put("items", rows);
             byte[] bytes = root.toString().getBytes(StandardCharsets.UTF_8);
             File temp = new File(parent, target.getName() + ".tmp");
@@ -172,6 +218,26 @@ public final class AiQueueStore {
             temp.renameTo(target);
         } catch (Exception ignored) {
         }
+    }
+
+    private static long nextPriority(List<Entry> entries) {
+        long max = -1L;
+        for (Entry entry : entries) max = Math.max(max, entry.priority);
+        return max + 1L;
+    }
+
+    private static void normalizePriorities(List<Entry> entries) {
+        entries.sort(priorityComparator());
+        for (int index = 0; index < entries.size(); index++) {
+            entries.get(index).priority = index;
+        }
+    }
+
+    private static Comparator<Entry> priorityComparator() {
+        return Comparator
+                .comparingLong((Entry entry) -> entry.priority)
+                .thenComparingLong(entry -> entry.createdAtMs)
+                .thenComparing(entry -> entry.id);
     }
 
     private static File queueFile(Context context) {
@@ -191,15 +257,6 @@ public final class AiQueueStore {
         }
     }
 
-    private static int stateOrder(String state) {
-        if (STATE_RUNNING.equals(state)) return 0;
-        if (STATE_WAITING_DATA.equals(state)) return 1;
-        if (STATE_RETRY_WAIT.equals(state)) return 2;
-        if (STATE_QUEUED.equals(state)) return 3;
-        if (STATE_FAILED.equals(state)) return 4;
-        return 5;
-    }
-
     public static final class Entry {
         public final String id;
         public String kind;
@@ -211,6 +268,7 @@ public final class AiQueueStore {
         public long updatedAtMs;
         public int attempt;
         public String message;
+        public long priority;
 
         Entry(
                 String id,
@@ -222,7 +280,8 @@ public final class AiQueueStore {
                 long createdAtMs,
                 long updatedAtMs,
                 int attempt,
-                String message) {
+                String message,
+                long priority) {
             this.id = id;
             this.kind = kind;
             this.periodStartMs = periodStartMs;
@@ -233,6 +292,7 @@ public final class AiQueueStore {
             this.updatedAtMs = updatedAtMs;
             this.attempt = attempt;
             this.message = message == null ? "" : message;
+            this.priority = priority;
         }
     }
 }

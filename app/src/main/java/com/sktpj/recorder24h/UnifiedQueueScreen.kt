@@ -20,12 +20,15 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -34,7 +37,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.sktpj.recorder24h.ai.AiAnalysisScheduler
+import com.sktpj.recorder24h.ai.AiPriorityGate
 import com.sktpj.recorder24h.ai.AiQueueStore
+import com.sktpj.recorder24h.transcription.TranscriptionPriorityController
 import com.sktpj.recorder24h.ui.SegmentRecord
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -93,7 +98,10 @@ private fun TranscriptionQueueTab(
     onSelect: (SegmentRecord) -> Unit,
     onRemove: (SegmentRecord) -> Unit
 ) {
-    val queued = remember(records) {
+    val context = LocalContext.current
+    var selectedPriorityId by remember { mutableStateOf<String?>(null) }
+    var priorityRevision by remember { mutableIntStateOf(0) }
+    val queued = remember(records, priorityRevision) {
         records
             .filter {
                 it.status == "QUEUED" ||
@@ -109,30 +117,100 @@ private fun TranscriptionQueueTab(
             )
     }
 
+    LaunchedEffect(queued) {
+        if (selectedPriorityId != null && queued.none { it.segmentId == selectedPriorityId }) {
+            selectedPriorityId = null
+        }
+    }
+
     if (queued.isEmpty()) {
         EmptyQueue("文字起こしキューは空です")
         return
     }
 
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(vertical = 4.dp)
-    ) {
-        itemsIndexed(queued, key = { _, item -> item.segmentId }) { _, record ->
-            TranscriptionQueueRow(
-                record = record,
-                onOpen = { onSelect(record) },
-                onRemove = { onRemove(record) }
-            )
-            HorizontalDivider()
+    val selectedIndex = queued.indexOfFirst { it.segmentId == selectedPriorityId }
+    val selectedRecord = queued.getOrNull(selectedIndex)
+    val canMoveUp = selectedRecord != null &&
+        selectedRecord.status != "TRANSCRIBING" &&
+        selectedIndex > 0 && queued[selectedIndex - 1].status != "TRANSCRIBING"
+    val canMoveDown = selectedRecord != null &&
+        selectedRecord.status != "TRANSCRIBING" &&
+        selectedIndex >= 0 && selectedIndex + 1 < queued.size
+
+    Column(Modifier.fillMaxSize()) {
+        PriorityControls(
+            selected = selectedRecord != null,
+            canMoveUp = canMoveUp,
+            canMoveDown = canMoveDown,
+            onMoveUp = {
+                val reordered = swapQueueItem(queued, selectedIndex, selectedIndex - 1)
+                if (TranscriptionPriorityController.applyOrder(
+                        context,
+                        reordered.map { it.segmentId }
+                    )
+                ) {
+                    priorityRevision++
+                }
+            },
+            onMoveDown = {
+                val reordered = swapQueueItem(queued, selectedIndex, selectedIndex + 1)
+                if (TranscriptionPriorityController.applyOrder(
+                        context,
+                        reordered.map { it.segmentId }
+                    )
+                ) {
+                    priorityRevision++
+                }
+            }
+        )
+
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(vertical = 4.dp)
+        ) {
+            itemsIndexed(queued, key = { _, item -> item.segmentId }) { index, record ->
+                TranscriptionQueueRow(
+                    record = record,
+                    priority = index + 1,
+                    selectedForPriority = record.segmentId == selectedPriorityId,
+                    onPrioritySelect = {
+                        if (record.status != "TRANSCRIBING") {
+                            selectedPriorityId = if (selectedPriorityId == record.segmentId) {
+                                null
+                            } else {
+                                record.segmentId
+                            }
+                        }
+                    },
+                    onOpen = { onSelect(record) },
+                    onRemove = { onRemove(record) }
+                )
+                HorizontalDivider()
+            }
         }
     }
+}
+
+private fun swapQueueItem(
+    source: List<SegmentRecord>,
+    first: Int,
+    second: Int
+): List<SegmentRecord> {
+    if (first !in source.indices || second !in source.indices) return source
+    val mutable = source.toMutableList()
+    val value = mutable[first]
+    mutable[first] = mutable[second]
+    mutable[second] = value
+    return mutable
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TranscriptionQueueRow(
     record: SegmentRecord,
+    priority: Int,
+    selectedForPriority: Boolean,
+    onPrioritySelect: () -> Unit,
     onOpen: () -> Unit,
     onRemove: () -> Unit
 ) {
@@ -150,15 +228,26 @@ private fun TranscriptionQueueRow(
                         }
                     }
                 )
-                .padding(horizontal = 18.dp, vertical = 15.dp),
+                .padding(horizontal = 10.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                formatQueueDateTime(record),
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
-                modifier = Modifier.weight(1f)
+            RadioButton(
+                selected = selectedForPriority,
+                onClick = onPrioritySelect,
+                enabled = record.status != "TRANSCRIBING"
             )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    formatQueueDateTime(record),
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1
+                )
+                Text(
+                    "優先度 $priority",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Spacer(Modifier.width(12.dp))
             Text(
                 transcriptionQueueStatusLabel(record),
@@ -187,28 +276,99 @@ private fun TranscriptionQueueRow(
 @Composable
 private fun AiSummaryQueueTab(items: List<AiQueueStore.Entry>) {
     val context = LocalContext.current
+    var selectedPriorityId by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(items) {
+        if (selectedPriorityId != null && items.none { it.id == selectedPriorityId }) {
+            selectedPriorityId = null
+        }
+    }
+
     if (items.isEmpty()) {
         EmptyQueue("AI要約キューは空です")
         return
     }
 
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(vertical = 4.dp)
+    val selectedIndex = items.indexOfFirst { it.id == selectedPriorityId }
+    val selectedItem = items.getOrNull(selectedIndex)
+    val canMoveSelected = selectedItem != null && !AiPriorityGate.isActive(selectedItem.id)
+    val canMoveUp = canMoveSelected && selectedIndex > 0 &&
+        !AiPriorityGate.isActive(items[selectedIndex - 1].id)
+    val canMoveDown = canMoveSelected && selectedIndex >= 0 && selectedIndex + 1 < items.size &&
+        !AiPriorityGate.isActive(items[selectedIndex + 1].id)
+
+    Column(Modifier.fillMaxSize()) {
+        PriorityControls(
+            selected = selectedItem != null,
+            canMoveUp = canMoveUp,
+            canMoveDown = canMoveDown,
+            onMoveUp = { selectedPriorityId?.let { AiQueueStore.moveUp(context, it) } },
+            onMoveDown = { selectedPriorityId?.let { AiQueueStore.moveDown(context, it) } }
+        )
+
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(vertical = 4.dp)
+        ) {
+            itemsIndexed(items, key = { _, item -> item.id }) { index, item ->
+                AiSummaryQueueRow(
+                    item = item,
+                    priority = index + 1,
+                    selectedForPriority = item.id == selectedPriorityId,
+                    onPrioritySelect = {
+                        if (!AiPriorityGate.isActive(item.id)) {
+                            selectedPriorityId = if (selectedPriorityId == item.id) null else item.id
+                        }
+                    },
+                    onOpen = {
+                        context.startActivity(
+                            AiQueueTargetActivity.createIntent(
+                                context,
+                                item.kind,
+                                item.periodStartMs,
+                                item.periodEndMs
+                            )
+                        )
+                    },
+                    onRemove = {
+                        AiAnalysisScheduler.removeTarget(
+                            context,
+                            item.kind,
+                            item.periodStartMs,
+                            item.periodEndMs
+                        )
+                    }
+                )
+                HorizontalDivider()
+            }
+        }
+    }
+}
+
+@Composable
+private fun PriorityControls(
+    selected: Boolean,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        itemsIndexed(items, key = { _, item -> item.id }) { _, item ->
-            AiSummaryQueueRow(
-                item = item,
-                onRemove = {
-                    AiAnalysisScheduler.removeTarget(
-                        context,
-                        item.kind,
-                        item.periodStartMs,
-                        item.periodEndMs
-                    )
-                }
-            )
-            HorizontalDivider()
+        Text(
+            if (selected) "上にある項目ほど優先" else "左の丸で項目を選択",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        OutlinedButton(onClick = onMoveUp, enabled = canMoveUp) {
+            Text("↑ 上へ")
+        }
+        Spacer(Modifier.width(8.dp))
+        OutlinedButton(onClick = onMoveDown, enabled = canMoveDown) {
+            Text("↓ 下へ")
         }
     }
 }
@@ -217,21 +377,35 @@ private fun AiSummaryQueueTab(items: List<AiQueueStore.Entry>) {
 @Composable
 private fun AiSummaryQueueRow(
     item: AiQueueStore.Entry,
+    priority: Int,
+    selectedForPriority: Boolean,
+    onPrioritySelect: () -> Unit,
+    onOpen: () -> Unit,
     onRemove: () -> Unit
 ) {
     var menuExpanded by remember(item.id) { mutableStateOf(false) }
+    val activelyProcessing = AiPriorityGate.isActive(item.id)
 
     Box {
         Row(
             Modifier
                 .fillMaxWidth()
                 .combinedClickable(
-                    onClick = {},
-                    onLongClick = { menuExpanded = true }
+                    onClick = onOpen,
+                    onLongClick = {
+                        if (item.state != AiQueueStore.STATE_RUNNING) {
+                            menuExpanded = true
+                        }
+                    }
                 )
-                .padding(horizontal = 18.dp, vertical = 14.dp),
+                .padding(horizontal = 10.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            RadioButton(
+                selected = selectedForPriority,
+                onClick = onPrioritySelect,
+                enabled = !activelyProcessing
+            )
             Column(Modifier.weight(1f)) {
                 Text(
                     "${aiKindLabel(item.kind)}  ${aiPeriodLabel(item)}",
@@ -239,6 +413,7 @@ private fun AiSummaryQueueRow(
                 )
                 Text(
                     buildString {
+                        append("優先度 ").append(priority).append(" • ")
                         append(if (item.requestType == AiQueueStore.REQUEST_MANUAL) "ユーザー指定" else "定期実行")
                         if (item.message.isNotBlank()) append(" • ").append(item.message)
                     },
@@ -248,7 +423,7 @@ private fun AiSummaryQueueRow(
             }
             Spacer(Modifier.width(12.dp))
             Text(
-                aiQueueStateLabel(item.state),
+                aiQueueStateLabel(item),
                 style = MaterialTheme.typography.labelLarge,
                 color = if (item.state == AiQueueStore.STATE_FAILED) {
                     MaterialTheme.colorScheme.error
@@ -306,13 +481,26 @@ private fun aiPeriodLabel(item: AiQueueStore.Entry): String {
     }
 }
 
-private fun aiQueueStateLabel(state: String): String = when (state) {
-    AiQueueStore.STATE_RUNNING -> "処理中"
-    AiQueueStore.STATE_WAITING_DATA -> "データ待ち"
-    AiQueueStore.STATE_RETRY_WAIT -> "再試行待ち"
-    AiQueueStore.STATE_QUEUED -> "実行待ち"
-    AiQueueStore.STATE_FAILED -> "失敗"
-    else -> state
+private fun aiQueueStateLabel(item: AiQueueStore.Entry): String {
+    if (AiPriorityGate.isActive(item.id)) {
+        val elapsed = AiPriorityGate.activeElapsedMs(item.id)
+        return "処理中 ${formatQueueElapsed(elapsed)}"
+    }
+    return when (item.state) {
+        AiQueueStore.STATE_RUNNING -> "優先度待ち"
+        AiQueueStore.STATE_WAITING_DATA -> "データ待ち"
+        AiQueueStore.STATE_RETRY_WAIT -> "再試行待ち"
+        AiQueueStore.STATE_QUEUED -> "実行待ち"
+        AiQueueStore.STATE_FAILED -> "失敗"
+        else -> item.state
+    }
+}
+
+private fun formatQueueElapsed(ms: Long): String {
+    val totalSeconds = (ms / 1_000L).coerceAtLeast(0L)
+    val minutes = totalSeconds / 60L
+    val seconds = totalSeconds % 60L
+    return String.format(Locale.JAPAN, "%02d:%02d", minutes, seconds)
 }
 
 private fun transcriptionQueueStatusLabel(record: SegmentRecord): String {
