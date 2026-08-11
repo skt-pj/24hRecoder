@@ -11,7 +11,7 @@ import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 
-/** Cross-process snapshot of the requested and actual recording input route. */
+/** Cross-process snapshot of the requested, communication, and actual recording input route. */
 public final class AudioInputRouteStateStore {
     private static final String FILE_NAME = "audio_input_route.json";
     private static final Object LOCK = new Object();
@@ -31,9 +31,17 @@ public final class AudioInputRouteStateStore {
 
     public static void writeRequested(Context context,
                                       AudioInputSettingsStore.Settings settings,
+                                      AudioDeviceInfo desired,
                                       AudioDeviceInfo preferred,
                                       boolean preferredAccepted,
-                                      String fallbackReason) {
+                                      AudioDeviceInfo communicationDevice,
+                                      boolean communicationRequired,
+                                      boolean communicationAccepted,
+                                      String fallbackReason,
+                                      long routeRequestStartedAtMs,
+                                      long lastRouteAttemptAtMs,
+                                      int retryCount,
+                                      String routeStatus) {
         synchronized (LOCK) {
             JSONObject root = read(context);
             try {
@@ -42,8 +50,60 @@ public final class AudioInputRouteStateStore {
                 root.put("manualDeviceKey", settings.manualDeviceKey);
                 root.put("manualDeviceLabel", settings.manualDeviceLabel);
                 root.put("preferredAccepted", preferredAccepted);
+                root.put("communicationRequired", communicationRequired);
+                root.put("communicationAccepted", communicationAccepted);
+                root.put("fallbackReason", fallbackReason == null ? JSONObject.NULL : fallbackReason);
+                root.put("routeRequestStartedAtMs", routeRequestStartedAtMs);
+                root.put("lastRouteAttemptAtMs", lastRouteAttemptAtMs);
+                root.put("routeRetryCount", retryCount);
+                root.put("routeStatus", routeStatus == null ? JSONObject.NULL : routeStatus);
+                putDevice(root, "desired", desired);
+                putDevice(root, "preferred", preferred);
+                putDevice(root, "communication", communicationDevice);
+            } catch (Exception ignored) {
+            }
+            writeAtomic(context, root);
+        }
+    }
+
+    public static void updateAttempt(Context context,
+                                     AudioDeviceInfo preferred,
+                                     boolean preferredAccepted,
+                                     AudioDeviceInfo communicationDevice,
+                                     boolean communicationAccepted,
+                                     long lastRouteAttemptAtMs,
+                                     int retryCount,
+                                     String routeStatus,
+                                     String fallbackReason) {
+        synchronized (LOCK) {
+            JSONObject root = read(context);
+            try {
+                root.put("updatedAtMs", System.currentTimeMillis());
+                root.put("preferredAccepted", preferredAccepted);
+                root.put("communicationAccepted", communicationAccepted);
+                root.put("lastRouteAttemptAtMs", lastRouteAttemptAtMs);
+                root.put("routeRetryCount", retryCount);
+                root.put("routeStatus", routeStatus == null ? JSONObject.NULL : routeStatus);
                 root.put("fallbackReason", fallbackReason == null ? JSONObject.NULL : fallbackReason);
                 putDevice(root, "preferred", preferred);
+                putDevice(root, "communication", communicationDevice);
+            } catch (Exception ignored) {
+            }
+            writeAtomic(context, root);
+        }
+    }
+
+    public static void markStatus(Context context,
+                                  String routeStatus,
+                                  String fallbackReason,
+                                  long verifiedAtMs) {
+        synchronized (LOCK) {
+            JSONObject root = read(context);
+            try {
+                root.put("updatedAtMs", System.currentTimeMillis());
+                root.put("routeStatus", routeStatus == null ? JSONObject.NULL : routeStatus);
+                root.put("fallbackReason", fallbackReason == null ? JSONObject.NULL : fallbackReason);
+                if (verifiedAtMs > 0L) root.put("routeVerifiedAtMs", verifiedAtMs);
             } catch (Exception ignored) {
             }
             writeAtomic(context, root);
@@ -75,7 +135,7 @@ public final class AudioInputRouteStateStore {
         root.put(prefix + "DeviceLabel", AudioInputRouter.deviceLabel(device));
         root.put(prefix + "DeviceType", device.getType());
         root.put(prefix + "DeviceId", device.getId());
-        root.put(prefix + "Bluetooth", AudioInputRouter.isBluetoothMic(device));
+        root.put(prefix + "Bluetooth", AudioInputRouter.isBluetoothAudioDevice(device));
     }
 
     private static void writeAtomic(Context context, JSONObject root) {
