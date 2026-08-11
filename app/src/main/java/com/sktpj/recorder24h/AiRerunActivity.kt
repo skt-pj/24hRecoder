@@ -1,12 +1,12 @@
 package com.sktpj.recorder24h
 
 import android.app.DatePickerDialog
-import android.app.TimePickerDialog
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -79,6 +81,7 @@ private fun AiRerunScreen(
     var kind by remember { mutableStateOf(AiAnalysisScheduler.KIND_HOURLY) }
     var selectedDate by remember { mutableStateOf(previousHour.toLocalDate()) }
     var selectedHour by remember { mutableIntStateOf(previousHour.hour) }
+    var hourMenuExpanded by remember { mutableStateOf(false) }
 
     val start = if (kind == AiAnalysisScheduler.KIND_HOURLY) {
         selectedDate.atTime(selectedHour, 0).atZone(zone)
@@ -113,6 +116,7 @@ private fun AiRerunScreen(
                             kind = AiAnalysisScheduler.KIND_HOURLY
                             selectedDate = previousHour.toLocalDate()
                             selectedHour = previousHour.hour
+                            hourMenuExpanded = false
                         },
                         label = { Text("1時間") }
                     )
@@ -121,6 +125,7 @@ private fun AiRerunScreen(
                         onClick = {
                             kind = AiAnalysisScheduler.KIND_DAILY
                             selectedDate = LocalDate.now(zone).minusDays(1)
+                            hourMenuExpanded = false
                         },
                         label = { Text("1日") }
                     )
@@ -143,20 +148,30 @@ private fun AiRerunScreen(
                 }
 
                 if (kind == AiAnalysisScheduler.KIND_HOURLY) {
-                    Text("開始時刻", style = MaterialTheme.typography.titleMedium)
-                    OutlinedButton(
-                        onClick = {
-                            TimePickerDialog(
-                                context,
-                                { _, hour, _ -> selectedHour = hour },
-                                selectedHour,
-                                0,
-                                true
-                            ).show()
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(String.format(Locale.JAPAN, "%02d:00", selectedHour))
+                    Text("開始時（1時間単位）", style = MaterialTheme.typography.titleMedium)
+                    Box(Modifier.fillMaxWidth()) {
+                        OutlinedButton(
+                            onClick = { hourMenuExpanded = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(String.format(Locale.JAPAN, "%02d:00", selectedHour))
+                        }
+                        DropdownMenu(
+                            expanded = hourMenuExpanded,
+                            onDismissRequest = { hourMenuExpanded = false }
+                        ) {
+                            for (hour in 0..23) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(String.format(Locale.JAPAN, "%02d:00", hour))
+                                    },
+                                    onClick = {
+                                        selectedHour = hour
+                                        hourMenuExpanded = false
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             }
