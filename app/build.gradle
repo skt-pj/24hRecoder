@@ -13,8 +13,8 @@ android {
         applicationId 'com.sktpj.recorder24h'
         minSdk 29
         targetSdk 36
-        versionCode 1008
-        versionName '0.7.8'
+        versionCode 1009
+        versionName '0.7.9'
         // Normal local transcription model is user-selectable in Settings.
         // AI analysis can switch between OpenAI GPT-5.6 Luna and local Gemma 4 E2B.
         // Recording input verifies actual Bluetooth routing and falls back to the device mic if routing fails.
