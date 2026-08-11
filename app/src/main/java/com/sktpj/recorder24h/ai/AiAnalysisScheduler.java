@@ -90,10 +90,7 @@ public final class AiAnalysisScheduler {
                 rollup);
     }
 
-    /**
-     * Existing AI-notebook action. Instead of blindly starting every worker, open the
-     * target-period picker so the user knows exactly what will be regenerated.
-     */
+    /** Existing AI-notebook action: open the explicit target-period picker. */
     public static void enqueueNow(Context context) {
         if (!AiProviderStore.isConfigured(context.getApplicationContext())) {
             return;
@@ -110,30 +107,64 @@ public final class AiAnalysisScheduler {
             String kind,
             long periodStartMs,
             long periodEndMs) {
+        return enqueueTarget(
+                context,
+                kind,
+                periodStartMs,
+                periodEndMs,
+                AiQueueStore.REQUEST_MANUAL,
+                true,
+                ExistingWorkPolicy.REPLACE);
+    }
+
+    static boolean enqueueScheduledPeriod(
+            Context context,
+            String kind,
+            long periodStartMs,
+            long periodEndMs) {
+        return enqueueTarget(
+                context,
+                kind,
+                periodStartMs,
+                periodEndMs,
+                AiQueueStore.REQUEST_SCHEDULED,
+                false,
+                ExistingWorkPolicy.KEEP);
+    }
+
+    private static boolean enqueueTarget(
+            Context context,
+            String kind,
+            long periodStartMs,
+            long periodEndMs,
+            String requestType,
+            boolean force,
+            ExistingWorkPolicy policy) {
         Context app = context.getApplicationContext();
         if (!AiProviderStore.isConfigured(app)) return false;
         if (!KIND_HOURLY.equals(kind) && !KIND_DAILY.equals(kind)) return false;
         if (periodStartMs <= 0L || periodEndMs <= periodStartMs) return false;
 
-        String queueId = manualQueueId(kind, periodStartMs, periodEndMs);
+        String queueId = targetQueueId(kind, periodStartMs, periodEndMs);
         AiQueueStore.upsert(
                 app,
                 queueId,
                 kind,
                 periodStartMs,
                 periodEndMs,
-                AiQueueStore.REQUEST_MANUAL,
+                requestType,
                 AiQueueStore.STATE_QUEUED,
                 0,
-                "ユーザー指定期間");
+                AiQueueStore.REQUEST_MANUAL.equals(requestType)
+                        ? "ユーザー指定期間" : "定期実行対象");
 
         Data input = new Data.Builder()
                 .putString(EXTRA_KIND, kind)
                 .putLong(EXTRA_PERIOD_START_MS, periodStartMs)
                 .putLong(EXTRA_PERIOD_END_MS, periodEndMs)
                 .putString(EXTRA_QUEUE_ID, queueId)
-                .putString(EXTRA_REQUEST_TYPE, AiQueueStore.REQUEST_MANUAL)
-                .putBoolean(EXTRA_FORCE, true)
+                .putString(EXTRA_REQUEST_TYPE, requestType)
+                .putBoolean(EXTRA_FORCE, force)
                 .build();
 
         String uniqueName = TARGET_PREFIX + safeId(kind + "-" + periodStartMs + "-" + periodEndMs);
@@ -145,15 +176,12 @@ public final class AiAnalysisScheduler {
                 analysisConstraints(app),
                 "ai-analysis-target",
                 kindTag);
-        WorkManager.getInstance(app).enqueueUniqueWork(
-                uniqueName,
-                ExistingWorkPolicy.REPLACE,
-                request);
+        WorkManager.getInstance(app).enqueueUniqueWork(uniqueName, policy, request);
         return true;
     }
 
-    static String scheduledQueueId(String kind, long periodStartMs, long periodEndMs) {
-        return "scheduled:" + kind + ":" + periodStartMs + ":" + periodEndMs;
+    static String targetQueueId(String kind, long periodStartMs, long periodEndMs) {
+        return kind + ":" + periodStartMs + ":" + periodEndMs;
     }
 
     static void enqueueRollup(Context context) {
@@ -179,10 +207,6 @@ public final class AiAnalysisScheduler {
         manager.cancelUniqueWork(PERIODIC_ROLLUP);
         manager.cancelUniqueWork(NOW_ROLLUP);
         manager.cancelAllWorkByTag("ai-analysis-target");
-    }
-
-    private static String manualQueueId(String kind, long periodStartMs, long periodEndMs) {
-        return "manual:" + kind + ":" + periodStartMs + ":" + periodEndMs;
     }
 
     private static String safeId(String raw) {
