@@ -13,8 +13,8 @@ android {
         applicationId 'com.sktpj.recorder24h'
         minSdk 29
         targetSdk 36
-        versionCode 29
-        versionName '0.6.8'
+        versionCode 30
+        versionName '0.6.9'
         // Normal local transcription model is user-selectable in Settings.
         // User-triggered queue requests run immediately in a mediaProcessing FGS.
         // Automatic background transcription still uses WorkManager with battery-not-low.
