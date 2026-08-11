@@ -15,6 +15,7 @@ import com.sktpj.recorder24h.storage.SegmentRepository;
 import com.sktpj.recorder24h.storage.StoragePolicy;
 import com.sktpj.recorder24h.util.AppLogger;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
@@ -53,6 +54,9 @@ public final class TranscriptionScheduler {
     public static boolean enqueueForceRetranscription(Context context, String segmentId, File file) {
         if (segmentId == null || segmentId.isEmpty() || file == null || !file.isFile()) {
             return false;
+        }
+        if (completeRealtimeSilenceIfPossible(context, segmentId, file, true)) {
+            return true;
         }
         if (!WhisperModelManager.isReady(context)) {
             WhisperModelManager.enqueueDownload(context);
@@ -109,6 +113,13 @@ public final class TranscriptionScheduler {
             log(context, "TRANSCRIPT_CURRENT_ENGINE_AUDIO_RETAINED", segmentId, file, null);
             return false;
         }
+
+        // Definite silence is finalized before model checks and before WorkManager. It therefore
+        // never waits for a Whisper slot and does not require either Whisper or Silero to be loaded.
+        if (completeRealtimeSilenceIfPossible(context, segmentId, file, forceRetranscribe)) {
+            return true;
+        }
+
         if (!WhisperModelManager.isReady(context)) {
             WhisperModelManager.enqueueDownload(context);
             String reason = WhisperModelManager.isAsrReady(context)
@@ -168,14 +179,14 @@ public final class TranscriptionScheduler {
     }
 
     public static int enqueueExisting(Context context) {
-        if (!WhisperModelManager.isReady(context)) {
-            WhisperModelManager.enqueueDownload(context);
-            return 0;
-        }
         File[] files = StoragePolicy.getAudioDir(context)
                 .listFiles((dir, name) -> name.endsWith(".m4a"));
         if (files == null) {
             return 0;
+        }
+        boolean modelsReady = WhisperModelManager.isReady(context);
+        if (!modelsReady) {
+            WhisperModelManager.enqueueDownload(context);
         }
         String currentEngine = LocalWhisperEngine.engineId(context);
         int count = 0;
@@ -185,6 +196,13 @@ public final class TranscriptionScheduler {
                     TranscriptionRepository.isCurrentEngine(context, segmentId, currentEngine)) {
                 continue;
             }
+            if (completeRealtimeSilenceIfPossible(context, segmentId, file, false)) {
+                count++;
+                continue;
+            }
+            if (!modelsReady) {
+                continue;
+            }
             enqueue(context, segmentId, file);
             count++;
         }
@@ -192,19 +210,26 @@ public final class TranscriptionScheduler {
     }
 
     public static int enqueueExistingAfterReset(Context context) {
-        if (!WhisperModelManager.isReady(context)) {
-            WhisperModelManager.enqueueDownload(context);
-            return 0;
-        }
         File[] files = StoragePolicy.getAudioDir(context)
                 .listFiles((dir, name) -> name.endsWith(".m4a"));
         if (files == null) {
             return 0;
         }
+        boolean modelsReady = WhisperModelManager.isReady(context);
+        if (!modelsReady) {
+            WhisperModelManager.enqueueDownload(context);
+        }
         int count = 0;
         for (File file : files) {
             String segmentId = extractSegmentId(file.getName());
             if (segmentId == null) {
+                continue;
+            }
+            if (completeRealtimeSilenceIfPossible(context, segmentId, file, false)) {
+                count++;
+                continue;
+            }
+            if (!modelsReady) {
                 continue;
             }
             if (enqueueAfterReset(context, segmentId, file)) {
@@ -246,6 +271,66 @@ public final class TranscriptionScheduler {
 
     static String uniqueWorkName(String segmentId) {
         return "transcribe:" + segmentId;
+    }
+
+    private static boolean completeRealtimeSilenceIfPossible(Context context,
+                                                             String segmentId,
+                                                             File file,
+                                                             boolean forceRetranscribe) {
+        RealtimeSpeechGateStore.Snapshot gate = RealtimeSpeechGateStore.read(context, segmentId);
+        if (!gate.available || !gate.definiteSilence) {
+            return false;
+        }
+
+        long startedAt = System.currentTimeMillis();
+        String startReason = forceRetranscribe
+                ? "MANUAL_REALTIME_SILENCE"
+                : "LOCAL_REALTIME_SILENCE";
+        SegmentRepository.appendWithoutNotify(context, segmentId, file, file.lastModified(),
+                startedAt, "TRANSCRIBING", startReason);
+        try {
+            String engine = LocalWhisperEngine.engineId(context);
+            TranscriptionRepository.save(context, segmentId, file, engine, "", new JSONArray());
+            long finishedAt = System.currentTimeMillis();
+            SegmentRepository.append(context, segmentId, file, file.lastModified(),
+                    finishedAt, "TRANSCRIBED", "NO_SPEECH_DETECTED");
+
+            JSONObject details = gate.toJson();
+            details.put("segmentId", segmentId);
+            details.put("file", file.getName());
+            details.put("engine", engine);
+            details.put("modelId", WhisperModelManager.selectedModelId(context));
+            details.put("manualRetranscription", forceRetranscribe);
+            details.put("processingMs", Math.max(0L, finishedAt - startedAt));
+            details.put("decodeMs", 0L);
+            details.put("preprocessMs", 0L);
+            details.put("vadInitMs", 0L);
+            details.put("vadDetectMs", 0L);
+            details.put("vadInputMs", 0L);
+            details.put("whisperInvoked", false);
+            details.put("skippedNoSpeech", true);
+            details.put("skippedByRealtimeGate", true);
+            details.put("originalTimelinePreserved", true);
+            AppLogger.event(context,
+                    forceRetranscribe
+                            ? "MANUAL_RETRANSCRIPTION_SKIPPED_REALTIME_SILENCE"
+                            : "LOCAL_TRANSCRIPTION_SKIPPED_REALTIME_SILENCE",
+                    details);
+            return true;
+        } catch (Exception error) {
+            SegmentRepository.appendWithoutNotify(context, segmentId, file, file.lastModified(),
+                    System.currentTimeMillis(), "READY", "REALTIME_SILENCE_FINALIZE_FAILED");
+            try {
+                JSONObject details = new JSONObject();
+                details.put("segmentId", segmentId);
+                details.put("file", file.getName());
+                details.put("error", error.getClass().getSimpleName());
+                details.put("message", error.getMessage() == null ? JSONObject.NULL : error.getMessage());
+                AppLogger.event(context, "REALTIME_SILENCE_FINALIZE_FAILED", details);
+            } catch (Exception ignored) {
+            }
+            return false;
+        }
     }
 
     static void log(Context context, String event, String segmentId, File file, String message) {
