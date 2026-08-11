@@ -132,6 +132,28 @@ public final class AiAnalysisScheduler {
                 ExistingWorkPolicy.KEEP);
     }
 
+    /**
+     * A completed transcript can make one or more semantic AI queue items ready immediately.
+     * Replace only data-waiting target work; API retry state keeps its own backoff policy.
+     */
+    public static void wakeWaitingTargets(Context context) {
+        Context app = context.getApplicationContext();
+        if (!AiProviderStore.isConfigured(app)) return;
+        for (AiQueueStore.Entry entry : AiQueueStore.load(app)) {
+            if (!AiQueueStore.STATE_WAITING_DATA.equals(entry.state)) continue;
+            if (!KIND_HOURLY.equals(entry.kind) && !KIND_DAILY.equals(entry.kind)) continue;
+            boolean manual = AiQueueStore.REQUEST_MANUAL.equals(entry.requestType);
+            enqueueTarget(
+                    app,
+                    entry.kind,
+                    entry.periodStartMs,
+                    entry.periodEndMs,
+                    entry.requestType,
+                    manual,
+                    ExistingWorkPolicy.REPLACE);
+        }
+    }
+
     private static boolean enqueueTarget(
             Context context,
             String kind,
