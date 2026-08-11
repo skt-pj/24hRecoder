@@ -1,6 +1,7 @@
 package com.sktpj.recorder24h.ai;
 
 import android.content.Context;
+import android.content.Intent;
 
 import androidx.work.BackoffPolicy;
 import androidx.work.Constraints;
@@ -12,12 +13,20 @@ import androidx.work.OneTimeWorkRequest;
 import androidx.work.PeriodicWorkRequest;
 import androidx.work.WorkManager;
 
+import com.sktpj.recorder24h.AiRerunActivity;
+
 import java.util.concurrent.TimeUnit;
 
 public final class AiAnalysisScheduler {
     static final String EXTRA_KIND = "analysisKind";
-    static final String KIND_HOURLY = "hourly";
-    static final String KIND_DAILY = "daily";
+    static final String EXTRA_PERIOD_START_MS = "periodStartMs";
+    static final String EXTRA_PERIOD_END_MS = "periodEndMs";
+    static final String EXTRA_QUEUE_ID = "queueId";
+    static final String EXTRA_REQUEST_TYPE = "requestType";
+    static final String EXTRA_FORCE = "force";
+
+    public static final String KIND_HOURLY = "hourly";
+    public static final String KIND_DAILY = "daily";
     static final String KIND_WEEKLY = "weekly";
     static final String KIND_MONTHLY = "monthly";
     static final String KIND_YEARLY = "yearly";
@@ -25,9 +34,8 @@ public final class AiAnalysisScheduler {
     private static final String PERIODIC_HOURLY = "ai-analysis-hourly";
     private static final String PERIODIC_DAILY = "ai-analysis-daily";
     private static final String PERIODIC_ROLLUP = "ai-analysis-rollup";
-    private static final String NOW_HOURLY = "ai-analysis-now-hourly";
-    private static final String NOW_DAILY = "ai-analysis-now-daily";
     private static final String NOW_ROLLUP = "ai-analysis-now-rollup";
+    private static final String TARGET_PREFIX = "ai-analysis-target-";
 
     private AiAnalysisScheduler() {
     }
@@ -82,33 +90,70 @@ public final class AiAnalysisScheduler {
                 rollup);
     }
 
+    /**
+     * Existing AI-notebook action. Instead of blindly starting every worker, open the
+     * target-period picker so the user knows exactly what will be regenerated.
+     */
     public static void enqueueNow(Context context) {
-        Context app = context.getApplicationContext();
-        if (!AiProviderStore.isConfigured(app)) {
+        if (!AiProviderStore.isConfigured(context.getApplicationContext())) {
             return;
         }
-        WorkManager manager = WorkManager.getInstance(app);
-        Constraints constraints = analysisConstraints(app);
+        Intent intent = new Intent(context, AiRerunActivity.class);
+        if (!(context instanceof android.app.Activity)) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        }
+        context.startActivity(intent);
+    }
 
-        manager.enqueueUniqueWork(
-                NOW_HOURLY,
+    public static boolean enqueuePeriod(
+            Context context,
+            String kind,
+            long periodStartMs,
+            long periodEndMs) {
+        Context app = context.getApplicationContext();
+        if (!AiProviderStore.isConfigured(app)) return false;
+        if (!KIND_HOURLY.equals(kind) && !KIND_DAILY.equals(kind)) return false;
+        if (periodStartMs <= 0L || periodEndMs <= periodStartMs) return false;
+
+        String queueId = manualQueueId(kind, periodStartMs, periodEndMs);
+        AiQueueStore.upsert(
+                app,
+                queueId,
+                kind,
+                periodStartMs,
+                periodEndMs,
+                AiQueueStore.REQUEST_MANUAL,
+                AiQueueStore.STATE_QUEUED,
+                0,
+                "ユーザー指定期間");
+
+        Data input = new Data.Builder()
+                .putString(EXTRA_KIND, kind)
+                .putLong(EXTRA_PERIOD_START_MS, periodStartMs)
+                .putLong(EXTRA_PERIOD_END_MS, periodEndMs)
+                .putString(EXTRA_QUEUE_ID, queueId)
+                .putString(EXTRA_REQUEST_TYPE, AiQueueStore.REQUEST_MANUAL)
+                .putBoolean(EXTRA_FORCE, true)
+                .build();
+
+        String uniqueName = TARGET_PREFIX + safeId(kind + "-" + periodStartMs + "-" + periodEndMs);
+        String kindTag = KIND_HOURLY.equals(kind)
+                ? "ai-analysis-target-hourly" : "ai-analysis-target-daily";
+        OneTimeWorkRequest request = oneTime(
+                AiAnalysisWorker.class,
+                input,
+                analysisConstraints(app),
+                "ai-analysis-target",
+                kindTag);
+        WorkManager.getInstance(app).enqueueUniqueWork(
+                uniqueName,
                 ExistingWorkPolicy.REPLACE,
-                oneTime(
-                        AiAnalysisWorker.class,
-                        data(KIND_HOURLY),
-                        constraints,
-                        "ai-analysis-now",
-                        NOW_HOURLY));
-        manager.enqueueUniqueWork(
-                NOW_DAILY,
-                ExistingWorkPolicy.REPLACE,
-                oneTime(
-                        AiAnalysisWorker.class,
-                        data(KIND_DAILY),
-                        constraints,
-                        "ai-analysis-now",
-                        NOW_DAILY));
-        enqueueRollup(app);
+                request);
+        return true;
+    }
+
+    static String scheduledQueueId(String kind, long periodStartMs, long periodEndMs) {
+        return "scheduled:" + kind + ":" + periodStartMs + ":" + periodEndMs;
     }
 
     static void enqueueRollup(Context context) {
@@ -132,9 +177,16 @@ public final class AiAnalysisScheduler {
         manager.cancelUniqueWork(PERIODIC_HOURLY);
         manager.cancelUniqueWork(PERIODIC_DAILY);
         manager.cancelUniqueWork(PERIODIC_ROLLUP);
-        manager.cancelUniqueWork(NOW_HOURLY);
-        manager.cancelUniqueWork(NOW_DAILY);
         manager.cancelUniqueWork(NOW_ROLLUP);
+        manager.cancelAllWorkByTag("ai-analysis-target");
+    }
+
+    private static String manualQueueId(String kind, long periodStartMs, long periodEndMs) {
+        return "manual:" + kind + ":" + periodStartMs + ":" + periodEndMs;
+    }
+
+    private static String safeId(String raw) {
+        return raw.replace(':', '-').replace('/', '-');
     }
 
     private static Constraints analysisConstraints(Context context) {
