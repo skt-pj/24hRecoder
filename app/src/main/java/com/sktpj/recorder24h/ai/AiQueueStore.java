@@ -19,6 +19,7 @@ public final class AiQueueStore {
     public static final String STATE_RUNNING = "RUNNING";
     public static final String STATE_WAITING_DATA = "WAITING_DATA";
     public static final String STATE_RETRY_WAIT = "RETRY_WAIT";
+    public static final String STATE_FAILED = "FAILED";
 
     public static final String REQUEST_SCHEDULED = "scheduled";
     public static final String REQUEST_MANUAL = "manual";
@@ -194,7 +195,9 @@ public final class AiQueueStore {
         if (STATE_RUNNING.equals(state)) return 0;
         if (STATE_WAITING_DATA.equals(state)) return 1;
         if (STATE_RETRY_WAIT.equals(state)) return 2;
-        return 3;
+        if (STATE_QUEUED.equals(state)) return 3;
+        if (STATE_FAILED.equals(state)) return 4;
+        return 5;
     }
 
     public static final class Entry {
