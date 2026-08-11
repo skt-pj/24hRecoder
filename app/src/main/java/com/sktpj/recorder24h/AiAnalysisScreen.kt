@@ -158,7 +158,9 @@ internal fun AiAnalysisScreen(
                 hasAnyResult = snapshot.hasAnyResult,
                 onOpenSettings = onOpenSettings,
                 onAnalyzeNow = {
-                    AiAnalysisScheduler.enqueueNow(context)
+                    context.startActivity(
+                        android.content.Intent(context, AiRerunActivity::class.java)
+                    )
                 }
             )
         }
