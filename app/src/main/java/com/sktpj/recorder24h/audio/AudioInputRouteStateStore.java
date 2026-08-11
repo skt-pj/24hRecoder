@@ -14,6 +14,7 @@ import java.nio.file.Files;
 /** Cross-process snapshot of the requested and actual recording input route. */
 public final class AudioInputRouteStateStore {
     private static final String FILE_NAME = "audio_input_route.json";
+    private static final Object LOCK = new Object();
 
     private AudioInputRouteStateStore() {
     }
@@ -33,28 +34,32 @@ public final class AudioInputRouteStateStore {
                                       AudioDeviceInfo preferred,
                                       boolean preferredAccepted,
                                       String fallbackReason) {
-        JSONObject root = read(context);
-        try {
-            root.put("updatedAtMs", System.currentTimeMillis());
-            root.put("requestedMode", settings.mode);
-            root.put("manualDeviceKey", settings.manualDeviceKey);
-            root.put("manualDeviceLabel", settings.manualDeviceLabel);
-            root.put("preferredAccepted", preferredAccepted);
-            root.put("fallbackReason", fallbackReason == null ? JSONObject.NULL : fallbackReason);
-            putDevice(root, "preferred", preferred);
-        } catch (Exception ignored) {
+        synchronized (LOCK) {
+            JSONObject root = read(context);
+            try {
+                root.put("updatedAtMs", System.currentTimeMillis());
+                root.put("requestedMode", settings.mode);
+                root.put("manualDeviceKey", settings.manualDeviceKey);
+                root.put("manualDeviceLabel", settings.manualDeviceLabel);
+                root.put("preferredAccepted", preferredAccepted);
+                root.put("fallbackReason", fallbackReason == null ? JSONObject.NULL : fallbackReason);
+                putDevice(root, "preferred", preferred);
+            } catch (Exception ignored) {
+            }
+            writeAtomic(context, root);
         }
-        writeAtomic(context, root);
     }
 
     public static void writeActual(Context context, AudioDeviceInfo device) {
-        JSONObject root = read(context);
-        try {
-            root.put("updatedAtMs", System.currentTimeMillis());
-            putDevice(root, "actual", device);
-        } catch (Exception ignored) {
+        synchronized (LOCK) {
+            JSONObject root = read(context);
+            try {
+                root.put("updatedAtMs", System.currentTimeMillis());
+                putDevice(root, "actual", device);
+            } catch (Exception ignored) {
+            }
+            writeAtomic(context, root);
         }
-        writeAtomic(context, root);
     }
 
     private static void putDevice(JSONObject root, String prefix, AudioDeviceInfo device) throws Exception {
