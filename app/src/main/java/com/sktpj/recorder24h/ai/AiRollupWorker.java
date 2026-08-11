@@ -32,17 +32,10 @@ public final class AiRollupWorker extends Worker {
     @Override
     public Result doWork() {
         Context context = getApplicationContext();
-
-        String apiKey;
-        try {
-            apiKey = OpenAiKeyStore.load(context);
-        } catch (Exception error) {
-            log(context, "AI_ROLLUP_KEY_READ_FAILED", null, 0L, 0L, null, error);
-            return Result.failure();
-        }
-        if (apiKey == null || apiKey.trim().isEmpty()) {
+        if (!AiInferenceClient.isConfigured(context)) {
             return Result.success();
         }
+        String modelId = AiInferenceClient.modelId(context);
 
         int generated = 0;
         for (PeriodSpec spec : completedPeriods()) {
@@ -63,7 +56,7 @@ public final class AiRollupWorker extends Worker {
             }
 
             File target = AiRollupRepository.fileFor(context, spec.kind, spec.periodStartMs);
-            if (AiRollupRepository.isCurrent(target, source.sourceHash)) {
+            if (AiRollupRepository.isCurrent(target, source.sourceHash, modelId)) {
                 log(context, "AI_ROLLUP_SKIPPED_CURRENT", spec.kind,
                         spec.periodStartMs, spec.periodEndMs, source, null);
                 continue;
@@ -73,8 +66,8 @@ public final class AiRollupWorker extends Worker {
                     spec.periodStartMs, spec.periodEndMs, source, null);
             try {
                 OpenAiLunaClient.Response response =
-                        OpenAiLunaClient.analyzeRollup(apiKey, spec.kind, source);
-                AiRollupRepository.save(target, spec.kind, source, response);
+                        AiInferenceClient.analyzeRollup(context, spec.kind, source);
+                AiRollupRepository.save(target, spec.kind, source, response, modelId);
                 generated++;
                 log(context, "AI_ROLLUP_SAVED", spec.kind,
                         spec.periodStartMs, spec.periodEndMs, source, null);
@@ -164,7 +157,8 @@ public final class AiRollupWorker extends Worker {
             if (kind != null) {
                 details.put("kind", kind);
             }
-            details.put("model", OpenAiLunaClient.MODEL);
+            details.put("model", AiInferenceClient.modelId(context));
+            details.put("provider", AiProviderStore.getProvider(context));
             if (periodStartMs > 0L) {
                 details.put("periodStartMs", periodStartMs);
             }
