@@ -17,6 +17,7 @@ android {
         versionName '0.6.12'
         // Normal local transcription model is user-selectable in Settings.
         // Recording input verifies actual Bluetooth routing and falls back to the device mic if routing fails.
+        // Record-list scroll/search/filter context survives a detail-screen round trip.
         // User-triggered queue requests run immediately in a mediaProcessing FGS.
         // Automatic background transcription still uses WorkManager with battery-not-low.
 
