@@ -123,10 +123,6 @@ internal fun AiAnalysisScreen(
             val todayStartMs = today.atStartOfDay(zone).toInstant().toEpochMilli()
             if (selectedDayStartMs == null) {
                 selectedDayStartMs = todayStartMs
-            } else if (selectedDayStartMs != todayStartMs &&
-                next.daily.none { it.periodStartMs == selectedDayStartMs }
-            ) {
-                selectedDayStartMs = next.daily.firstOrNull()?.periodStartMs ?: todayStartMs
             }
             if (selectedWeekStartMs == null ||
                 next.weekly.none { it.periodStartMs == selectedWeekStartMs }
@@ -155,13 +151,7 @@ internal fun AiAnalysisScreen(
         item {
             AiStatusCard(
                 aiConfigured = snapshot.aiConfigured,
-                hasAnyResult = snapshot.hasAnyResult,
-                onOpenSettings = onOpenSettings,
-                onAnalyzeNow = {
-                    context.startActivity(
-                        android.content.Intent(context, AiRerunActivity::class.java)
-                    )
-                }
+                onOpenSettings = onOpenSettings
             )
         }
 
@@ -230,9 +220,7 @@ internal fun AiAnalysisScreen(
                             selectedDayStartMs = if (nextMonth == currentMonth) {
                                 LocalDate.now(zone).atStartOfDay(zone).toInstant().toEpochMilli()
                             } else {
-                                snapshot.daily
-                                    .firstOrNull { YearMonth.from(localDate(it.periodStartMs, zone)) == nextMonth }
-                                    ?.periodStartMs
+                                nextMonth.atEndOfMonth().atStartOfDay(zone).toInstant().toEpochMilli()
                             }
                         },
                         onSelectDay = { doc ->
@@ -293,9 +281,7 @@ internal fun AiAnalysisScreen(
 @Composable
 private fun AiStatusCard(
     aiConfigured: Boolean,
-    hasAnyResult: Boolean,
-    onOpenSettings: () -> Unit,
-    onAnalyzeNow: () -> Unit
+    onOpenSettings: () -> Unit
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -312,9 +298,10 @@ private fun AiStatusCard(
                     Text("AI設定を開く")
                 }
             } else {
-                FilledTonalButton(onClick = onAnalyzeNow, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (hasAnyResult) "期間を指定して再分析" else "期間を指定して分析")
-                }
+                Text(
+                    "日表示で対象日を選ぶと、1日単位と24個の1時間単位から分析・再分析できます。",
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
             }
         }
     }
@@ -349,32 +336,30 @@ private fun DayNotebook(
 ) {
     val zone = ZoneId.systemDefault()
     val today = LocalDate.now(zone)
-    val todayStartMs = today.atStartOfDay(zone).toInstant().toEpochMilli()
-    val todayEndMs = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
     val currentMonth = YearMonth.from(today)
-    val selectedStartMs = selectedDayStartMs ?: if (month == currentMonth) {
-        todayStartMs
-    } else {
-        snapshot.daily.firstOrNull {
-            YearMonth.from(localDate(it.periodStartMs, zone)) == month
-        }?.periodStartMs
-    }
+    val fallbackDate = if (month == currentMonth) today else month.atEndOfMonth()
+    val selectedStartMs = selectedDayStartMs
+        ?: fallbackDate.atStartOfDay(zone).toInstant().toEpochMilli()
+    val selectedDate = localDate(selectedStartMs, zone)
+    val selectedEndMs = selectedDate.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
     val selectedDaily = snapshot.daily.firstOrNull { it.periodStartMs == selectedStartMs }
-    val selectedIsToday = selectedStartMs == todayStartMs
-    val calendarDaily = if (month == currentMonth &&
-        snapshot.daily.none { it.periodStartMs == todayStartMs }
-    ) {
-        snapshot.daily + AiAnalysisDocument(
-            kind = "today",
-            periodStartMs = todayStartMs,
-            periodEndMs = todayEndMs,
-            generatedAtMs = 0L,
-            model = "",
-            sourceCount = 0,
-            analysis = JSONObject()
-        )
-    } else {
-        snapshot.daily
+    val selectedIsToday = selectedDate == today
+    val actualDailyByDate = snapshot.daily.associateBy { localDate(it.periodStartMs, zone) }
+    val calendarDaily = (1..month.lengthOfMonth()).mapNotNull { day ->
+        val date = month.atDay(day)
+        if (date > today) {
+            null
+        } else {
+            actualDailyByDate[date] ?: AiAnalysisDocument(
+                kind = if (date == today) "today" else "selectable",
+                periodStartMs = date.atStartOfDay(zone).toInstant().toEpochMilli(),
+                periodEndMs = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli(),
+                generatedAtMs = 0L,
+                model = "",
+                sourceCount = 0,
+                analysis = JSONObject()
+            )
+        }
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -394,51 +379,34 @@ private fun DayNotebook(
             onSelect = onSelectDay
         )
 
-        if (selectedIsToday) {
-            if (selectedDaily != null) {
-                DailyAnalysisCard(selectedDaily)
-            } else {
-                EmptyAnalysisCard(
-                    title = "今日の日次ノートはまだ確定していません",
-                    message = "日次ノートは1日が完了した後に生成します。今日については、下に1時間ごとのAI更新結果を表示します。"
-                )
-            }
-
-            Text("今日の1時間ごとの更新", style = MaterialTheme.typography.titleLarge)
-            val hourly = snapshot.hourly.filter {
-                it.periodStartMs >= todayStartMs && it.periodStartMs < todayEndMs
-            }
-            for (hour in 23 downTo 0) {
-                val slotStartMs = today.atTime(hour, 0)
-                    .atZone(zone)
-                    .toInstant()
-                    .toEpochMilli()
-                val slotEndMs = today.atTime(hour, 0)
-                    .plusHours(1)
-                    .atZone(zone)
-                    .toInstant()
-                    .toEpochMilli()
-                val doc = hourly.firstOrNull {
-                    it.periodStartMs >= slotStartMs && it.periodStartMs < slotEndMs
-                } ?: AiAnalysisDocument(
-                    kind = "hourly",
-                    periodStartMs = slotStartMs,
-                    periodEndMs = slotEndMs,
-                    generatedAtMs = 0L,
-                    model = "",
-                    sourceCount = 0,
-                    analysis = JSONObject()
-                )
-                HourlySummaryCard(doc)
-            }
-        } else if (selectedDaily != null) {
+        if (selectedDaily != null) {
             DailyAnalysisCard(selectedDaily)
         } else {
             EmptyAnalysisCard(
-                title = "この月の日次ノートはありません",
-                message = "日次ノートが生成されると、カレンダーの日付から直接開けます。"
+                title = if (selectedIsToday) {
+                    "今日の日次ノートはまだ確定していません"
+                } else {
+                    "この日の日次ノートはありません"
+                },
+                message = if (selectedIsToday) {
+                    "日次ノートは1日が完了した後に生成します。下の1日単位・1時間単位から処理状態を確認できます。"
+                } else {
+                    "保存済み日次ノートがなくても、元データが残っている時間は下から分析できます。"
+                }
             )
         }
+
+        val hourly = snapshot.hourly.filter {
+            it.periodStartMs >= selectedStartMs && it.periodStartMs < selectedEndMs
+        }
+        val hourlySummaries = hourly.associate { doc ->
+            doc.periodStartMs to doc.analysis.optString("summary", "")
+        }
+        AiNotebookDayAnalysisActions(
+            date = selectedDate,
+            hourlySummaries = hourlySummaries,
+            dailyHasResult = selectedDaily != null
+        )
     }
 }
 
@@ -705,7 +673,7 @@ private fun MonthCalendar(
                             val selected = doc?.periodStartMs == selectedDayStartMs
                             val containerColor = when {
                                 selected -> MaterialTheme.colorScheme.primaryContainer
-                                doc != null -> MaterialTheme.colorScheme.secondaryContainer
+                                doc?.kind == "daily" -> MaterialTheme.colorScheme.secondaryContainer
                                 else -> MaterialTheme.colorScheme.surfaceVariant
                             }
                             Surface(
@@ -730,7 +698,7 @@ private fun MonthCalendar(
                                     Text(
                                         when {
                                             doc?.kind == "today" -> "今日"
-                                            doc != null -> "●"
+                                            doc?.kind == "daily" -> "●"
                                             else -> ""
                                         },
                                         style = MaterialTheme.typography.labelSmall,
