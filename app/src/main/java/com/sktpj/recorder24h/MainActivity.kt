@@ -290,6 +290,8 @@ private fun RecorderApp(
     var refresh by remember { mutableIntStateOf(0) }
     var dashboard by remember { mutableStateOf(readDashboard(context)) }
     val historyListState = rememberLazyListState()
+    var historyQuery by remember { mutableStateOf("") }
+    var historyFilter by remember { mutableStateOf(HistoryFilter.ALL) }
 
     LaunchedEffect(Unit) {
         val hasQueuedTranscription = withContext(Dispatchers.IO) {
@@ -404,6 +406,10 @@ private fun RecorderApp(
                         section == AppSection.HISTORY -> HistoryScreen(
                             records = records,
                             listState = historyListState,
+                            query = historyQuery,
+                            filter = historyFilter,
+                            onQueryChange = { historyQuery = it },
+                            onFilterChange = { historyFilter = it },
                             onSelect = { selectedId = it.segmentId }
                         )
                         section == AppSection.AI -> AiAnalysisScreen(
@@ -779,10 +785,12 @@ private fun formatQueueDateTime(record: SegmentRecord): String {
 private fun HistoryScreen(
     records: List<SegmentRecord>,
     listState: LazyListState,
+    query: String,
+    filter: HistoryFilter,
+    onQueryChange: (String) -> Unit,
+    onFilterChange: (HistoryFilter) -> Unit,
     onSelect: (SegmentRecord) -> Unit
 ) {
-    var query by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf(HistoryFilter.ALL) }
     val filtered = remember(records, query, filter) {
         records.filter { record ->
             val statusOk = when (filter) {
@@ -803,7 +811,7 @@ private fun HistoryScreen(
         Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedTextField(
                 value = query,
-                onValueChange = { query = it },
+                onValueChange = onQueryChange,
                 singleLine = true,
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 placeholder = { Text("文字起こし・segment IDを検索") },
@@ -811,7 +819,7 @@ private fun HistoryScreen(
             )
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 itemsIndexed(HistoryFilter.entries) { _, item ->
-                    FilterChip(selected = filter == item, onClick = { filter = item }, label = { Text(item.label) })
+                    FilterChip(selected = filter == item, onClick = { onFilterChange(item) }, label = { Text(item.label) })
                 }
             }
         }
