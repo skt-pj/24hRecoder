@@ -34,6 +34,7 @@ import com.sktpj.recorder24h.ai.AiAnalysisRepository
 import com.sktpj.recorder24h.ai.AiAnalysisScheduler
 import com.sktpj.recorder24h.ai.AiProcessingDurationStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -108,13 +109,23 @@ private fun AiQueueTargetContent(
     }
     var hourlySummaries by remember(date) { mutableStateOf<Map<Long, String>>(emptyMap()) }
     var dailyHasResult by remember(date) { mutableStateOf(false) }
+    var targetProcessingDurationMs by remember(periodStartMs, periodEndMs) { mutableStateOf(0L) }
 
-    LaunchedEffect(date) {
-        val loaded = withContext(Dispatchers.IO) {
-            loadTargetDay(context.applicationContext, date, zone)
+    LaunchedEffect(date, kind, periodStartMs, periodEndMs) {
+        while (true) {
+            val loaded = withContext(Dispatchers.IO) {
+                loadTargetDay(context.applicationContext, date, zone)
+            }
+            hourlySummaries = loaded.first
+            dailyHasResult = loaded.second
+            targetProcessingDurationMs = AiProcessingDurationStore.get(
+                context,
+                kind,
+                periodStartMs,
+                periodEndMs
+            )
+            delay(1_000L)
         }
-        hourlySummaries = loaded.first
-        dailyHasResult = loaded.second
     }
 
     LazyColumn(
@@ -129,15 +140,9 @@ private fun AiQueueTargetContent(
                     aiTargetPeriodLabel(kind, periodStartMs, periodEndMs),
                     style = MaterialTheme.typography.headlineMedium
                 )
-                val duration = AiProcessingDurationStore.get(
-                    context,
-                    kind,
-                    periodStartMs,
-                    periodEndMs
-                )
-                if (duration > 0L) {
+                if (targetProcessingDurationMs > 0L) {
                     Text(
-                        "前回の処理時間: ${formatAiProcessingDuration(duration)}",
+                        "前回の処理時間: ${formatAiProcessingDuration(targetProcessingDurationMs)}",
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
