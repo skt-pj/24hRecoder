@@ -19,12 +19,12 @@ import java.util.Iterator;
 import java.util.List;
 
 /**
- * High-recall, low-cost activity gate that runs on the PCM already read by AudioRecord.
+ * High-recall, low-cost activity gate.
  *
- * This is intentionally not the final speech detector. It only identifies regions that might
- * contain speech so the expensive Silero pass does not need to scan an entire five-minute file.
- * Timestamps are kept on the original AudioRecord PTS timeline. Persisted ranges are always
- * relative to the original segment; removed silence is never compacted out of the timebase.
+ * New recordings are inspected directly from AudioRecord PCM. Retained/legacy recordings can run
+ * the same cheap gate after decode so they also avoid a full five-minute Silero pass. This gate is
+ * intentionally not the final speech detector: it prefers false positives over missed speech.
+ * All ranges stay on the original audio timebase; removed silence is never compacted.
  */
 public final class RealtimeSpeechGateStore {
     private static final Object LOCK = new Object();
@@ -32,8 +32,9 @@ public final class RealtimeSpeechGateStore {
     private static final long PRE_ROLL_US = 800_000L;
     private static final long POST_ROLL_US = 1_200_000L;
     private static final long MERGE_GAP_US = 1_000_000L;
+    private static final int OFFLINE_FRAME_SAMPLES = 1_600; // 100 ms @ 16 kHz
 
-    // Conservative thresholds: the realtime gate should prefer false positives over missed speech.
+    // Conservative thresholds: the gate should prefer false positives over missed speech.
     private static final double ACTIVITY_RMS = 0.0012;
     private static final double ACTIVITY_PEAK = 0.0045;
     private static final double DEFINITE_SILENCE_RMS = 0.0008;
@@ -86,8 +87,8 @@ public final class RealtimeSpeechGateStore {
             double dynamicPeak = Math.max(ACTIVITY_PEAK, noiseFloorRms * 5.0);
             boolean candidate = rms >= dynamicRms || peak >= dynamicPeak;
 
-            // The noise estimate only learns quickly from frames already considered quiet. Loud or
-            // continuous speech therefore cannot train itself into the background during a segment.
+            // Learn quickly only from frames already considered quiet. Loud or continuous speech
+            // therefore cannot train itself into the background during a segment.
             if (!candidate) {
                 noiseFloorRms = clamp(noiseFloorRms * 0.96 + rms * 0.04, 0.0002, 0.05);
             } else if (rms < noiseFloorRms) {
@@ -102,9 +103,119 @@ public final class RealtimeSpeechGateStore {
     }
 
     /**
-     * Persist candidate metadata before the READY segment event is published. This guarantees a
-     * transcription worker can see the realtime decision even if it starts immediately.
+     * Cheap fallback for retained audio that predates realtime sidecar metadata. The returned
+     * ranges are still relative to the original decoded file, so Silero/Whisper timestamp mapping
+     * remains identical to the realtime path.
      */
+    public static Snapshot analyzeFloatPcm(float[] pcm) {
+        if (pcm == null || pcm.length == 0) return Snapshot.missing();
+
+        List<IntervalUs> localIntervals = new ArrayList<>();
+        long localActiveStartUs = -1L;
+        long localActiveEndUs = -1L;
+        double localNoiseFloorRms = 0.0010;
+        double maxRms = 0.0;
+        double maxPeak = 0.0;
+        double rmsSum = 0.0;
+        int frameCount = 0;
+        int candidateFrameCount = 0;
+
+        for (int start = 0; start < pcm.length; start += OFFLINE_FRAME_SAMPLES) {
+            int end = Math.min(pcm.length, start + OFFLINE_FRAME_SAMPLES);
+            if (end <= start) continue;
+            double sumSquares = 0.0;
+            double peak = 0.0;
+            for (int i = start; i < end; i++) {
+                double value = pcm[i];
+                sumSquares += value * value;
+                peak = Math.max(peak, Math.abs(value));
+            }
+            double rms = Math.sqrt(sumSquares / Math.max(1, end - start));
+            double dynamicRms = Math.max(ACTIVITY_RMS, localNoiseFloorRms * 1.7);
+            double dynamicPeak = Math.max(ACTIVITY_PEAK, localNoiseFloorRms * 5.0);
+            boolean candidate = rms >= dynamicRms || peak >= dynamicPeak;
+
+            if (!candidate) {
+                localNoiseFloorRms = clamp(localNoiseFloorRms * 0.96 + rms * 0.04, 0.0002, 0.05);
+            } else if (rms < localNoiseFloorRms) {
+                localNoiseFloorRms = clamp(localNoiseFloorRms * 0.995 + rms * 0.005, 0.0002, 0.05);
+            }
+
+            long startUs = Math.round(start * 1_000_000.0 / AacSegmentRecorder.SAMPLE_RATE_HZ);
+            long endUs = Math.round(end * 1_000_000.0 / AacSegmentRecorder.SAMPLE_RATE_HZ);
+            if (candidate) {
+                candidateFrameCount++;
+                long paddedStart = Math.max(0L, startUs - PRE_ROLL_US);
+                long paddedEnd = endUs + POST_ROLL_US;
+                if (localActiveStartUs < 0L) {
+                    localActiveStartUs = paddedStart;
+                    localActiveEndUs = paddedEnd;
+                } else if (paddedStart <= localActiveEndUs + MERGE_GAP_US) {
+                    localActiveEndUs = Math.max(localActiveEndUs, paddedEnd);
+                } else {
+                    localIntervals.add(new IntervalUs(localActiveStartUs, localActiveEndUs));
+                    localActiveStartUs = paddedStart;
+                    localActiveEndUs = paddedEnd;
+                }
+            }
+
+            frameCount++;
+            maxRms = Math.max(maxRms, rms);
+            maxPeak = Math.max(maxPeak, peak);
+            rmsSum += rms;
+        }
+        if (localActiveStartUs >= 0L && localActiveEndUs > localActiveStartUs) {
+            localIntervals.add(new IntervalUs(localActiveStartUs, localActiveEndUs));
+        }
+
+        long durationMs = Math.round(pcm.length * 1000.0 / AacSegmentRecorder.SAMPLE_RATE_HZ);
+        long durationUs = durationMs * 1000L;
+        JSONArray rows = new JSONArray();
+        long candidateMs = 0L;
+        int candidateCount = 0;
+        for (IntervalUs interval : localIntervals) {
+            long startUs = Math.max(0L, interval.startUs);
+            long endUs = Math.min(durationUs, interval.endUs);
+            if (endUs <= startUs) continue;
+            long startMs = Math.max(0L, Math.round(startUs / 1000.0));
+            long endMs = Math.min(durationMs, Math.round(endUs / 1000.0));
+            if (endMs <= startMs) continue;
+            candidateCount++;
+            candidateMs += endMs - startMs;
+            try {
+                rows.put(new JSONObject()
+                        .put("startMs", startMs)
+                        .put("endMs", endMs)
+                        .put("durationMs", endMs - startMs));
+            } catch (Exception ignored) {
+            }
+        }
+
+        boolean definiteSilence = frameCount > 0
+                && maxRms <= DEFINITE_SILENCE_RMS
+                && maxPeak <= DEFINITE_SILENCE_PEAK;
+        JSONObject root = new JSONObject();
+        try {
+            root.put("schemaVersion", 1);
+            root.put("source", "offline-decoded-pcm");
+            root.put("timebase", "original-audio-segment-ms");
+            root.put("segmentDurationMs", durationMs);
+            root.put("candidateCount", candidateCount);
+            root.put("candidateMs", candidateMs);
+            root.put("definiteSilence", definiteSilence);
+            root.put("frameCount", frameCount);
+            root.put("candidateFrameCount", candidateFrameCount);
+            root.put("meanRms", frameCount == 0 ? 0.0 : rmsSum / frameCount);
+            root.put("maxRms", maxRms);
+            root.put("maxPeak", maxPeak);
+            root.put("noiseFloorRms", localNoiseFloorRms);
+            root.put("ranges", rows);
+        } catch (Exception ignored) {
+        }
+        return new Snapshot(root, true);
+    }
+
+    /** Persist realtime candidate metadata before the READY segment event is published. */
     public static Snapshot persistSegment(Context context,
                                           String segmentId,
                                           long segmentBasePtsUs,
@@ -168,6 +279,7 @@ public final class RealtimeSpeechGateStore {
 
             try {
                 root.put("schemaVersion", 1);
+                root.put("source", "realtime-audiorecord-pcm");
                 root.put("segmentId", segmentId);
                 root.put("timebase", "original-audio-segment-ms");
                 root.put("segmentStartedAtMs", segmentStartedAtMs);
@@ -321,6 +433,7 @@ public final class RealtimeSpeechGateStore {
 
     public static final class Snapshot {
         public final boolean available;
+        public final String source;
         public final long segmentDurationMs;
         public final int candidateCount;
         public final long candidateMs;
@@ -331,6 +444,7 @@ public final class RealtimeSpeechGateStore {
         Snapshot(JSONObject json, boolean available) {
             this.json = json == null ? new JSONObject() : json;
             this.available = available;
+            this.source = this.json.optString("source", available ? "unknown" : "missing");
             this.segmentDurationMs = this.json.optLong("segmentDurationMs", 0L);
             this.candidateCount = this.json.optInt("candidateCount", 0);
             this.candidateMs = this.json.optLong("candidateMs", 0L);
@@ -350,6 +464,10 @@ public final class RealtimeSpeechGateStore {
 
         static Snapshot missing() {
             return new Snapshot(new JSONObject(), false);
+        }
+
+        public boolean isRealtime() {
+            return source.startsWith("realtime-");
         }
 
         public JSONObject toJson() {
