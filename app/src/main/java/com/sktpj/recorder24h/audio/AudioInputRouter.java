@@ -130,10 +130,18 @@ public final class AudioInputRouter {
     }
 
     public static void recordActualInput(Context context, AudioDeviceInfo actual, String trigger) {
+        String actualKey = deviceKey(actual);
+        JSONObject before = AudioInputRouteStateStore.read(context);
+        String previousKey = before.optString("actualDeviceKey", "");
+        if ("HEARTBEAT".equals(trigger) && actualKey.equals(previousKey)) {
+            return;
+        }
+
         AudioInputRouteStateStore.writeActual(context, actual);
         try {
             JSONObject d = new JSONObject();
             d.put("trigger", trigger);
+            d.put("changed", !actualKey.equals(previousKey));
             putDevice(d, "actual", actual);
             AppLogger.event(context, "AUDIO_INPUT_ROUTE_ACTUAL", d);
         } catch (Exception ignored) {
