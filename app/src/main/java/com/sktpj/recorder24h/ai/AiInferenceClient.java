@@ -68,6 +68,9 @@ public final class AiInferenceClient {
         long startedAtMs = System.currentTimeMillis();
         try {
             OpenAiLunaClient.Response response = call.run();
+            if (AiAnalysisScheduler.KIND_HOURLY.equals(kind)) {
+                AiHourlyDetailPreserver.preserve(response);
+            }
             AiProcessingDurationStore.record(
                     context,
                     kind,
