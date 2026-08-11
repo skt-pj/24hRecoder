@@ -1,0 +1,77 @@
+name: Apply record list scroll restoration
+
+on:
+  push:
+    branches: ["agent/record-list-scroll-restore"]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[record-scroll-fix]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: agent/record-list-scroll-restore
+          fetch-depth: 0
+
+      - name: Patch record list state
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+          text = path.read_text(encoding='utf-8')
+
+          replacements = [
+              (
+                  'import androidx.compose.foundation.lazy.LazyColumn\nimport androidx.compose.foundation.lazy.LazyRow\nimport androidx.compose.foundation.lazy.itemsIndexed\n',
+                  'import androidx.compose.foundation.lazy.LazyColumn\nimport androidx.compose.foundation.lazy.LazyListState\nimport androidx.compose.foundation.lazy.LazyRow\nimport androidx.compose.foundation.lazy.itemsIndexed\nimport androidx.compose.foundation.lazy.rememberLazyListState\n'
+              ),
+              (
+                  '    var refresh by remember { mutableIntStateOf(0) }\n    var dashboard by remember { mutableStateOf(readDashboard(context)) }\n',
+                  '    var refresh by remember { mutableIntStateOf(0) }\n    var dashboard by remember { mutableStateOf(readDashboard(context)) }\n    val historyListState = rememberLazyListState()\n'
+              ),
+              (
+                  '                        section == AppSection.HISTORY -> HistoryScreen(records) { selectedId = it.segmentId }\n',
+                  '                        section == AppSection.HISTORY -> HistoryScreen(\n                            records = records,\n                            listState = historyListState,\n                            onSelect = { selectedId = it.segmentId }\n                        )\n'
+              ),
+              (
+                  'private fun HistoryScreen(records: List<SegmentRecord>, onSelect: (SegmentRecord) -> Unit) {\n',
+                  'private fun HistoryScreen(\n    records: List<SegmentRecord>,\n    listState: LazyListState,\n    onSelect: (SegmentRecord) -> Unit\n) {\n'
+              ),
+              (
+                  '            LazyColumn(\n                Modifier.fillMaxSize(),\n                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),\n',
+                  '            LazyColumn(\n                state = listState,\n                modifier = Modifier.fillMaxSize(),\n                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),\n'
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'MainActivity replacement expected once, found {count}: {old[:100]!r}')
+              text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding='utf-8')
+
+          gradle = Path('app/build.gradle')
+          build = gradle.read_text(encoding='utf-8')
+          old = "        versionCode 32\n        versionName '0.6.11'\n"
+          new = "        versionCode 33\n        versionName '0.6.12'\n"
+          if build.count(old) != 1:
+              raise SystemExit('Expected 0.6.11/code32 version block exactly once')
+          gradle.write_text(build.replace(old, new, 1), encoding='utf-8')
+          PY
+
+      - name: Remove one-shot workflow and commit
+        run: |
+          rm .github/workflows/apply-record-scroll-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Preserve record list scroll position [record-scroll-fix]"
+          git push origin HEAD:agent/record-list-scroll-restore
