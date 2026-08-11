@@ -108,17 +108,21 @@ public final class AiAnalysisWorker extends Worker {
         }
         String modelId = AiInferenceClient.modelId(context);
 
+        // Daily finalization can intentionally purge raw transcripts. A forced rerun must never
+        // rebuild from only the surviving subset, because that would overwrite a correct note
+        // with an incomplete one. The same protection applies to an hourly slice of a purged day.
+        if (force && sourceWasPurged(context, periodStartMs, periodEndMs)) {
+            setQueueState(context, queueId, kind, periodStartMs, periodEndMs, requestType,
+                    AiQueueStore.STATE_FAILED, "元の文字起こしデータは日次確定後に削除済みです");
+            log(context, "AI_ANALYSIS_SOURCE_ALREADY_PURGED", kind,
+                    periodStartMs, periodEndMs, null, null);
+            return Result.success();
+        }
+
         AiAnalysisRepository.SourceWindow source =
                 AiAnalysisRepository.buildSource(context, periodStartMs, periodEndMs);
 
         if (source.isEmpty()) {
-            if (force && sourceWasPurged(context, periodStartMs, periodEndMs)) {
-                setQueueState(context, queueId, kind, periodStartMs, periodEndMs, requestType,
-                        AiQueueStore.STATE_FAILED, "元の文字起こしデータは日次確定後に削除済みです");
-                log(context, "AI_ANALYSIS_SOURCE_ALREADY_PURGED", kind,
-                        periodStartMs, periodEndMs, source, null);
-                return Result.success();
-            }
             if (hasAnyRecording(context, periodStartMs, periodEndMs)) {
                 // Recording exists and transcription has no pending work: this is a completed
                 // no-speech/empty-transcript period, not a queue item that should wait forever.
