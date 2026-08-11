@@ -14,6 +14,8 @@ import androidx.work.PeriodicWorkRequest;
 import androidx.work.WorkManager;
 
 import com.sktpj.recorder24h.AiRerunActivity;
+import com.sktpj.recorder24h.ui.SegmentHistoryRepository;
+import com.sktpj.recorder24h.ui.SegmentRecord;
 
 import java.util.concurrent.TimeUnit;
 
@@ -133,15 +135,32 @@ public final class AiAnalysisScheduler {
     }
 
     /**
-     * A completed transcript can make one or more semantic AI queue items ready immediately.
-     * Replace only data-waiting target work; API retry state keeps its own backoff policy.
+     * Wake only semantic AI queue targets that overlap the transcript just saved.
+     * API retry items keep their normal backoff; only data-waiting items are reconsidered.
      */
-    public static void wakeWaitingTargets(Context context) {
+    public static void wakeWaitingTargets(Context context, String segmentId) {
         Context app = context.getApplicationContext();
-        if (!AiProviderStore.isConfigured(app)) return;
+        if (!AiProviderStore.isConfigured(app) || segmentId == null || segmentId.isEmpty()) return;
+
+        SegmentRecord sourceRecord = null;
+        for (SegmentRecord record : SegmentHistoryRepository.load(app)) {
+            if (segmentId.equals(record.getSegmentId())) {
+                sourceRecord = record;
+                break;
+            }
+        }
+        if (sourceRecord == null) return;
+
+        long recordStartMs = sourceRecord.getStartedAtMs() > 0L
+                ? sourceRecord.getStartedAtMs() : sourceRecord.getSortTimeMs();
+        if (recordStartMs <= 0L) return;
+        long recordEndMs = sourceRecord.getEndedAtMs() > recordStartMs
+                ? sourceRecord.getEndedAtMs() : recordStartMs + 1L;
+
         for (AiQueueStore.Entry entry : AiQueueStore.load(app)) {
             if (!AiQueueStore.STATE_WAITING_DATA.equals(entry.state)) continue;
             if (!KIND_HOURLY.equals(entry.kind) && !KIND_DAILY.equals(entry.kind)) continue;
+            if (recordStartMs >= entry.periodEndMs || recordEndMs <= entry.periodStartMs) continue;
             boolean manual = AiQueueStore.REQUEST_MANUAL.equals(entry.requestType);
             enqueueTarget(
                     app,
