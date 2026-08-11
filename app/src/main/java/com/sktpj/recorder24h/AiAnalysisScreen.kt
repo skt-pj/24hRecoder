@@ -408,13 +408,28 @@ private fun DayNotebook(
             val hourly = snapshot.hourly.filter {
                 it.periodStartMs >= todayStartMs && it.periodStartMs < todayEndMs
             }
-            if (hourly.isEmpty()) {
-                EmptyAnalysisCard(
-                    title = "今日の時間別まとめはまだありません",
-                    message = "1時間単位のLuna分析が完了すると、最新の時間帯からここに表示されます。"
+            for (hour in 23 downTo 0) {
+                val slotStartMs = today.atTime(hour, 0)
+                    .atZone(zone)
+                    .toInstant()
+                    .toEpochMilli()
+                val slotEndMs = today.atTime(hour, 0)
+                    .plusHours(1)
+                    .atZone(zone)
+                    .toInstant()
+                    .toEpochMilli()
+                val doc = hourly.firstOrNull {
+                    it.periodStartMs >= slotStartMs && it.periodStartMs < slotEndMs
+                } ?: AiAnalysisDocument(
+                    kind = "hourly",
+                    periodStartMs = slotStartMs,
+                    periodEndMs = slotEndMs,
+                    generatedAtMs = 0L,
+                    model = "",
+                    sourceCount = 0,
+                    analysis = JSONObject()
                 )
-            } else {
-                hourly.sortedByDescending { it.periodStartMs }.forEach { HourlySummaryCard(it) }
+                HourlySummaryCard(doc)
             }
         } else if (selectedDaily != null) {
             DailyAnalysisCard(selectedDaily)
