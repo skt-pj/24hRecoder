@@ -89,7 +89,8 @@ public final class AiAnalysisWorker extends Worker {
                         AiQueueStore.STATE_WAITING_DATA, "日次対象期間の終了待ち");
                 log(context, "AI_DAILY_ANALYSIS_WAITING_FOR_DAY_CLOSE", kind,
                         periodStartMs, periodEndMs, null, null);
-                return Result.retry();
+                // Data/time wait is a semantic queue state, not a WorkManager retry loop.
+                return Result.success();
             }
         }
 
@@ -98,7 +99,8 @@ public final class AiAnalysisWorker extends Worker {
                     AiQueueStore.STATE_WAITING_DATA, "対象期間の文字起こし待ち");
             log(context, "AI_ANALYSIS_WAITING_FOR_TRANSCRIPTION", kind,
                     periodStartMs, periodEndMs, null, null);
-            return Result.retry();
+            // TranscriptionRepository wakes only overlapping waiting targets when data is saved.
+            return Result.success();
         }
 
         if (!AiInferenceClient.isConfigured(context)) {
@@ -136,7 +138,8 @@ public final class AiAnalysisWorker extends Worker {
                     AiQueueStore.STATE_WAITING_DATA, "対象期間の録音・文字起こしデータ待ち");
             log(context, "AI_ANALYSIS_WAITING_FOR_SOURCE", kind,
                     periodStartMs, periodEndMs, source, null);
-            return Result.retry();
+            // Leave the semantic queue item dormant until overlapping transcript data arrives.
+            return Result.success();
         }
 
         if (!force && AiAnalysisRepository.isCurrent(target, source.sourceHash, modelId)) {
