@@ -55,7 +55,7 @@ class AiRerunActivity : ComponentActivity() {
                 Surface(Modifier.fillMaxSize()) {
                     AiRerunScreen(
                         onClose = { finish() },
-                        onSubmit = { startMs, endMs ->
+                        onSubmitHourly = { startMs, endMs ->
                             val queued = AiAnalysisScheduler.enqueuePeriod(
                                 this,
                                 AiAnalysisScheduler.KIND_HOURLY,
@@ -65,6 +65,20 @@ class AiRerunActivity : ComponentActivity() {
                             Toast.makeText(
                                 this,
                                 if (queued) "この時間帯をAI要約キューに追加しました" else "AI要約を登録できませんでした",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            queued
+                        },
+                        onSubmitDaily = { startMs, endMs ->
+                            val queued = AiAnalysisScheduler.enqueuePeriod(
+                                this,
+                                AiAnalysisScheduler.KIND_DAILY,
+                                startMs,
+                                endMs
+                            )
+                            Toast.makeText(
+                                this,
+                                if (queued) "この1日をAI要約キューに追加しました" else "AI要約を登録できませんでした",
                                 Toast.LENGTH_SHORT
                             ).show()
                             queued
@@ -91,7 +105,8 @@ private data class HourlyActionRow(
 @Composable
 private fun AiRerunScreen(
     onClose: () -> Unit,
-    onSubmit: (Long, Long) -> Boolean
+    onSubmitHourly: (Long, Long) -> Boolean,
+    onSubmitDaily: (Long, Long) -> Boolean
 ) {
     val context = LocalContext.current
     val zone = remember { ZoneId.systemDefault() }
@@ -111,6 +126,9 @@ private fun AiRerunScreen(
         loading = false
     }
 
+    val dailyStart = selectedDate.atStartOfDay(zone)
+    val dailyEnd = dailyStart.plusDays(1)
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(20.dp),
@@ -121,7 +139,7 @@ private fun AiRerunScreen(
         }
         item {
             Text(
-                "対象日を選ぶと、その日の24時間を1時間単位ですべて表示します。データが揃っている時間だけ実行でき、生成済みの時間は再実行できます。",
+                "対象日を選び、1時間単位または1日単位で分析・再分析します。時間別は24時間をすべて表示し、データが揃っている時間だけ実行できます。",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
@@ -162,9 +180,50 @@ private fun AiRerunScreen(
                 }
             }
         }
+
         item {
             Text(
-                "時間別",
+                "1日単位",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+        item {
+            Card {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "${dateFormat.format(selectedDate)} 00:00–24:00",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        "日次ノートをこの1日分の元データから生成または再生成します。データ待ちや既存結果の扱いはAI要約キューの既存仕様を維持します。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Button(
+                        onClick = {
+                            if (onSubmitDaily(
+                                    dailyStart.toInstant().toEpochMilli(),
+                                    dailyEnd.toInstant().toEpochMilli()
+                                )
+                            ) {
+                                refreshToken++
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("この1日を分析 / 再分析")
+                    }
+                }
+            }
+        }
+
+        item {
+            Text(
+                "1時間単位",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold
             )
@@ -182,7 +241,7 @@ private fun AiRerunScreen(
                 HourlyActionCard(
                     row = row,
                     onRun = {
-                        if (onSubmit(row.periodStartMs, row.periodEndMs)) {
+                        if (onSubmitHourly(row.periodStartMs, row.periodEndMs)) {
                             refreshToken++
                         }
                     }
