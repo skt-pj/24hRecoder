@@ -43,7 +43,10 @@ public final class Gemma4ModelDownloadWorker extends Worker {
         }
 
         try {
-            setForegroundAsync(foregroundInfo(context, Gemma4ModelManager.downloadedBytes(context))).get();
+            long initialBytes = Gemma4ModelManager.downloadedBytes(context);
+            publishProgress(initialBytes, Gemma4ModelManager.PHASE_STARTING, null);
+            setForegroundAsync(foregroundInfo(context, initialBytes, "接続準備中")).get();
+
             File partial = Gemma4ModelManager.partialFile(context);
             File model = Gemma4ModelManager.modelFile(context);
             File parent = partial.getParentFile();
@@ -83,6 +86,9 @@ public final class Gemma4ModelDownloadWorker extends Worker {
             }
 
             long written = offset;
+            publishProgress(written, Gemma4ModelManager.PHASE_DOWNLOADING, null);
+            setForegroundAsync(foregroundInfo(context, written, "ダウンロード中"));
+
             long lastProgressAt = 0L;
             try (BufferedInputStream input = new BufferedInputStream(connection.getInputStream(), 256 * 1024);
                  FileOutputStream output = new FileOutputStream(partial, append)) {
@@ -93,18 +99,17 @@ public final class Gemma4ModelDownloadWorker extends Worker {
                         continue;
                     }
                     if (isStopped()) {
-                        return Result.failure();
+                        return Result.failure(new Data.Builder()
+                                .putString(Gemma4ModelManager.OUTPUT_ERROR, "モデル取得を中断しました")
+                                .build());
                     }
                     output.write(buffer, 0, read);
                     written += read;
                     long now = System.currentTimeMillis();
                     if (now - lastProgressAt >= 1_000L) {
                         lastProgressAt = now;
-                        setProgressAsync(new Data.Builder()
-                                .putLong("downloadedBytes", written)
-                                .putLong("expectedBytes", Gemma4ModelManager.EXPECTED_BYTES)
-                                .build());
-                        setForegroundAsync(foregroundInfo(context, written));
+                        publishProgress(written, Gemma4ModelManager.PHASE_DOWNLOADING, null);
+                        setForegroundAsync(foregroundInfo(context, written, "ダウンロード中"));
                     }
                 }
                 output.flush();
@@ -117,6 +122,9 @@ public final class Gemma4ModelDownloadWorker extends Worker {
                 throw new IllegalStateException(
                         "Gemma 4 model size mismatch: " + partial.length());
             }
+
+            publishProgress(partial.length(), Gemma4ModelManager.PHASE_VERIFYING, null);
+            setForegroundAsync(foregroundInfo(context, partial.length(), "ファイルを検証中"));
             if (!Gemma4ModelManager.verifySha256(partial)) {
                 //noinspection ResultOfMethodCallIgnored
                 partial.delete();
@@ -138,8 +146,29 @@ public final class Gemma4ModelDownloadWorker extends Worker {
             return Result.success();
         } catch (Exception error) {
             logFailure(context, error);
-            return getRunAttemptCount() < 2 ? Result.retry() : Result.failure();
+            String message = userVisibleError(error);
+            if (getRunAttemptCount() < 2) {
+                publishProgress(
+                        Gemma4ModelManager.downloadedBytes(context),
+                        Gemma4ModelManager.PHASE_RETRYING,
+                        message);
+                return Result.retry();
+            }
+            return Result.failure(new Data.Builder()
+                    .putString(Gemma4ModelManager.OUTPUT_ERROR, message)
+                    .build());
         }
+    }
+
+    private void publishProgress(long downloadedBytes, String phase, String message) {
+        Data.Builder builder = new Data.Builder()
+                .putLong(Gemma4ModelManager.PROGRESS_DOWNLOADED_BYTES, downloadedBytes)
+                .putLong(Gemma4ModelManager.PROGRESS_EXPECTED_BYTES, Gemma4ModelManager.EXPECTED_BYTES)
+                .putString(Gemma4ModelManager.PROGRESS_PHASE, phase);
+        if (message != null && !message.isBlank()) {
+            builder.putString(Gemma4ModelManager.PROGRESS_MESSAGE, message);
+        }
+        setProgressAsync(builder.build());
     }
 
     private static void activateLocalAnalysisIfSelected(Context context) {
@@ -149,7 +178,7 @@ public final class Gemma4ModelDownloadWorker extends Worker {
         }
     }
 
-    private static ForegroundInfo foregroundInfo(Context context, long downloadedBytes) {
+    private static ForegroundInfo foregroundInfo(Context context, long downloadedBytes, String phaseText) {
         NotificationManager manager = context.getSystemService(NotificationManager.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(new NotificationChannel(
@@ -159,10 +188,11 @@ public final class Gemma4ModelDownloadWorker extends Worker {
         }
         int percent = (int) Math.min(100L,
                 downloadedBytes * 100L / Math.max(1L, Gemma4ModelManager.EXPECTED_BYTES));
+        String content = phaseText + (downloadedBytes > 0L ? "  " + percent + "%" : "");
         Notification notification = new Notification.Builder(context, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("Gemma 4 モデルを取得中")
-                .setContentText(percent + "%")
+                .setContentText(content)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setProgress(100, percent, downloadedBytes <= 0L)
@@ -171,6 +201,25 @@ public final class Gemma4ModelDownloadWorker extends Worker {
                 NOTIFICATION_ID,
                 notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+    }
+
+    private static String userVisibleError(Exception error) {
+        String message = error.getMessage() == null ? "" : error.getMessage();
+        if (message.contains("requires more free storage")) {
+            return "空き容量が不足しています。3GB以上の空きを確保して再試行してください。";
+        }
+        if (message.contains("HTTP ")) {
+            return "モデル配布サーバーへの接続に失敗しました（" + message + "）。";
+        }
+        if (message.contains("SHA-256 mismatch") || message.contains("size mismatch")) {
+            return "取得したモデルファイルの検証に失敗しました。再取得してください。";
+        }
+        if (message.contains("directory could not be created") ||
+                message.contains("could not be finalized") ||
+                message.contains("could not be replaced")) {
+            return "モデルファイルを端末へ保存できませんでした。";
+        }
+        return "モデル取得に失敗しました: " + error.getClass().getSimpleName();
     }
 
     private static void logFailure(Context context, Exception error) {
