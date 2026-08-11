@@ -18,6 +18,7 @@ import android.os.Looper;
 import com.sktpj.recorder24h.storage.RecorderStateStore;
 import com.sktpj.recorder24h.storage.SegmentRepository;
 import com.sktpj.recorder24h.storage.StoragePolicy;
+import com.sktpj.recorder24h.transcription.RealtimeSpeechGateStore;
 import com.sktpj.recorder24h.util.AppLogger;
 
 import org.json.JSONArray;
@@ -96,6 +97,7 @@ public final class AacSegmentRecorder {
             encoder = createEncoder();
             registerRecordingCallback(audioRecord);
 
+            RealtimeSpeechGateStore.resetStream();
             encoder.start();
             audioRecord.startRecording();
             recordCurrentRoutedInput("RECORDING_STARTED");
@@ -254,9 +256,11 @@ public final class AacSegmentRecorder {
         }
 
         lastAudioReadMs = System.currentTimeMillis();
+        long ptsUs = pcmPresentationTimeUs();
+        RealtimeSpeechGateStore.observePcm16(pcm, read, ptsUs);
+
         inputBuffer.clear();
         inputBuffer.put(pcm, 0, read);
-        long ptsUs = pcmPresentationTimeUs();
         encoder.queueInputBuffer(inputIndex, 0, read, ptsUs, 0);
         totalPcmFrames += read / (2L * CHANNEL_COUNT);
     }
@@ -322,6 +326,7 @@ public final class AacSegmentRecorder {
             JSONObject d = new JSONObject();
             d.put("segmentId", currentSegmentId);
             d.put("file", currentPartFile.getName());
+            d.put("segmentBasePtsUs", currentSegmentBasePtsUs);
             AppLogger.event(context, "SEGMENT_STARTED", d);
         } catch (Exception ignored) {
         }
@@ -335,6 +340,9 @@ public final class AacSegmentRecorder {
         File part = currentPartFile;
         String segmentId = currentSegmentId;
         long startedAt = currentSegmentStartedAtMs;
+        long segmentBasePtsUs = currentSegmentBasePtsUs;
+        long segmentEndPtsUs = Math.max(segmentBasePtsUs,
+                Math.min(pcmPresentationTimeUs(), segmentBasePtsUs + SEGMENT_DURATION_US));
         long endedAt = System.currentTimeMillis();
         try {
             if (muxerStarted && wroteSamples) {
@@ -371,6 +379,17 @@ public final class AacSegmentRecorder {
             status = "CORRUPT";
         }
 
+        if ("READY".equals(status)) {
+            // Persist before publishing READY so a worker can immediately use the realtime ranges.
+            RealtimeSpeechGateStore.persistSegment(
+                    context,
+                    segmentId,
+                    segmentBasePtsUs,
+                    segmentEndPtsUs,
+                    startedAt,
+                    endedAt);
+        }
+
         SegmentRepository.append(context, segmentId, finalFile, startedAt, endedAt, status,
                 "READY".equals(status) ? null : "MUXER_OR_RENAME_FAILURE");
         try {
@@ -380,6 +399,9 @@ public final class AacSegmentRecorder {
             d.put("status", status);
             d.put("sizeBytes", finalFile.length());
             d.put("durationMs", Math.max(0L, endedAt - startedAt));
+            d.put("segmentBasePtsUs", segmentBasePtsUs);
+            d.put("segmentEndPtsUs", segmentEndPtsUs);
+            d.put("audioTimelineDurationMs", Math.max(0L, (segmentEndPtsUs - segmentBasePtsUs) / 1000L));
             AppLogger.event(context, "SEGMENT_FINALIZED", d);
         } catch (Exception ignored) {
         }
