@@ -90,7 +90,8 @@ public final class TranscriptionWorker extends Worker {
             }
 
             String selectedModelId = WhisperModelManager.selectedModelId(context);
-            String selectedEngineId = LocalWhisperEngine.engineId(selectedModelId);
+            TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
+            String selectedEngineId = LocalWhisperEngine.engineId(context, selectedModelId, pipeline);
             boolean replacingOldTranscript = TranscriptionRepository.exists(context, segmentId);
 
             if (!forceRetranscribe &&
@@ -101,14 +102,17 @@ public final class TranscriptionWorker extends Worker {
                         null, false, attempt, null);
                 return;
             }
-            if (!WhisperModelManager.isComparisonReady(context, selectedModelId)) {
-                WhisperModelManager.enqueueModelDownload(context, selectedModelId);
-                String reason = WhisperModelManager.isModelReady(context, selectedModelId)
-                        ? "SILERO_VAD_MODEL_MISSING" : "LOCAL_MODEL_MISSING";
+            String pipelineReason = TranscriptionPipelineSettings.unavailableReason(
+                    context, pipeline, selectedModelId);
+            if (pipelineReason != null) {
+                boolean modelWait = "SILERO_VAD_MODEL_MISSING".equals(pipelineReason)
+                        || "LOCAL_WHISPER_MODEL_MISSING".equals(pipelineReason);
+                if (modelWait) WhisperModelManager.enqueueModelDownload(context, selectedModelId);
                 SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
-                        audioFile.lastModified(), System.currentTimeMillis(), "READY", reason);
-                log(context, "TRANSCRIPTION_DRAIN_MODELS_MISSING", segmentId, audioFile,
-                        reason, forceRetranscribe, attempt, null);
+                        audioFile.lastModified(), System.currentTimeMillis(),
+                        modelWait ? "READY" : "FAILED", pipelineReason);
+                log(context, "TRANSCRIPTION_SELECTED_PIPELINE_NOT_READY", segmentId, audioFile,
+                        pipelineReason, forceRetranscribe, attempt, null);
                 return;
             }
 
@@ -144,10 +148,12 @@ public final class TranscriptionWorker extends Worker {
                             segmentId, audioFile, null, forceRetranscribe, attempt, started);
 
                     LocalWhisperEngine.Response response =
-                            LocalWhisperEngine.transcribe(context, audioFile, selectedModelId);
+                            LocalWhisperEngine.transcribe(context, audioFile, selectedModelId, pipeline);
                     JSONArray annotatedSegments = response.skippedNoSpeech
                             ? new JSONArray()
-                            : SpeakerIdentifier.annotate(context, audioFile, response.segments);
+                            : TranscriptionPipelineSettings.SPEAKER_SHERPA_CPU.equals(pipeline.speakerBackend)
+                                ? SpeakerIdentifier.annotate(context, audioFile, response.segments)
+                                : new JSONArray(response.segments.toString());
 
                     synchronized (TranscriptionResetManager.class) {
                         if (!TranscriptionResetManager.isCurrentGeneration(context, generation)) {
@@ -208,6 +214,11 @@ public final class TranscriptionWorker extends Worker {
                     metrics.put("replacedOldTranscript", replacingOldTranscript);
                     metrics.put("audioRetained", true);
                     metrics.put("runner", "workmanager-single-drain");
+                    metrics.put("asrBackend", pipeline.asrBackend);
+                    metrics.put("vadBackend", pipeline.vadBackend);
+                    metrics.put("denoiseBackend", pipeline.denoiseBackend);
+                    metrics.put("speakerBackend", pipeline.speakerBackend);
+                    metrics.put("automaticFallback", false);
 
                     String completedEvent;
                     if (response.skippedNoSpeech) {

@@ -34,6 +34,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.sktpj.recorder24h.transcription.TranscriptionScheduler
+import com.sktpj.recorder24h.transcription.TranscriptionPipelineSettings
 import com.sktpj.recorder24h.transcription.WhisperModelManager
 import com.sktpj.recorder24h.util.AppLogger
 import kotlinx.coroutines.delay
@@ -65,6 +66,7 @@ fun WhisperModelSettingsCard() {
     val downloadedBytes = asrBytes + vadBytes
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        TranscriptionBackendSettingsCard()
         Card {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("通常文字起こしモデル", style = MaterialTheme.typography.titleLarge)
@@ -146,8 +148,8 @@ fun WhisperModelSettingsCard() {
 
                 OutlinedButton(
                     onClick = {
-                        if (!WhisperModelManager.isReady(context)) {
-                            Toast.makeText(context, "先に選択モデルを準備してください", Toast.LENGTH_SHORT).show()
+                        if (!TranscriptionPipelineSettings.isSelectedPipelineReady(context, selectedId)) {
+                            Toast.makeText(context, "先に選択した文字起こし経路を準備してください", Toast.LENGTH_SHORT).show()
                         } else {
                             val count = TranscriptionScheduler.enqueueExisting(context)
                             Toast.makeText(
@@ -192,7 +194,7 @@ fun WhisperModelSettingsCard() {
                 }
 
                 Text(
-                    "変更後に開始する文字起こしから選択モデルを使用します。すでに実推論中の1件は、開始時に確定したモデルで完了します。モデル変更だけでは保存済み文字起こしを自動上書きしません。",
+                    "変更後に開始する文字起こしから選択モデルを使用します。Android端末内ASR選択時はWhisperモデルをASRには使いません。すでに実推論中の1件は、開始時に確定した経路で完了します。モデル変更だけでは保存済み文字起こしを自動上書きしません。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -5,8 +5,10 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <mutex>
 
 #include "whisper.h"
+#include "ggml-backend.h"
 
 namespace {
 void throw_runtime(JNIEnv * env, const char * message) {
@@ -47,6 +49,30 @@ long long elapsed_ms(const std::chrono::steady_clock::time_point & start,
     return std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 }
 
+bool app_has_gpu_backend() {
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        const auto type = ggml_backend_dev_type(dev);
+        if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::mutex g_stream_vad_mutex;
+whisper_vad_context * g_stream_vad_ctx = nullptr;
+std::vector<float> g_stream_vad_pending;
+constexpr int k_stream_vad_window_samples = 512;
+
+void close_stream_vad_locked() {
+    if (g_stream_vad_ctx != nullptr) {
+        whisper_vad_free(g_stream_vad_ctx);
+        g_stream_vad_ctx = nullptr;
+    }
+    g_stream_vad_pending.clear();
+}
+
 whisper_vad_params app_vad_params() {
     whisper_vad_params params = whisper_vad_default_params();
     params.threshold = 0.5f;
@@ -57,6 +83,77 @@ whisper_vad_params app_vad_params() {
     params.samples_overlap = 0.10f;
     return params;
 }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_sktpj_recorder24h_transcription_StreamingVadStore_nativeStreamingVadOpen(
+        JNIEnv * env,
+        jclass,
+        jstring vad_model_path,
+        jint threads) {
+    if (vad_model_path == nullptr) return JNI_FALSE;
+    const char * vad_model = env->GetStringUTFChars(vad_model_path, nullptr);
+    if (vad_model == nullptr) return JNI_FALSE;
+    std::lock_guard<std::mutex> lock(g_stream_vad_mutex);
+    close_stream_vad_locked();
+    whisper_vad_context_params params = whisper_vad_default_context_params();
+    params.n_threads = threads > 0 ? threads : 1;
+    params.use_gpu = false;
+    g_stream_vad_ctx = whisper_vad_init_from_file_with_params(vad_model, params);
+    env->ReleaseStringUTFChars(vad_model_path, vad_model);
+    if (g_stream_vad_ctx == nullptr) return JNI_FALSE;
+    whisper_vad_reset_state(g_stream_vad_ctx);
+    return JNI_TRUE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_sktpj_recorder24h_transcription_StreamingVadStore_nativeStreamingVadProcess(
+        JNIEnv * env,
+        jclass,
+        jfloatArray pcm) {
+    if (pcm == nullptr) {
+        throw_runtime(env, "Streaming VAD input is null");
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(g_stream_vad_mutex);
+    if (g_stream_vad_ctx == nullptr) {
+        throw_runtime(env, "Streaming VAD is not open");
+        return nullptr;
+    }
+    const jsize count = env->GetArrayLength(pcm);
+    std::vector<float> incoming(static_cast<size_t>(count));
+    if (count > 0) env->GetFloatArrayRegion(pcm, 0, count, incoming.data());
+    if (env->ExceptionCheck()) return nullptr;
+    g_stream_vad_pending.insert(g_stream_vad_pending.end(), incoming.begin(), incoming.end());
+    const size_t full_samples = (g_stream_vad_pending.size() / k_stream_vad_window_samples)
+            * k_stream_vad_window_samples;
+    std::ostringstream json;
+    json << "{\"windowSamples\":" << k_stream_vad_window_samples << ",\"probabilities\":[";
+    if (full_samples > 0) {
+        std::vector<float> ready(g_stream_vad_pending.begin(), g_stream_vad_pending.begin() + full_samples);
+        g_stream_vad_pending.erase(g_stream_vad_pending.begin(), g_stream_vad_pending.begin() + full_samples);
+        if (!whisper_vad_detect_speech_no_reset(g_stream_vad_ctx, ready.data(), static_cast<int>(ready.size()))) {
+            throw_runtime(env, "Streaming Silero VAD pass failed");
+            return nullptr;
+        }
+        const int n = whisper_vad_n_probs(g_stream_vad_ctx);
+        float * probs = whisper_vad_probs(g_stream_vad_ctx);
+        for (int i = 0; i < n; ++i) {
+            if (i > 0) json << ',';
+            json << (probs == nullptr ? 0.0f : probs[i]);
+        }
+    }
+    json << "]}";
+    const std::string output = json.str();
+    return env->NewStringUTF(output.c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_sktpj_recorder24h_transcription_StreamingVadStore_nativeStreamingVadClose(
+        JNIEnv *,
+        jclass) {
+    std::lock_guard<std::mutex> lock(g_stream_vad_mutex);
+    close_stream_vad_locked();
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -189,7 +286,8 @@ Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribeDeta
         jintArray chunk_starts_ms,
         jintArray chunk_ends_ms,
         jstring language,
-        jint threads) {
+        jint threads,
+        jboolean use_gpu) {
     if (model_path == nullptr || pcm == nullptr || chunk_starts_ms == nullptr ||
             chunk_ends_ms == nullptr || language == nullptr) {
         throw_runtime(env, "Invalid local Whisper arguments");
@@ -231,8 +329,15 @@ Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribeDeta
         return nullptr;
     }
 
+    if (use_gpu == JNI_TRUE && !app_has_gpu_backend()) {
+        env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+        env->ReleaseStringUTFChars(language, lang);
+        env->ReleaseStringUTFChars(model_path, model);
+        throw_runtime(env, "Selected Vulkan GPU backend is unavailable");
+        return nullptr;
+    }
     whisper_context_params context_params = whisper_context_default_params();
-    context_params.use_gpu = false;
+    context_params.use_gpu = use_gpu == JNI_TRUE;
     context_params.flash_attn = false;
 
     const auto model_load_started = std::chrono::steady_clock::now();
@@ -274,6 +379,7 @@ Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribeDeta
     long long last_output_end_ms = 0;
     bool first_output_segment = true;
     json << "{\"modelLoadMs\":" << elapsed_ms(model_load_started, model_load_finished)
+         << ",\"backend\":\"" << (use_gpu == JNI_TRUE ? "whisper-vulkan" : "whisper-cpu") << "\""
          << ",\"segments\":[";
 
     for (jsize chunk_index = 0; chunk_index < chunk_count; ++chunk_index) {
