@@ -37,6 +37,12 @@ public final class TranscriptionRepository {
     }
 
     public static boolean isCurrentEngine(Context context, String segmentId, String engineId) {
+        // A full-streaming-owned segment must never be silently re-routed into the normal
+        // post-segment queue, including after a live-ASR failure. Explicit force-retranscription
+        // bypasses this check at the scheduler/runner layer and remains available to the user.
+        if (FullStreamingStateStore.isOwned(context, segmentId)) {
+            return true;
+        }
         File file = fileFor(context, segmentId);
         if (!file.isFile()) {
             return false;
