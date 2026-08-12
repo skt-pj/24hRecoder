@@ -53,10 +53,26 @@ file(WRITE "${_spirv_headers_config_dir}/SPIRV-HeadersConfig.cmake"
 "set(SPIRV-Headers_FOUND TRUE)\n")
 set("SPIRV-Headers_DIR" "${_spirv_headers_config_dir}" CACHE PATH "SPIRV-Headers build-tree config" FORCE)
 
+# The NDK Vulkan package provides the loader/C headers but not Vulkan-Hpp's vulkan.hpp that the
+# current ggml Vulkan backend includes. Pin the matching Khronos headers and put them first for
+# ggml-vulkan so the C and C++ header versions stay consistent while linking Android's libvulkan.
+FetchContent_Declare(
+        vulkan_headers_source
+        URL https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.352.tar.gz)
+FetchContent_GetProperties(vulkan_headers_source)
+if(NOT vulkan_headers_source_POPULATED)
+    FetchContent_Populate(vulkan_headers_source)
+endif()
+
 FetchContent_Declare(
         whisper_cpp
         URL https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.9.1.tar.gz)
 FetchContent_MakeAvailable(whisper_cpp)
+
+if(TARGET ggml-vulkan)
+    target_include_directories(ggml-vulkan BEFORE PRIVATE
+            ${vulkan_headers_source_SOURCE_DIR}/include)
+endif()
 
 add_library(whisper_jni SHARED whisper_jni.cpp)
 target_compile_features(whisper_jni PRIVATE cxx_std_17)
