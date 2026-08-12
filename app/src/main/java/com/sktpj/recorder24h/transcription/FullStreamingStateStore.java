@@ -1,6 +1,7 @@
 package com.sktpj.recorder24h.transcription;
 
 import android.content.Context;
+import android.os.Process;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -8,7 +9,9 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 
 /** Durable ownership and live-display state for full-streaming transcription. */
 public final class FullStreamingStateStore {
@@ -147,17 +150,20 @@ public final class FullStreamingStateStore {
         synchronized (LOCK) {
             File parent = target.getParentFile();
             if (parent != null && !parent.exists()) parent.mkdirs();
-            File temp = new File(parent, target.getName() + ".tmp");
+            File temp = new File(parent, target.getName()
+                    + ".tmp." + Process.myPid() + "." + Thread.currentThread().getId());
             try (FileOutputStream out = new FileOutputStream(temp, false)) {
                 out.write(text.getBytes(StandardCharsets.UTF_8));
                 out.flush();
                 out.getFD().sync();
             }
-            if (target.exists() && !target.delete()) {
-                throw new IllegalStateException("Unable to replace full-streaming state");
-            }
-            if (!temp.renameTo(target)) {
-                throw new IllegalStateException("Unable to finalize full-streaming state");
+            try {
+                Files.move(temp.toPath(), target.toPath(),
+                        StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException unsupported) {
+                Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            } finally {
+                if (temp.exists()) temp.delete();
             }
         }
     }
