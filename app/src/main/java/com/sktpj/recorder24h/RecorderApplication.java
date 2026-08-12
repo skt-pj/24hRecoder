@@ -13,6 +13,7 @@ import com.sktpj.recorder24h.service.RecorderService;
 import com.sktpj.recorder24h.storage.RecorderHealth;
 import com.sktpj.recorder24h.storage.RecorderStateStore;
 import com.sktpj.recorder24h.storage.RecordingIntentStore;
+import com.sktpj.recorder24h.transcription.TranscriptionScheduler;
 import com.sktpj.recorder24h.util.AppLogger;
 import com.sktpj.recorder24h.util.DriveLogSync;
 import com.sktpj.recorder24h.util.DriveLogTarget;
@@ -48,6 +49,7 @@ public final class RecorderApplication extends Application implements Applicatio
             return;
         }
         DriveLogSync.ensureScheduled(this);
+        TranscriptionScheduler.recoverInterruptedAndEnsureDrainAsync(this);
         registerActivityLifecycleCallbacks(this);
     }
 
