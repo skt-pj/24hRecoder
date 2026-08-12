@@ -18,14 +18,7 @@ object Gemma4LocalClient {
     fun analyzeHourly(
         context: Context,
         source: AiAnalysisRepository.SourceWindow
-    ): OpenAiLunaClient.Response = runAnalysis(
-        context,
-        buildHourlyPrompt(source),
-        listOf(
-            "summary", "topics", "keyEvents", "ideas", "decisions", "todos",
-            "people", "places", "notableQuotes", "unresolved"
-        )
-    )
+    ): OpenAiLunaClient.Response = GemmaHourlyConversationAnalyzer.analyze(context, source)
 
     @JvmStatic
     fun analyzeDaily(
@@ -124,17 +117,6 @@ object Gemma4LocalClient {
             "Gemma 4 JSON response is missing required keys: ${missing.joinToString(",")}" 
         }
     }
-
-    private fun buildHourlyPrompt(source: AiAnalysisRepository.SourceWindow): String =
-        "Analyze the following one-hour transcript window.\n" +
-            "The output MUST be JSON and MUST follow this JSON format exactly:\n" +
-            "{\"summary\":string,\"topics\":[string],\"keyEvents\":[{\"time\":string,\"event\":string}]," +
-            "\"ideas\":[string],\"decisions\":[string],\"todos\":[{\"task\":string,\"evidence\":string}]," +
-            "\"people\":[string],\"places\":[string],\"notableQuotes\":[{\"time\":string,\"text\":string}]," +
-            "\"unresolved\":[string]}\n" +
-            "Keep the summary concise. Preserve timestamps when they are useful. " +
-            "For quotes, only copy wording that is actually present in the transcript.\n\n" +
-            "TRANSCRIPT:\n" + AiAnalysisRepository.promptTranscript(source)
 
     private fun buildDailyPrompt(source: AiAnalysisRepository.SourceWindow): String =
         "Analyze the following full-day transcript from the original transcript data. " +
