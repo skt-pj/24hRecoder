@@ -97,9 +97,9 @@ public final class StreamingVadStore {
                 initError = error.getClass().getSimpleName() + ": " + safeMessage(error);
                 nativeReady = false;
                 closeNativeLocked();
-                log(context, "STREAMING_VAD_RUNTIME_FAILED", new JSONObject()
-                        .put("error", error.getClass().getSimpleName())
-                        .put("message", safeMessage(error)));
+                log(context, "STREAMING_VAD_RUNTIME_FAILED", details(
+                        "error", error.getClass().getSimpleName(),
+                        "message", safeMessage(error)));
             }
         }
     }
@@ -155,10 +155,10 @@ public final class StreamingVadStore {
 
                 detector.pruneBefore(segmentBasePtsUs - SPEECH_PAD_US);
             } catch (Exception error) {
-                log(context, "STREAMING_VAD_SEGMENT_PERSIST_FAILED", new JSONObject()
-                        .put("segmentId", segmentId)
-                        .put("error", error.getClass().getSimpleName())
-                        .put("message", safeMessage(error)));
+                log(context, "STREAMING_VAD_SEGMENT_PERSIST_FAILED", details(
+                        "segmentId", segmentId,
+                        "error", error.getClass().getSimpleName(),
+                        "message", safeMessage(error)));
             }
         }
     }
@@ -242,7 +242,7 @@ public final class StreamingVadStore {
         if (!TranscriptionPipelineSettings.VAD_STREAMING_SILERO.equals(selected)) return;
         if (!WhisperModelManager.isVadReady(context)) {
             initError = "SILERO_VAD_MODEL_MISSING";
-            log(context, "STREAMING_VAD_UNAVAILABLE", new JSONObject().put("reason", initError));
+            log(context, "STREAMING_VAD_UNAVAILABLE", details("reason", initError));
             return;
         }
         try {
@@ -250,12 +250,11 @@ public final class StreamingVadStore {
                     WhisperModelManager.vadModelFile(context).getAbsolutePath(), threadCount());
             if (!nativeReady) initError = "STREAMING_SILERO_INIT_FAILED";
             log(context, nativeReady ? "STREAMING_VAD_READY" : "STREAMING_VAD_UNAVAILABLE",
-                    new JSONObject().put("reason", initError == null ? JSONObject.NULL : initError));
+                    details("reason", initError == null ? JSONObject.NULL : initError));
         } catch (Exception error) {
             nativeReady = false;
             initError = error.getClass().getSimpleName() + ": " + safeMessage(error);
-            log(context, "STREAMING_VAD_UNAVAILABLE", new JSONObject()
-                    .put("reason", initError));
+            log(context, "STREAMING_VAD_UNAVAILABLE", details("reason", initError));
         }
     }
 
@@ -301,6 +300,17 @@ public final class StreamingVadStore {
 
     private static int threadCount() {
         return Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors()));
+    }
+
+    private static JSONObject details(Object... values) {
+        JSONObject json = new JSONObject();
+        for (int i = 0; i + 1 < values.length; i += 2) {
+            try {
+                json.put(String.valueOf(values[i]), values[i + 1]);
+            } catch (Exception ignored) {
+            }
+        }
+        return json;
     }
 
     private static void log(Context context, String event, JSONObject details) {
