@@ -1,8 +1,12 @@
 package com.sktpj.recorder24h.transcription;
 
+import android.app.ActivityManager;
+import android.app.ApplicationExitInfo;
 import android.app.Service;
 import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Debug;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -18,6 +22,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -51,7 +56,9 @@ public final class StreamingTranscriptionService extends Service {
     public void onCreate() {
         super.onCreate();
         messenger = new Messenger(new Handler(Looper.getMainLooper(), this::handleMessage));
-        log("FULL_STREAMING_SERVICE_CREATED", null);
+        logPreviousStreamingExit();
+        setProcessStage("service-created");
+        log("FULL_STREAMING_SERVICE_CREATED", memoryDetails("service-created"));
     }
 
     @Override
@@ -196,6 +203,8 @@ public final class StreamingTranscriptionService extends Service {
                     loadMs = LiveWhisperSession.open(this, accumulator.config.modelId, accumulator.config.snapshot);
                 }
                 JSONObject details = accumulator.config.toJson().put("modelLoadMs", loadMs);
+                appendMemory(details, "backend-ready");
+                setProcessStage("backend-ready:" + accumulator.config.asrBackend);
                 log("FULL_STREAMING_BACKEND_READY", details);
                 writeState("WAITING", "", accumulator.latestFinalText, accumulator, null);
             } catch (Throwable error) {
@@ -280,10 +289,20 @@ public final class StreamingTranscriptionService extends Service {
         int durationMs = Math.max(1, (int) (asrSamples.length * 1000L / 16_000L));
 
         if (TranscriptionPipelineSettings.DENOISE_DEEPFILTER.equals(accumulator.config.denoiseBackend)) {
+            setProcessStage("denoise-begin:" + durationMs);
+            log("FULL_STREAMING_DENOISE_BEGIN", memoryDetails("denoise-begin")
+                    .put("durationMs", durationMs)
+                    .put("partial", partial));
             DeepFilterNetSpeechDenoiser.Result denoise = DeepFilterNetSpeechDenoiser.denoiseSelected(
                     this, accumulator.segmentId, asrSamples,
                     new int[]{0}, new int[]{durationMs}, front.snrProxyDb);
             asrSamples = denoise.samples;
+            setProcessStage("denoise-end:" + durationMs);
+            log("FULL_STREAMING_DENOISE_END", memoryDetails("denoise-end")
+                    .put("durationMs", durationMs)
+                    .put("partial", partial)
+                    .put("denoiseApplied", denoise.applied)
+                    .put("denoiseMs", denoise.processingMs));
         }
 
         String text;
@@ -295,7 +314,18 @@ public final class StreamingTranscriptionService extends Service {
             text = android.text;
             segments = new JSONArray(android.segments.toString());
         } else {
+            setProcessStage("whisper-begin:" + accumulator.config.asrBackend + ":" + durationMs);
+            log("FULL_STREAMING_WHISPER_NATIVE_BEGIN", memoryDetails("whisper-native-begin")
+                    .put("durationMs", durationMs)
+                    .put("partial", partial)
+                    .put("backend", accumulator.config.asrBackend));
             LiveWhisperSession.Result whisper = LiveWhisperSession.transcribe(asrSamples);
+            setProcessStage("whisper-end:" + accumulator.config.asrBackend + ":" + durationMs);
+            log("FULL_STREAMING_WHISPER_NATIVE_END", memoryDetails("whisper-native-end")
+                    .put("durationMs", durationMs)
+                    .put("partial", partial)
+                    .put("backend", accumulator.config.asrBackend)
+                    .put("whisperFullMs", whisper.whisperFullMs));
             text = whisper.text;
             segments = new JSONArray(whisper.segments.toString());
             whisperFullMs = whisper.whisperFullMs;
@@ -437,6 +467,90 @@ public final class StreamingTranscriptionService extends Service {
             }
         }
         return json;
+    }
+
+    private JSONObject memoryDetails(String stage) {
+        JSONObject json = new JSONObject();
+        appendMemory(json, stage);
+        return json;
+    }
+
+    private void appendMemory(JSONObject json, String stage) {
+        try {
+            Runtime runtime = Runtime.getRuntime();
+            json.put("memoryStage", stage);
+            json.put("pssKb", Debug.getPss());
+            json.put("nativeHeapAllocatedBytes", Debug.getNativeHeapAllocatedSize());
+            json.put("nativeHeapSizeBytes", Debug.getNativeHeapSize());
+            json.put("javaHeapUsedBytes", runtime.totalMemory() - runtime.freeMemory());
+            json.put("javaHeapTotalBytes", runtime.totalMemory());
+            json.put("javaHeapMaxBytes", runtime.maxMemory());
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void setProcessStage(String stage) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return;
+        try {
+            ActivityManager manager = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+            if (manager == null) return;
+            byte[] bytes = stage.getBytes(StandardCharsets.UTF_8);
+            if (bytes.length > 120) bytes = Arrays.copyOf(bytes, 120);
+            manager.setProcessStateSummary(bytes);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void logPreviousStreamingExit() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return;
+        try {
+            ActivityManager manager = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+            if (manager == null) return;
+            String processName = getPackageName() + ":streaming_asr";
+            List<ApplicationExitInfo> exits = manager.getHistoricalProcessExitReasons(
+                    getPackageName(), 0, 12);
+            for (ApplicationExitInfo info : exits) {
+                if (!processName.equals(info.getProcessName())) continue;
+                byte[] summary = info.getProcessStateSummary();
+                String stage = summary == null ? "" : new String(summary, StandardCharsets.UTF_8);
+                JSONObject row = new JSONObject()
+                        .put("processName", info.getProcessName())
+                        .put("reason", info.getReason())
+                        .put("reasonName", exitReasonName(info.getReason()))
+                        .put("status", info.getStatus())
+                        .put("importance", info.getImportance())
+                        .put("pssKb", info.getPss())
+                        .put("rssKb", info.getRss())
+                        .put("timestampMs", info.getTimestamp())
+                        .put("description", info.getDescription() == null
+                                ? JSONObject.NULL : info.getDescription())
+                        .put("processStateSummary", stage)
+                        .put("automaticFallback", false);
+                log("FULL_STREAMING_PREVIOUS_PROCESS_EXIT", row);
+                return;
+            }
+        } catch (Throwable error) {
+            logError("FULL_STREAMING_PREVIOUS_EXIT_READ_FAILED", error, null);
+        }
+    }
+
+    private static String exitReasonName(int reason) {
+        switch (reason) {
+            case ApplicationExitInfo.REASON_CRASH_NATIVE: return "CRASH_NATIVE";
+            case ApplicationExitInfo.REASON_CRASH: return "CRASH";
+            case ApplicationExitInfo.REASON_LOW_MEMORY: return "LOW_MEMORY";
+            case ApplicationExitInfo.REASON_ANR: return "ANR";
+            case ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE: return "EXCESSIVE_RESOURCE_USAGE";
+            case ApplicationExitInfo.REASON_DEPENDENCY_DIED: return "DEPENDENCY_DIED";
+            case ApplicationExitInfo.REASON_SIGNALED: return "SIGNALED";
+            case ApplicationExitInfo.REASON_EXIT_SELF: return "EXIT_SELF";
+            case ApplicationExitInfo.REASON_USER_REQUESTED: return "USER_REQUESTED";
+            case ApplicationExitInfo.REASON_USER_STOPPED: return "USER_STOPPED";
+            case ApplicationExitInfo.REASON_INITIALIZATION_FAILURE: return "INITIALIZATION_FAILURE";
+            case ApplicationExitInfo.REASON_PERMISSION_CHANGE: return "PERMISSION_CHANGE";
+            case ApplicationExitInfo.REASON_OTHER: return "OTHER";
+            default: return "UNKNOWN_" + reason;
+        }
     }
 
     private void log(String event, JSONObject details) {

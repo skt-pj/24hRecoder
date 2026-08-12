@@ -88,7 +88,10 @@ Java_com_sktpj_recorder24h_transcription_LiveWhisperSession_nativeLiveWhisperOpe
     params.use_gpu = use_gpu == JNI_TRUE;
     params.flash_attn = false;
     const auto started = std::chrono::steady_clock::now();
-    g_live_ctx = whisper_init_from_file_with_params(model, params);
+    // Keep only model weights resident. The default-state initializer keeps large encoder/decoder
+    // compute buffers alive for the lifetime of the service and overlaps them with DeepFilterNet.
+    // Full streaming instead allocates a fresh whisper_state only while one utterance is decoded.
+    g_live_ctx = whisper_init_from_file_with_params_no_state(model, params);
     const auto finished = std::chrono::steady_clock::now();
     env->ReleaseStringUTFChars(model_path, model);
     if (g_live_ctx == nullptr) {
@@ -145,13 +148,26 @@ Java_com_sktpj_recorder24h_transcription_LiveWhisperSession_nativeLiveWhisperTra
     params.no_speech_thold = 0.6f;
     params.vad = false;
 
+    // v1.9.1 supports an explicit state object. Allocate it only after Java-side denoise has
+    // completed, run this utterance through that state, then free it before returning. This keeps
+    // medium-q5 model weights resident while avoiding a permanently resident inference state.
+    whisper_state * state = whisper_init_state(g_live_ctx);
+    if (state == nullptr) {
+        env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+        env->ReleaseStringUTFChars(language, lang);
+        throw_runtime(env, "Unable to allocate live Whisper inference state");
+        return nullptr;
+    }
+
     const auto started = std::chrono::steady_clock::now();
-    const int rc = whisper_full(g_live_ctx, params, samples, static_cast<int>(sample_count));
+    const int rc = whisper_full_with_state(
+            g_live_ctx, state, params, samples, static_cast<int>(sample_count));
     const auto finished = std::chrono::steady_clock::now();
     env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
     env->ReleaseStringUTFChars(language, lang);
     if (rc != 0) {
-        throw_runtime(env, "whisper_full for live utterance failed");
+        whisper_free_state(state);
+        throw_runtime(env, "whisper_full_with_state for live utterance failed");
         return nullptr;
     }
 
@@ -159,18 +175,18 @@ Java_com_sktpj_recorder24h_transcription_LiveWhisperSession_nativeLiveWhisperTra
     std::ostringstream json;
     long long last_end_ms = 0;
     json << "{\"backend\":\"" << (g_live_gpu ? "whisper-vulkan" : "whisper-cpu") << "\",\"segments\":[";
-    const int segment_count = whisper_full_n_segments(g_live_ctx);
+    const int segment_count = whisper_full_n_segments_from_state(state);
     for (int i = 0; i < segment_count; ++i) {
-        const char * segment_text = whisper_full_get_segment_text(g_live_ctx, i);
-        const long long start_ms = std::max(0LL, static_cast<long long>(whisper_full_get_segment_t0(g_live_ctx, i)) * 10LL);
-        const long long end_ms = std::max(start_ms, static_cast<long long>(whisper_full_get_segment_t1(g_live_ctx, i)) * 10LL);
+        const char * segment_text = whisper_full_get_segment_text_from_state(state, i);
+        const long long start_ms = std::max(0LL, static_cast<long long>(whisper_full_get_segment_t0_from_state(state, i)) * 10LL);
+        const long long end_ms = std::max(start_ms, static_cast<long long>(whisper_full_get_segment_t1_from_state(state, i)) * 10LL);
         last_end_ms = std::max(last_end_ms, end_ms);
         if (segment_text != nullptr) text += segment_text;
-        const int token_count = whisper_full_n_tokens(g_live_ctx, i);
+        const int token_count = whisper_full_n_tokens_from_state(state, i);
         double token_sum = 0.0;
         double token_min = 1.0;
         for (int token = 0; token < token_count; ++token) {
-            const double p = whisper_full_get_token_p(g_live_ctx, i, token);
+            const double p = whisper_full_get_token_p_from_state(state, i, token);
             token_sum += p;
             token_min = std::min(token_min, p);
         }
@@ -182,13 +198,15 @@ Java_com_sktpj_recorder24h_transcription_LiveWhisperSession_nativeLiveWhisperTra
              << ",\"tokenCount\":" << token_count
              << ",\"avgTokenProbability\":" << (token_count > 0 ? token_sum / token_count : 0.0)
              << ",\"minTokenProbability\":" << token_min
-             << ",\"noSpeechProbability\":" << whisper_full_get_segment_no_speech_prob(g_live_ctx, i)
+             << ",\"noSpeechProbability\":" << whisper_full_get_segment_no_speech_prob_from_state(state, i)
              << ",\"text\":\"" << json_escape(segment_text) << "\"}";
     }
     json << "],\"whisperFullMs\":" << elapsed_ms(started, finished)
          << ",\"lastOutputEndMs\":" << last_end_ms
          << ",\"text\":\"" << json_escape(text.c_str()) << "\"}";
-    return env->NewStringUTF(json.str().c_str());
+    const std::string output = json.str();
+    whisper_free_state(state);
+    return env->NewStringUTF(output.c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL
