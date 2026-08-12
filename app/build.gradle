@@ -13,8 +13,8 @@ android {
         applicationId 'com.sktpj.recorder24h'
         minSdk 29
         targetSdk 36
-        versionCode 1012
-        versionName '0.7.12'
+        versionCode 1013
+        versionName '0.7.13'
         // Normal local transcription model is user-selectable in Settings.
         // AI analysis can switch between OpenAI GPT-5.6 Luna and local Gemma 4 E2B.
         // Dense Gemma hourly input is split near conversation gaps with overlap, then synthesized from deduplicated evidence.
@@ -25,6 +25,8 @@ android {
         // Interrupted TRANSCRIBING state is recovered to QUEUED on main-process restart.
         // AI queue items represent exact target periods and semantic data-wait/retry state.
         // Queue order is user-editable; the top item has the highest execution priority.
+        // AudioRecord PCM supplies a conservative realtime activity gate before candidate-only Silero VAD.
+        // Low-SNR accepted speech can be denoised with AndroidDeepFilterNet before Whisper without compacting time.
 
         ndk {
             abiFilters 'arm64-v8a'
@@ -76,6 +78,7 @@ dependencies {
     implementation 'androidx.work:work-runtime:2.11.2'
     implementation 'com.github.k2-fsa:sherpa-onnx:1.13.4'
     implementation 'com.google.ai.edge.litertlm:litertlm-android:0.14.0'
+    implementation 'io.github.kaleyravideo:android-deepfilternet:0.0.8'
 
     def composeBom = platform('androidx.compose:compose-bom:2026.06.00')
     implementation composeBom
