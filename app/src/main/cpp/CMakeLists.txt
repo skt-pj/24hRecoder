@@ -23,6 +23,15 @@ set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 # explicit in app settings; CPU remains available and is never selected as an automatic fallback.
 set(GGML_VULKAN ON CACHE BOOL "" FORCE)
 
+# Android NDK r12+ ships a host glslc under shader-tools. ggml's Vulkan backend needs a host
+# shader compiler while the actual native library is cross-compiled for arm64 Android.
+if(ANDROID AND CMAKE_ANDROID_NDK)
+    set(_android_glslc "${CMAKE_ANDROID_NDK}/shader-tools/linux-x86_64/glslc")
+    if(EXISTS "${_android_glslc}")
+        set(Vulkan_GLSLC_EXECUTABLE "${_android_glslc}" CACHE FILEPATH "Android NDK glslc" FORCE)
+    endif()
+endif()
+
 FetchContent_Declare(
         whisper_cpp
         URL https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.9.1.tar.gz)
