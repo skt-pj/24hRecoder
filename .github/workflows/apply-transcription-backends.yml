@@ -1,0 +1,639 @@
+name: Apply transcription backend integration
+
+on:
+  push:
+    branches: ["agent/transcription-backends-0.7.15"]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message != 'Apply explicit selectable transcription backends'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/transcription-backends-0.7.15
+      - name: Patch integration files
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f"missing patch anchor in {path}: {old[:120]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          def replace_all(path, old, new, minimum=1):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count < minimum:
+                  raise SystemExit(f"missing patch anchors in {path}: expected {minimum}, got {count}")
+              p.write_text(text.replace(old, new))
+
+          # Version follows the actual GitHub latest 0.7.14 / 1014.
+          replace_once('app/build.gradle', "versionCode 1014\n        versionName '0.7.14'", "versionCode 1015\n        versionName '0.7.15'")
+          replace_once('app/build.gradle',
+              '        // Low-SNR accepted speech can be denoised with AndroidDeepFilterNet before Whisper without compacting time.\n',
+              '        // Low-SNR accepted speech can be denoised with AndroidDeepFilterNet before ASR without compacting time.\n'
+              '        // ASR/VAD/denoise/speaker paths are explicitly user-selectable; backend failure never auto-falls back.\n')
+
+          # Settings UI: pipeline selection appears above model selection.
+          replace_once('app/src/main/java/com/sktpj/recorder24h/WhisperModelSettingsCard.kt',
+              'import com.sktpj.recorder24h.transcription.TranscriptionScheduler\n',
+              'import com.sktpj.recorder24h.transcription.TranscriptionScheduler\n'
+              'import com.sktpj.recorder24h.transcription.TranscriptionPipelineSettings\n')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/WhisperModelSettingsCard.kt',
+              '    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {\n        Card {',
+              '    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {\n        TranscriptionBackendSettingsCard()\n        Card {')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/WhisperModelSettingsCard.kt',
+              '                        if (!WhisperModelManager.isReady(context)) {\n                            Toast.makeText(context, "先に選択モデルを準備してください", Toast.LENGTH_SHORT).show()\n',
+              '                        if (!TranscriptionPipelineSettings.isSelectedPipelineReady(context, selectedId)) {\n'
+              '                            Toast.makeText(context, "先に選択した文字起こし経路を準備してください", Toast.LENGTH_SHORT).show()\n')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/WhisperModelSettingsCard.kt',
+              '                    "変更後に開始する文字起こしから選択モデルを使用します。すでに実推論中の1件は、開始時に確定したモデルで完了します。モデル変更だけでは保存済み文字起こしを自動上書きしません。",',
+              '                    "変更後に開始する文字起こしから選択モデルを使用します。Android端末内ASR選択時はWhisperモデルをASRには使いません。すでに実推論中の1件は、開始時に確定した経路で完了します。モデル変更だけでは保存済み文字起こしを自動上書きしません。",')
+
+          # Main UI/startup pipeline readiness uses selected backend requirements, not unconditional Whisper ASR readiness.
+          replace_once('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt',
+              'import com.sktpj.recorder24h.transcription.TranscriptionResetManager\n',
+              'import com.sktpj.recorder24h.transcription.TranscriptionResetManager\n'
+              'import com.sktpj.recorder24h.transcription.TranscriptionPipelineSettings\n')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt',
+              '        if (WhisperModelManager.isReady(this)) {',
+              '        if (TranscriptionPipelineSettings.isSelectedPipelineReady(this, WhisperModelManager.selectedModelId(this))) {')
+          replace_all('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt',
+              'WhisperModelManager.isReady(context)',
+              'TranscriptionPipelineSettings.isSelectedPipelineReady(context, WhisperModelManager.selectedModelId(context))',
+              minimum=2)
+          replace_once('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt',
+              '            Text("ローカル文字起こし", style = MaterialTheme.typography.titleLarge)\n',
+              '            Text("ローカル文字起こし", style = MaterialTheme.typography.titleLarge)\n'
+              '            Text("${TranscriptionPipelineSettings.asrLabel(TranscriptionPipelineSettings.snapshot(context).asrBackend)} / ${TranscriptionPipelineSettings.vadLabel(TranscriptionPipelineSettings.snapshot(context).vadBackend)}", style = MaterialTheme.typography.bodySmall)\n')
+
+          # Recorder feeds both the cheap gate and the optional stateful Silero path.
+          replace_once('app/src/main/java/com/sktpj/recorder24h/audio/AacSegmentRecorder.java',
+              'import com.sktpj.recorder24h.transcription.RealtimeSpeechGateStore;\n',
+              'import com.sktpj.recorder24h.transcription.RealtimeSpeechGateStore;\n'
+              'import com.sktpj.recorder24h.transcription.StreamingVadStore;\n')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/audio/AacSegmentRecorder.java',
+              '            RealtimeSpeechGateStore.resetStream();\n',
+              '            RealtimeSpeechGateStore.resetStream();\n'
+              '            StreamingVadStore.resetStream(context);\n')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/audio/AacSegmentRecorder.java',
+              '        RealtimeSpeechGateStore.observePcm16(pcm, read, ptsUs);\n',
+              '        RealtimeSpeechGateStore.observePcm16(pcm, read, ptsUs);\n'
+              '        StreamingVadStore.observePcm16(context, pcm, read, ptsUs);\n')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/audio/AacSegmentRecorder.java',
+              '            RealtimeSpeechGateStore.persistSegment(\n                    context,\n                    segmentId,\n                    segmentBasePtsUs,\n                    segmentEndPtsUs,\n                    startedAt,\n                    endedAt);\n',
+              '            RealtimeSpeechGateStore.persistSegment(\n                    context,\n                    segmentId,\n                    segmentBasePtsUs,\n                    segmentEndPtsUs,\n                    startedAt,\n                    endedAt);\n'
+              '            StreamingVadStore.persistSegment(\n                    context,\n                    segmentId,\n                    segmentBasePtsUs,\n                    segmentEndPtsUs,\n                    startedAt,\n                    endedAt);\n')
+
+          # DeepFilterNet strict selected path: an actual processing failure stops this item instead of raw-ASR fallback.
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/DeepFilterNetSpeechDenoiser.kt',
+              '    private fun processRegion(\n',
+              '''    @JvmStatic
+    fun denoiseSelected(
+        context: Context,
+        segmentId: String?,
+        source: FloatArray,
+        startsMs: IntArray,
+        endsMs: IntArray,
+        inputSnrProxyDb: Double,
+    ): Result {
+        val result = denoise(context, segmentId, source, startsMs, endsMs, inputSnrProxyDb)
+        val intentionalSkip = result.reason == "snr-clean-enough" ||
+            result.reason == "no-speech-chunks" ||
+            result.reason == "no-valid-speech-ranges"
+        if (!result.applied && !intentionalSkip) {
+            try {
+                AppLogger.event(
+                    context,
+                    "DEEPFILTERNET_SELECTED_FAILED_NO_FALLBACK",
+                    JSONObject()
+                        .put("segmentId", segmentId ?: JSONObject.NULL)
+                        .put("reason", result.reason)
+                        .put("automaticFallback", false)
+                )
+            } catch (_: Throwable) {
+            }
+            throw IllegalStateException("DEEPFILTERNET_SELECTED_FAILED:${result.reason}")
+        }
+        return result
+    }
+
+    private fun processRegion(
+''')
+
+          # whisper.cpp JNI: explicit Vulkan flag plus stateful streaming Silero.
+          replace_once('app/src/main/cpp/whisper_jni.cpp',
+              '#include <sstream>\n#include <string>\n#include <vector>\n\n#include "whisper.h"\n',
+              '#include <sstream>\n#include <string>\n#include <vector>\n#include <mutex>\n\n#include "whisper.h"\n#include "ggml-backend.h"\n')
+          replace_once('app/src/main/cpp/whisper_jni.cpp',
+              'whisper_vad_params app_vad_params() {\n',
+              '''bool app_has_gpu_backend() {
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        const auto type = ggml_backend_dev_type(dev);
+        if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::mutex g_stream_vad_mutex;
+whisper_vad_context * g_stream_vad_ctx = nullptr;
+std::vector<float> g_stream_vad_pending;
+constexpr int k_stream_vad_window_samples = 512;
+
+void close_stream_vad_locked() {
+    if (g_stream_vad_ctx != nullptr) {
+        whisper_vad_free(g_stream_vad_ctx);
+        g_stream_vad_ctx = nullptr;
+    }
+    g_stream_vad_pending.clear();
+}
+
+whisper_vad_params app_vad_params() {
+''')
+          marker = 'extern "C" JNIEXPORT jstring JNICALL\nJava_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeAnalyzeVadDetailed('
+          streaming_native = r'''extern "C" JNIEXPORT jboolean JNICALL
+Java_com_sktpj_recorder24h_transcription_StreamingVadStore_nativeStreamingVadOpen(
+        JNIEnv * env,
+        jclass,
+        jstring vad_model_path,
+        jint threads) {
+    if (vad_model_path == nullptr) return JNI_FALSE;
+    const char * vad_model = env->GetStringUTFChars(vad_model_path, nullptr);
+    if (vad_model == nullptr) return JNI_FALSE;
+    std::lock_guard<std::mutex> lock(g_stream_vad_mutex);
+    close_stream_vad_locked();
+    whisper_vad_context_params params = whisper_vad_default_context_params();
+    params.n_threads = threads > 0 ? threads : 1;
+    params.use_gpu = false;
+    g_stream_vad_ctx = whisper_vad_init_from_file_with_params(vad_model, params);
+    env->ReleaseStringUTFChars(vad_model_path, vad_model);
+    if (g_stream_vad_ctx == nullptr) return JNI_FALSE;
+    whisper_vad_reset_state(g_stream_vad_ctx);
+    return JNI_TRUE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_sktpj_recorder24h_transcription_StreamingVadStore_nativeStreamingVadProcess(
+        JNIEnv * env,
+        jclass,
+        jfloatArray pcm) {
+    if (pcm == nullptr) {
+        throw_runtime(env, "Streaming VAD input is null");
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(g_stream_vad_mutex);
+    if (g_stream_vad_ctx == nullptr) {
+        throw_runtime(env, "Streaming VAD is not open");
+        return nullptr;
+    }
+    const jsize count = env->GetArrayLength(pcm);
+    std::vector<float> incoming(static_cast<size_t>(count));
+    if (count > 0) env->GetFloatArrayRegion(pcm, 0, count, incoming.data());
+    if (env->ExceptionCheck()) return nullptr;
+    g_stream_vad_pending.insert(g_stream_vad_pending.end(), incoming.begin(), incoming.end());
+    const size_t full_samples = (g_stream_vad_pending.size() / k_stream_vad_window_samples)
+            * k_stream_vad_window_samples;
+    std::ostringstream json;
+    json << "{\"windowSamples\":" << k_stream_vad_window_samples << ",\"probabilities\":[";
+    if (full_samples > 0) {
+        std::vector<float> ready(g_stream_vad_pending.begin(),
+                                 g_stream_vad_pending.begin() + static_cast<long>(full_samples));
+        g_stream_vad_pending.erase(g_stream_vad_pending.begin(),
+                                   g_stream_vad_pending.begin() + static_cast<long>(full_samples));
+        if (!whisper_vad_detect_speech_no_reset(g_stream_vad_ctx, ready.data(),
+                                                static_cast<int>(ready.size()))) {
+            throw_runtime(env, "Streaming Silero VAD pass failed");
+            return nullptr;
+        }
+        const int n = whisper_vad_n_probs(g_stream_vad_ctx);
+        float * probs = whisper_vad_probs(g_stream_vad_ctx);
+        for (int i = 0; i < n; ++i) {
+            if (i > 0) json << ',';
+            json << (probs == nullptr ? 0.0f : probs[i]);
+        }
+    }
+    json << "]}";
+    const std::string output = json.str();
+    return env->NewStringUTF(output.c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_sktpj_recorder24h_transcription_StreamingVadStore_nativeStreamingVadClose(
+        JNIEnv *,
+        jclass) {
+    std::lock_guard<std::mutex> lock(g_stream_vad_mutex);
+    close_stream_vad_locked();
+}
+
+'''
+          replace_once('app/src/main/cpp/whisper_jni.cpp', marker, streaming_native + marker)
+          replace_once('app/src/main/cpp/whisper_jni.cpp',
+              '        jstring language,\n        jint threads) {',
+              '        jstring language,\n        jint threads,\n        jboolean use_gpu) {')
+          replace_once('app/src/main/cpp/whisper_jni.cpp',
+              '    whisper_context_params context_params = whisper_context_default_params();\n    context_params.use_gpu = false;\n    context_params.flash_attn = false;\n',
+              '''    if (use_gpu == JNI_TRUE && !app_has_gpu_backend()) {
+        env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+        env->ReleaseStringUTFChars(language, lang);
+        env->ReleaseStringUTFChars(model_path, model);
+        throw_runtime(env, "Selected Vulkan GPU backend is unavailable");
+        return nullptr;
+    }
+    whisper_context_params context_params = whisper_context_default_params();
+    context_params.use_gpu = use_gpu == JNI_TRUE;
+    context_params.flash_attn = false;
+''')
+          replace_once('app/src/main/cpp/whisper_jni.cpp',
+              '    json << "{\\\"modelLoadMs\\\":" << elapsed_ms(model_load_started, model_load_finished)\n         << ",\\\"segments\\\":[";\n',
+              '    json << "{\\\"modelLoadMs\\\":" << elapsed_ms(model_load_started, model_load_finished)\n'
+              '         << ",\\\"backend\\\":\\\"" << (use_gpu == JNI_TRUE ? "whisper-vulkan" : "whisper-cpu") << "\\\""\n'
+              '         << ",\\\"segments\\\":[";\n')
+
+          # LocalWhisperEngine dispatches the selected VAD/ASR/denoise path and never switches path on error.
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/LocalWhisperEngine.java',
+              '''    public static String engineId(Context context) {
+        return engineId(WhisperModelManager.selectedModelId(context));
+    }
+
+    public static String engineId(String modelId) {''',
+              '''    public static String engineId(Context context) {
+        TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
+        return engineId(context, WhisperModelManager.selectedModelId(context), pipeline);
+    }
+
+    public static String engineId(Context context, String modelId,
+                                  TranscriptionPipelineSettings.Snapshot pipeline) {
+        return engineId(modelId) + "+" + pipeline.signature();
+    }
+
+    public static String engineId(String modelId) {''')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/LocalWhisperEngine.java',
+              '''    public static synchronized Response transcribe(Context context, File audioFile,
+                                                   String modelId) throws Exception {
+        String segmentId = TranscriptionScheduler.extractSegmentId(audioFile.getName());''',
+              '''    public static synchronized Response transcribe(Context context, File audioFile,
+                                                   String modelId) throws Exception {
+        TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
+        return transcribe(context, audioFile, modelId, pipeline);
+    }
+
+    public static synchronized Response transcribe(Context context, File audioFile,
+                                                   String modelId,
+                                                   TranscriptionPipelineSettings.Snapshot pipeline) throws Exception {
+        TranscriptionPipelineSettings.requireRunnable(context, pipeline, modelId);
+        String segmentId = TranscriptionScheduler.extractSegmentId(audioFile.getName());''')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/LocalWhisperEngine.java',
+              '''        VadDiagnostics vad = gate.available && !gate.ranges.isEmpty()
+                ? analyzeVad(context, prepared, gate)
+                : analyzeVad(context, prepared);
+        return transcribePrepared(context, prepared, modelId, vad, gate, false, segmentId);
+    }
+''',
+              '''        VadDiagnostics vad;
+        if (TranscriptionPipelineSettings.VAD_STREAMING_SILERO.equals(pipeline.vadBackend)) {
+            StreamingVadStore.Snapshot streaming = segmentId == null
+                    ? StreamingVadStore.Snapshot.missing()
+                    : StreamingVadStore.read(context, segmentId);
+            if (!streaming.available || !streaming.complete) {
+                streaming = StreamingVadStore.analyzeOffline(context, prepared.frontEnd.samples);
+            }
+            vad = analyzeStreamingVad(streaming, prepared.durationMs());
+        } else {
+            vad = gate.available && !gate.ranges.isEmpty()
+                    ? analyzeVad(context, prepared, gate)
+                    : analyzeVad(context, prepared);
+        }
+        return transcribePrepared(context, prepared, modelId, vad, gate, false, segmentId, pipeline);
+    }
+''')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/LocalWhisperEngine.java',
+              '    static Response transcribePrepared(Context context, PreparedAudio prepared, String modelId) throws Exception {\n',
+              '''    private static VadDiagnostics analyzeStreamingVad(StreamingVadStore.Snapshot streaming,
+                                                       long audioDurationMs) throws Exception {
+        if (streaming == null || !streaming.available) {
+            throw new IllegalStateException("STREAMING_SILERO_RESULT_UNAVAILABLE");
+        }
+        JSONArray segments = new JSONArray();
+        long speechMs = 0L;
+        long lastEndMs = 0L;
+        for (StreamingVadStore.Range range : streaming.ranges) {
+            long start = Math.max(0L, Math.min(audioDurationMs, range.startMs));
+            long end = Math.max(start, Math.min(audioDurationMs, range.endMs));
+            if (end <= start) continue;
+            speechMs += end - start;
+            lastEndMs = Math.max(lastEndMs, end);
+            segments.put(new JSONObject()
+                    .put("index", segments.length())
+                    .put("startMs", start)
+                    .put("endMs", end)
+                    .put("durationMs", end - start));
+        }
+        JSONObject json = new JSONObject()
+                .put("vadInitMs", 0L)
+                .put("vadDetectMs", streaming.detectMs)
+                .put("vadInputMs", streaming.realtime ? 0L : audioDurationMs)
+                .put("vadScope", streaming.realtime ? "streaming-realtime" : "streaming-offline")
+                .put("probabilityCount", 0)
+                .put("meanSpeechProbability", 0.0)
+                .put("maxSpeechProbability", 0.0)
+                .put("aboveThresholdFraction", 0.0)
+                .put("threshold", 0.5)
+                .put("segmentCount", segments.length())
+                .put("segments", segments)
+                .put("totalSpeechMs", speechMs)
+                .put("lastEndMs", lastEndMs)
+                .put("activityGateSource", streaming.source);
+        return new VadDiagnostics(json);
+    }
+
+    static Response transcribePrepared(Context context, PreparedAudio prepared, String modelId) throws Exception {
+''')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/LocalWhisperEngine.java',
+              '''        return transcribePrepared(context, prepared, modelId, vad,
+                RealtimeSpeechGateStore.Snapshot.missing(), false, null);
+    }
+
+    static Response transcribePrepared(Context context, PreparedAudio prepared, String modelId,
+                                       VadDiagnostics vad) throws Exception {
+        return transcribePrepared(context, prepared, modelId, vad,
+                RealtimeSpeechGateStore.Snapshot.missing(), false, null);
+    }
+''',
+              '''        TranscriptionPipelineSettings.Snapshot comparison = new TranscriptionPipelineSettings.Snapshot(
+                TranscriptionPipelineSettings.ASR_WHISPER_CPU,
+                TranscriptionPipelineSettings.VAD_CANDIDATE_SILERO,
+                TranscriptionPipelineSettings.DENOISE_DEEPFILTER,
+                TranscriptionPipelineSettings.SPEAKER_OFF);
+        return transcribePrepared(context, prepared, modelId, vad,
+                RealtimeSpeechGateStore.Snapshot.missing(), false, null, comparison);
+    }
+
+    static Response transcribePrepared(Context context, PreparedAudio prepared, String modelId,
+                                       VadDiagnostics vad) throws Exception {
+        TranscriptionPipelineSettings.Snapshot comparison = new TranscriptionPipelineSettings.Snapshot(
+                TranscriptionPipelineSettings.ASR_WHISPER_CPU,
+                TranscriptionPipelineSettings.VAD_CANDIDATE_SILERO,
+                TranscriptionPipelineSettings.DENOISE_DEEPFILTER,
+                TranscriptionPipelineSettings.SPEAKER_OFF);
+        return transcribePrepared(context, prepared, modelId, vad,
+                RealtimeSpeechGateStore.Snapshot.missing(), false, null, comparison);
+    }
+''')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/LocalWhisperEngine.java',
+              '''                                               RealtimeSpeechGateStore.Snapshot gate,
+                                               boolean skippedByActivityGate,
+                                               String segmentId) throws Exception {''',
+              '''                                               RealtimeSpeechGateStore.Snapshot gate,
+                                               boolean skippedByActivityGate,
+                                               String segmentId,
+                                               TranscriptionPipelineSettings.Snapshot pipeline) throws Exception {''')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/LocalWhisperEngine.java',
+              '''        if (!WhisperModelManager.isComparisonReady(context, modelId)) {
+            throw new IllegalStateException("Whisper model is not ready: " + modelId);
+        }
+
+        // Silero always sees the original 16 kHz signal. Only the already accepted speech chunks
+        // are optionally denoised, and the helper writes them back to the same sample indices.
+        // If DeepFilterNet is unavailable or a chunk cannot be processed, it returns the untouched
+        // source array so transcription still proceeds rather than failing the FIFO item.
+        DeepFilterNetSpeechDenoiser.Result denoise = DeepFilterNetSpeechDenoiser.denoise(
+                context,
+                segmentId,
+                prepared.frontEnd.samples,
+                chunks.startsMs,
+                chunks.endsMs,
+                prepared.frontEnd.snrProxyDb);
+        float[] whisperSamples = denoise.samples;
+
+        long inferenceStarted = System.currentTimeMillis();
+        String raw = nativeTranscribeDetailed(model.getAbsolutePath(), whisperSamples,
+                chunks.startsMs, chunks.endsMs, LANGUAGE, threads);
+        long inferenceMs = System.currentTimeMillis() - inferenceStarted;
+        if (raw == null) {
+            throw new IllegalStateException("Local Whisper returned null");
+        }
+
+        JSONObject nativeResult = new JSONObject(raw);
+''',
+              '''        TranscriptionPipelineSettings.requireRunnable(context, pipeline, modelId);
+
+        float[] asrSamples = prepared.frontEnd.samples;
+        if (TranscriptionPipelineSettings.DENOISE_DEEPFILTER.equals(pipeline.denoiseBackend)) {
+            DeepFilterNetSpeechDenoiser.Result denoise = DeepFilterNetSpeechDenoiser.denoiseSelected(
+                    context,
+                    segmentId,
+                    prepared.frontEnd.samples,
+                    chunks.startsMs,
+                    chunks.endsMs,
+                    prepared.frontEnd.snrProxyDb);
+            asrSamples = denoise.samples;
+        }
+
+        long inferenceStarted = System.currentTimeMillis();
+        JSONObject nativeResult;
+        String responseModelId = modelId;
+        String responseModelLabel = spec.label;
+        long responseModelBytes = modelBytes;
+        if (TranscriptionPipelineSettings.ASR_ANDROID_ON_DEVICE.equals(pipeline.asrBackend)) {
+            AndroidOnDeviceAsr.Result androidResult = AndroidOnDeviceAsr.transcribe(
+                    context, asrSamples, chunks.startsMs, chunks.endsMs);
+            nativeResult = new JSONObject()
+                    .put("text", androidResult.text)
+                    .put("segments", androidResult.segments)
+                    .put("modelLoadMs", 0L)
+                    .put("whisperFullMs", -1L)
+                    .put("lastOutputEndMs", androidResult.lastOutputEndMs);
+            responseModelId = "android-on-device-ja-JP";
+            responseModelLabel = "Android on-device ASR";
+            responseModelBytes = 0L;
+        } else {
+            boolean useGpu = TranscriptionPipelineSettings.ASR_WHISPER_VULKAN.equals(pipeline.asrBackend);
+            String raw = nativeTranscribeDetailed(model.getAbsolutePath(), asrSamples,
+                    chunks.startsMs, chunks.endsMs, LANGUAGE, threads, useGpu);
+            if (raw == null) {
+                throw new IllegalStateException("Local Whisper returned null");
+            }
+            nativeResult = new JSONObject(raw);
+        }
+        long inferenceMs = System.currentTimeMillis() - inferenceStarted;
+''')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/LocalWhisperEngine.java',
+              '''                modelId, spec.label, modelBytes, segmentCount, outputSegmentDurationMs,
+''',
+              '''                responseModelId, responseModelLabel, responseModelBytes, segmentCount, outputSegmentDurationMs,
+''')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/LocalWhisperEngine.java',
+              '''    private static native String nativeTranscribeDetailed(String modelPath, float[] pcm,
+                                                           int[] chunkStartsMs, int[] chunkEndsMs,
+                                                           String language, int threads);
+''',
+              '''    private static native String nativeTranscribeDetailed(String modelPath, float[] pcm,
+                                                           int[] chunkStartsMs, int[] chunkEndsMs,
+                                                           String language, int threads, boolean useGpu);
+''')
+
+          # Scheduler only requires the resources of the selected route.
+          scheduler = Path('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionScheduler.java')
+          text = scheduler.read_text()
+          old = '''        if (!WhisperModelManager.isReady(context)) {
+            WhisperModelManager.enqueueDownload(context);
+            String reason = WhisperModelManager.isAsrReady(context)
+                    ? "SILERO_VAD_MODEL_MISSING" : "LOCAL_MODEL_MISSING";
+            log(context, "TRANSCRIPTION_WAITING_FOR_LOCAL_MODELS", segmentId, file, reason);
+            return false;
+        }
+'''
+          new = '''        TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
+        String pipelineReason = TranscriptionPipelineSettings.unavailableReason(
+                context, pipeline, WhisperModelManager.selectedModelId(context));
+        if (pipelineReason != null) {
+            if ("SILERO_VAD_MODEL_MISSING".equals(pipelineReason)
+                    || "LOCAL_WHISPER_MODEL_MISSING".equals(pipelineReason)) {
+                WhisperModelManager.enqueueDownload(context);
+            }
+            log(context, "TRANSCRIPTION_SELECTED_PIPELINE_NOT_READY", segmentId, file, pipelineReason);
+            return false;
+        }
+'''
+          if text.count(old) != 2:
+              raise SystemExit(f'scheduler readiness anchor count {text.count(old)}')
+          scheduler.write_text(text.replace(old, new))
+
+          # Background single runner captures the pipeline at attempt start.
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionWorker.java',
+              '''            String selectedModelId = WhisperModelManager.selectedModelId(context);
+            String selectedEngineId = LocalWhisperEngine.engineId(selectedModelId);
+            boolean replacingOldTranscript = TranscriptionRepository.exists(context, segmentId);
+''',
+              '''            String selectedModelId = WhisperModelManager.selectedModelId(context);
+            TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
+            String selectedEngineId = LocalWhisperEngine.engineId(context, selectedModelId, pipeline);
+            boolean replacingOldTranscript = TranscriptionRepository.exists(context, segmentId);
+''')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionWorker.java',
+              '''            if (!WhisperModelManager.isComparisonReady(context, selectedModelId)) {
+                WhisperModelManager.enqueueModelDownload(context, selectedModelId);
+                String reason = WhisperModelManager.isModelReady(context, selectedModelId)
+                        ? "SILERO_VAD_MODEL_MISSING" : "LOCAL_MODEL_MISSING";
+                SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                        audioFile.lastModified(), System.currentTimeMillis(), "READY", reason);
+                log(context, "TRANSCRIPTION_DRAIN_MODELS_MISSING", segmentId, audioFile,
+                        reason, forceRetranscribe, attempt, null);
+                return;
+            }
+''',
+              '''            String pipelineReason = TranscriptionPipelineSettings.unavailableReason(
+                    context, pipeline, selectedModelId);
+            if (pipelineReason != null) {
+                boolean modelWait = "SILERO_VAD_MODEL_MISSING".equals(pipelineReason)
+                        || "LOCAL_WHISPER_MODEL_MISSING".equals(pipelineReason);
+                if (modelWait) WhisperModelManager.enqueueModelDownload(context, selectedModelId);
+                SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                        audioFile.lastModified(), System.currentTimeMillis(),
+                        modelWait ? "READY" : "FAILED", pipelineReason);
+                log(context, "TRANSCRIPTION_SELECTED_PIPELINE_NOT_READY", segmentId, audioFile,
+                        pipelineReason, forceRetranscribe, attempt, null);
+                return;
+            }
+''')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionWorker.java',
+              '                            LocalWhisperEngine.transcribe(context, audioFile, selectedModelId);\n                    JSONArray annotatedSegments = response.skippedNoSpeech\n                            ? new JSONArray()\n                            : SpeakerIdentifier.annotate(context, audioFile, response.segments);\n',
+              '                            LocalWhisperEngine.transcribe(context, audioFile, selectedModelId, pipeline);\n'
+              '                    JSONArray annotatedSegments = response.skippedNoSpeech\n'
+              '                            ? new JSONArray()\n'
+              '                            : TranscriptionPipelineSettings.SPEAKER_SHERPA_CPU.equals(pipeline.speakerBackend)\n'
+              '                                ? SpeakerIdentifier.annotate(context, audioFile, response.segments)\n'
+              '                                : new JSONArray(response.segments.toString());\n')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionWorker.java',
+              '                    metrics.put("runner", "workmanager-single-drain");\n',
+              '                    metrics.put("runner", "workmanager-single-drain");\n'
+              '                    metrics.put("asrBackend", pipeline.asrBackend);\n'
+              '                    metrics.put("vadBackend", pipeline.vadBackend);\n'
+              '                    metrics.put("denoiseBackend", pipeline.denoiseBackend);\n'
+              '                    metrics.put("speakerBackend", pipeline.speakerBackend);\n'
+              '                    metrics.put("automaticFallback", false);\n')
+
+          # Foreground direct runner uses the exact same explicit pipeline and speaker post-process.
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionQueueService.java',
+              '''            String selectedModelId = WhisperModelManager.selectedModelId(context);
+            String selectedEngineId = LocalWhisperEngine.engineId(selectedModelId);
+''',
+              '''            String selectedModelId = WhisperModelManager.selectedModelId(context);
+            TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
+            String selectedEngineId = LocalWhisperEngine.engineId(context, selectedModelId, pipeline);
+''')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionQueueService.java',
+              '''            if (!WhisperModelManager.isComparisonReady(context, selectedModelId)) {
+                WhisperModelManager.enqueueModelDownload(context, selectedModelId);
+                String reason = WhisperModelManager.isModelReady(context, selectedModelId)
+                        ? "SILERO_VAD_MODEL_MISSING" : "LOCAL_MODEL_MISSING";
+                SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                        audioFile.lastModified(), System.currentTimeMillis(), "READY", reason);
+                log(context, "TRANSCRIPTION_DIRECT_MODELS_MISSING", segmentId, audioFile,
+                        reason, forceRetranscribe, attempt, null,
+                        selectedModelId, selectedEngineId);
+                return;
+            }
+''',
+              '''            String pipelineReason = TranscriptionPipelineSettings.unavailableReason(
+                    context, pipeline, selectedModelId);
+            if (pipelineReason != null) {
+                boolean modelWait = "SILERO_VAD_MODEL_MISSING".equals(pipelineReason)
+                        || "LOCAL_WHISPER_MODEL_MISSING".equals(pipelineReason);
+                if (modelWait) WhisperModelManager.enqueueModelDownload(context, selectedModelId);
+                SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                        audioFile.lastModified(), System.currentTimeMillis(),
+                        modelWait ? "READY" : "FAILED", pipelineReason);
+                log(context, "TRANSCRIPTION_SELECTED_PIPELINE_NOT_READY", segmentId, audioFile,
+                        pipelineReason, forceRetranscribe, attempt, null,
+                        selectedModelId, selectedEngineId);
+                return;
+            }
+''')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionQueueService.java',
+              '                    promote("文字起こし中: " + modelLabel(selectedModelId));\n',
+              '                    promote("文字起こし中: " + TranscriptionPipelineSettings.asrLabel(pipeline.asrBackend));\n')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionQueueService.java',
+              '''                    LocalWhisperEngine.Response response =
+                            LocalWhisperEngine.transcribe(context, audioFile, selectedModelId);
+''',
+              '''                    LocalWhisperEngine.Response response =
+                            LocalWhisperEngine.transcribe(context, audioFile, selectedModelId, pipeline);
+                    org.json.JSONArray savedSegments = response.skippedNoSpeech
+                            ? new org.json.JSONArray()
+                            : TranscriptionPipelineSettings.SPEAKER_SHERPA_CPU.equals(pipeline.speakerBackend)
+                                ? SpeakerIdentifier.annotate(context, audioFile, response.segments)
+                                : new org.json.JSONArray(response.segments.toString());
+''')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionQueueService.java',
+              '                            selectedEngineId, response.text, response.segments);\n',
+              '                            selectedEngineId, response.text, savedSegments);\n')
+          replace_once('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionQueueService.java',
+              '                    metrics.put("runner", "foreground-single-drain");\n',
+              '                    metrics.put("runner", "foreground-single-drain");\n'
+              '                    metrics.put("asrBackend", pipeline.asrBackend);\n'
+              '                    metrics.put("vadBackend", pipeline.vadBackend);\n'
+              '                    metrics.put("denoiseBackend", pipeline.denoiseBackend);\n'
+              '                    metrics.put("speakerBackend", pipeline.speakerBackend);\n'
+              '                    metrics.put("automaticFallback", false);\n')
+
+          PY
+      - name: Commit integration
+        run: |
+          git config user.name "24hRecoder CI patch"
+          git config user.email "actions@users.noreply.github.com"
+          git add app
+          git commit -m "Apply explicit selectable transcription backends"
+          git push origin HEAD:agent/transcription-backends-0.7.15
