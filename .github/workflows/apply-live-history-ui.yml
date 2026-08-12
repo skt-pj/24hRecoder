@@ -1,0 +1,29 @@
+name: Apply live history UI
+
+on:
+  push:
+    branches:
+      - agent/live-history-ui-0.7.19
+    paths:
+      - .github/workflows/apply-live-history-ui.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/live-history-ui-0.7.19
+      - name: Apply patch
+        run: python .github/scripts/apply_live_history_ui.py
+      - name: Commit app changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app
+          git diff --cached --quiet && exit 0
+          git commit -m "Add realtime conversation view to Record tab"
+          git push origin HEAD:agent/live-history-ui-0.7.19
