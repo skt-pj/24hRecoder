@@ -1,0 +1,29 @@
+name: Apply 0.7.21 live Whisper route
+
+on:
+  push:
+    branches:
+      - agent/live-whisper-route-0.7.21
+    paths:
+      - .github/workflows/apply-live-whisper-route-0721.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/live-whisper-route-0.7.21
+      - name: Apply patch
+        run: python .github/scripts/apply_live_whisper_route_0721.py
+      - name: Commit app changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app
+          git diff --cached --quiet && exit 0
+          git commit -m "Add selectable standard JNI live Whisper route"
+          git push origin HEAD:agent/live-whisper-route-0.7.21
