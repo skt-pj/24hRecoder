@@ -168,7 +168,7 @@ public final class StreamingVadStore {
         File file = sidecarFile(context, segmentId);
         if (!file.isFile()) return Snapshot.missing();
         try {
-            JSONObject root = new JSONObject(java.nio.file.Files.readString(file.toPath()));
+            JSONObject root = new JSONObject(new String(java.nio.file.Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
             return Snapshot.fromJson(root, true, 0L);
         } catch (Exception ignored) {
             return Snapshot.missing();
