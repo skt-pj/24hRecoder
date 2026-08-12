@@ -19,6 +19,25 @@ object SpeakerIdentifier {
 
     @JvmStatic
     fun annotate(context: Context, audioFile: File, sourceSegments: JSONArray): JSONArray {
+        return try {
+            annotatePcm(context, M4aPcmDecoder.decode(audioFile), sourceSegments)
+        } catch (error: Exception) {
+            val segments = JSONArray(sourceSegments.toString())
+            markUnknown(segments)
+            AppLogger.event(
+                context,
+                "SPEAKER_IDENTIFICATION_FAILED",
+                JSONObject()
+                    .put("segmentId", audioFile.name)
+                    .put("error", error.javaClass.simpleName)
+            )
+            segments
+        }
+    }
+
+    /** Speaker annotation for an already captured live PCM utterance; no second audio decode. */
+    @JvmStatic
+    fun annotatePcm(context: Context, samples: FloatArray, sourceSegments: JSONArray): JSONArray {
         val segments = JSONArray(sourceSegments.toString())
         val profile = SpeakerProfileStore.load(context)
         if (profile == null) {
@@ -33,7 +52,6 @@ object SpeakerIdentifier {
 
         var extractor: SpeakerEmbeddingExtractor? = null
         return try {
-            val samples = M4aPcmDecoder.decode(audioFile)
             extractor = createExtractor(context)
             for (index in 0 until segments.length()) {
                 val row = segments.optJSONObject(index) ?: continue
@@ -67,7 +85,7 @@ object SpeakerIdentifier {
                 context,
                 "SPEAKER_IDENTIFICATION_FAILED",
                 JSONObject()
-                    .put("segmentId", audioFile.name)
+                    .put("segmentId", "live-pcm")
                     .put("error", error.javaClass.simpleName)
             )
             segments
