@@ -51,6 +51,33 @@ public final class TranscriptionScheduler {
         context.sendBroadcast(intent);
     }
 
+    public static boolean isBacklogPaused(Context context) {
+        return TranscriptionPipelineSettings.isLiveStreaming(
+                TranscriptionPipelineSettings.snapshot(context.getApplicationContext()));
+    }
+
+    /**
+     * Live streaming owns current speech recognition. Keep the persisted postprocess backlog intact,
+     * but do not let it compete for CPU/GPU until the user explicitly switches back.
+     */
+    public static void onExecutionModeChanged(Context context) {
+        Context app = context.getApplicationContext();
+        boolean paused = isBacklogPaused(app);
+        if (paused) {
+            WorkManager.getInstance(app).cancelUniqueWork(DRAIN_WORK_NAME);
+            try {
+                JSONObject details = new JSONObject();
+                details.put("executionMode", TranscriptionPipelineSettings.MODE_LIVE_STREAMING);
+                details.put("queuedItemsRetained", true);
+                AppLogger.event(app, "TRANSCRIPTION_BACKLOG_PAUSED_FOR_LIVE", details);
+            } catch (Exception ignored) {
+            }
+            return;
+        }
+        AppLogger.event(app, "TRANSCRIPTION_BACKLOG_RESUMED_AFTER_LIVE");
+        ensureDrainScheduled(app);
+    }
+
     public static void enqueue(Context context, String segmentId, File file) {
         enqueueInternal(context, segmentId, file, false);
     }
@@ -81,6 +108,12 @@ public final class TranscriptionScheduler {
                 System.currentTimeMillis(), "QUEUED", "MANUAL_DIRECT_QUEUE_ENQUEUED");
         log(context, "MANUAL_RETRANSCRIPTION_DIRECT_ENQUEUED", segmentId, file, null);
 
+        if (isBacklogPaused(context)) {
+            log(context, "MANUAL_RETRANSCRIPTION_QUEUED_LIVE_PAUSED", segmentId, file,
+                    "QUEUED_ITEM_RETAINED_UNTIL_POSTPROCESS_MODE");
+            return true;
+        }
+
         if (TranscriptionQueueService.kick(context)) {
             return true;
         }
@@ -94,8 +127,6 @@ public final class TranscriptionScheduler {
         if (segmentId == null || segmentId.isEmpty()) {
             return false;
         }
-        // Cancel legacy per-segment work left by versions before 0.7.11. The single drain worker
-        // reads the persisted queue and will simply skip an item that is no longer QUEUED.
         WorkManager.getInstance(context.getApplicationContext()).cancelUniqueWork(uniqueWorkName(segmentId));
         boolean hasTranscript = TranscriptionRepository.exists(context, segmentId);
         SegmentRepository.appendWithoutNotify(
@@ -154,13 +185,12 @@ public final class TranscriptionScheduler {
         return true;
     }
 
-    /**
-     * Schedule the only background transcription Worker. KEEP is intentional: while one drain
-     * Worker is RUNNING/ENQUEUED, newly queued segments are data for that same execution lane,
-     * not reasons to create additional Workers.
-     */
     public static void ensureDrainScheduled(Context context) {
         Context app = context.getApplicationContext();
+        if (isBacklogPaused(app)) {
+            WorkManager.getInstance(app).cancelUniqueWork(DRAIN_WORK_NAME);
+            return;
+        }
         if (!hasQueuedWork(app)) {
             return;
         }
@@ -171,14 +201,9 @@ public final class TranscriptionScheduler {
                 request);
     }
 
-    /**
-     * Called by the active drain Worker after one item completes. APPEND_OR_REPLACE gives the
-     * next queued item a successor Worker without allowing two Workers in this unique chain to run
-     * at the same time.
-     */
     static void appendDrainContinuationIfPending(Context context) {
         Context app = context.getApplicationContext();
-        if (!hasQueuedWork(app)) {
+        if (isBacklogPaused(app) || !hasQueuedWork(app)) {
             return;
         }
         WorkManager.getInstance(app).enqueueUniqueWork(
@@ -200,14 +225,6 @@ public final class TranscriptionScheduler {
                 .build();
     }
 
-    /**
-     * 0.7.11 migration/recovery.
-     *
-     * Older versions created one WorkManager job per segment. On the first 0.7.11 startup those
-     * legacy jobs are cancelled once. On every process start, any persisted TRANSCRIBING state is
-     * necessarily stale because native inference cannot survive the process death; it is returned
-     * to QUEUED and the single drain lane is restarted.
-     */
     public static void recoverInterruptedAndEnsureDrainAsync(Context context) {
         Context app = context.getApplicationContext();
         RECOVERY_EXECUTOR.execute(() -> {
@@ -248,6 +265,7 @@ public final class TranscriptionScheduler {
                 JSONObject details = new JSONObject();
                 details.put("legacyWorkCancelled", migrated);
                 details.put("recoveredTranscribingCount", recovered);
+                details.put("backlogPausedForLive", isBacklogPaused(app));
                 AppLogger.event(app, "TRANSCRIPTION_SINGLE_RUNNER_RECOVERY_COMPLETED", details);
             } catch (Exception error) {
                 try {
@@ -363,7 +381,6 @@ public final class TranscriptionScheduler {
         return fileName.substring(underscore + 1, suffix);
     }
 
-    /** Legacy per-segment work name, retained only so 0.7.10 and older jobs can be cancelled. */
     static String uniqueWorkName(String segmentId) {
         return "transcribe:" + segmentId;
     }
@@ -376,6 +393,7 @@ public final class TranscriptionScheduler {
             details.put("engine", LocalWhisperEngine.engineId(context));
             details.put("modelId", WhisperModelManager.selectedModelId(context));
             details.put("vadReady", WhisperModelManager.isVadReady(context));
+            details.put("backlogPausedForLive", isBacklogPaused(context));
             if (message != null) {
                 details.put("message", message);
             }
