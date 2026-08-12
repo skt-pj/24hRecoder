@@ -100,8 +100,8 @@ public final class LocalWhisperEngine {
             vad = analyzeStreamingVad(streaming, prepared.durationMs());
         } else {
             vad = gate.available && !gate.ranges.isEmpty()
-                    ? analyzeVad(context, prepared, gate)
-                    : analyzeVad(context, prepared);
+                    ? analyzeVad(context, prepared, gate, cancellationToken)
+                    : analyzeVad(context, prepared, cancellationToken);
         }
         TranscriptionCancellation.throwIfCancelled(cancellationToken);
         return transcribePrepared(context, prepared, modelId, vad, gate, false, segmentId, pipeline, cancellationToken);
@@ -118,12 +118,18 @@ public final class LocalWhisperEngine {
 
     /** Full-audio safety fallback for an activity gate that cannot produce usable candidate ranges. */
     static VadDiagnostics analyzeVad(Context context, PreparedAudio prepared) throws Exception {
+        return analyzeVad(context, prepared, TranscriptionCancellation.snapshot());
+    }
+
+    static VadDiagnostics analyzeVad(Context context, PreparedAudio prepared, long cancellationToken) throws Exception {
+        TranscriptionCancellation.throwIfCancelled(cancellationToken);
         File vadModel = WhisperModelManager.vadModelFile(context);
         if (!WhisperModelManager.isVadReady(context)) {
             throw new IllegalStateException("Silero VAD model is not ready");
         }
         int threads = threadCount();
         String raw = nativeAnalyzeVadDetailed(vadModel.getAbsolutePath(), prepared.frontEnd.samples, threads);
+        TranscriptionCancellation.throwIfCancelled(cancellationToken);
         if (raw == null) {
             throw new IllegalStateException("Local VAD diagnostics returned null");
         }
@@ -137,7 +143,9 @@ public final class LocalWhisperEngine {
     /** Run Silero only over the original-timeline ranges selected by the cheap activity gate. */
     private static VadDiagnostics analyzeVad(Context context,
                                              PreparedAudio prepared,
-                                             RealtimeSpeechGateStore.Snapshot gate) throws Exception {
+                                             RealtimeSpeechGateStore.Snapshot gate,
+                                             long cancellationToken) throws Exception {
+        TranscriptionCancellation.throwIfCancelled(cancellationToken);
         File vadModel = WhisperModelManager.vadModelFile(context);
         if (!WhisperModelManager.isVadReady(context)) {
             throw new IllegalStateException("Silero VAD model is not ready");
@@ -157,6 +165,7 @@ public final class LocalWhisperEngine {
         int candidateIndex = 0;
 
         for (RealtimeSpeechGateStore.Range candidate : gate.ranges) {
+            TranscriptionCancellation.throwIfCancelled(cancellationToken);
             long startMs = Math.max(0L, Math.min(audioDurationMs, candidate.startMs));
             long endMs = Math.max(0L, Math.min(audioDurationMs, candidate.endMs));
             if (endMs <= startMs) {
@@ -175,6 +184,7 @@ public final class LocalWhisperEngine {
 
             float[] slice = Arrays.copyOfRange(prepared.frontEnd.samples, startSample, endSample);
             String raw = nativeAnalyzeVadDetailed(vadModel.getAbsolutePath(), slice, threads);
+            TranscriptionCancellation.throwIfCancelled(cancellationToken);
             if (raw == null) {
                 throw new IllegalStateException("Candidate Silero VAD returned null");
             }

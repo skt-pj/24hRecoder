@@ -250,7 +250,7 @@ public final class TranscriptionQueueService extends Service {
                     org.json.JSONArray savedSegments = response.skippedNoSpeech
                             ? new org.json.JSONArray()
                             : TranscriptionPipelineSettings.SPEAKER_SHERPA_CPU.equals(pipeline.speakerBackend)
-                                ? SpeakerIdentifier.annotate(context, audioFile, response.segments)
+                                ? SpeakerIdentifier.annotate(context, audioFile, response.segments, cancellationToken)
                                 : new org.json.JSONArray(response.segments.toString());
                     TranscriptionCancellation.throwIfCancelled(cancellationToken);
                     if (!TranscriptionResetManager.isCurrentGeneration(context, generation)) {

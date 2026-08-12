@@ -165,7 +165,7 @@ public final class TranscriptionWorker extends Worker {
                     JSONArray annotatedSegments = response.skippedNoSpeech
                             ? new JSONArray()
                             : TranscriptionPipelineSettings.SPEAKER_SHERPA_CPU.equals(pipeline.speakerBackend)
-                                ? SpeakerIdentifier.annotate(context, audioFile, response.segments)
+                                ? SpeakerIdentifier.annotate(context, audioFile, response.segments, cancellationToken)
                                 : new JSONArray(response.segments.toString());
                     TranscriptionCancellation.throwIfCancelled(cancellationToken);
 
