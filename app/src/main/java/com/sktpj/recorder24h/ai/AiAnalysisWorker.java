@@ -17,6 +17,7 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 public final class AiAnalysisWorker extends Worker {
     private static final int MAX_ATTEMPTS = 3;
@@ -90,7 +91,6 @@ public final class AiAnalysisWorker extends Worker {
                         AiQueueStore.STATE_WAITING_DATA, "日次対象期間の終了待ち");
                 log(context, "AI_DAILY_ANALYSIS_WAITING_FOR_DAY_CLOSE", kind,
                         periodStartMs, periodEndMs, null, null);
-                // Data/time wait is a semantic queue state, not a WorkManager retry loop.
                 return Result.success();
             }
         }
@@ -104,7 +104,6 @@ public final class AiAnalysisWorker extends Worker {
                     AiQueueStore.STATE_WAITING_DATA, "対象期間の文字起こし待ち");
             log(context, "AI_ANALYSIS_WAITING_FOR_TRANSCRIPTION", kind,
                     periodStartMs, periodEndMs, null, null);
-            // TranscriptionRepository wakes only overlapping waiting targets when data is saved.
             return Result.success();
         }
 
@@ -131,8 +130,6 @@ public final class AiAnalysisWorker extends Worker {
 
         if (source.isEmpty()) {
             if (hasAnyRecording(context, periodStartMs, periodEndMs)) {
-                // Recording exists and transcription has no pending work: this is a completed
-                // no-speech/empty-transcript period, not a queue item that should wait forever.
                 AiQueueStore.remove(context, queueId);
                 log(context, "AI_ANALYSIS_SKIPPED_NO_TRANSCRIPT", kind,
                         periodStartMs, periodEndMs, source, null);
@@ -143,7 +140,6 @@ public final class AiAnalysisWorker extends Worker {
                     AiQueueStore.STATE_WAITING_DATA, "対象期間の録音・文字起こしデータ待ち");
             log(context, "AI_ANALYSIS_WAITING_FOR_SOURCE", kind,
                     periodStartMs, periodEndMs, source, null);
-            // Leave the semantic queue item dormant until overlapping transcript data arrives.
             return Result.success();
         }
 
@@ -157,6 +153,31 @@ public final class AiAnalysisWorker extends Worker {
                         queueId, kind, requestType);
             }
             return Result.success();
+        }
+
+        // Local Gemma can legitimately take well beyond the normal Worker execution window.
+        // Promote it before inference so JobScheduler/WorkManager does not stop and restart the
+        // same target every ~15 minutes. If foreground promotion is unavailable, do not begin an
+        // expensive local inference that cannot be kept alive reliably.
+        if (AiProviderStore.isLocalGemma(context)) {
+            try {
+                setForegroundAsync(AiAnalysisForegroundInfo.localGemma(
+                        context,
+                        kind,
+                        periodStartMs,
+                        daily ? "Gemmaで1日分を分析しています" : "Gemmaで1時間分を分析しています"))
+                        .get(15, TimeUnit.SECONDS);
+                setQueueState(context, queueId, kind, periodStartMs, periodEndMs, requestType,
+                        AiQueueStore.STATE_RUNNING, "Gemmaでローカル分析中");
+                log(context, "AI_ANALYSIS_FOREGROUND_STARTED", kind,
+                        periodStartMs, periodEndMs, source, null);
+            } catch (Exception foregroundError) {
+                log(context, "AI_ANALYSIS_FOREGROUND_FAILED", kind,
+                        periodStartMs, periodEndMs, source, foregroundError);
+                setQueueState(context, queueId, kind, periodStartMs, periodEndMs, requestType,
+                        AiQueueStore.STATE_FAILED, "ローカルAIの長時間実行を開始できませんでした");
+                return Result.failure();
+            }
         }
 
         log(context, "AI_ANALYSIS_STARTED", kind,
@@ -191,6 +212,25 @@ public final class AiAnalysisWorker extends Worker {
                     canRetry ? AiQueueStore.STATE_RETRY_WAIT : AiQueueStore.STATE_FAILED,
                     canRetry ? "処理エラーの再試行待ち" : "AI分析に失敗しました");
             return canRetry ? Result.retry() : Result.failure();
+        }
+    }
+
+    @Override
+    public void onStopped() {
+        super.onStopped();
+        try {
+            Context context = getApplicationContext();
+            JSONObject details = new JSONObject();
+            String kind = getInputData().getString(AiAnalysisScheduler.EXTRA_KIND);
+            long startMs = getInputData().getLong(AiAnalysisScheduler.EXTRA_PERIOD_START_MS, 0L);
+            long endMs = getInputData().getLong(AiAnalysisScheduler.EXTRA_PERIOD_END_MS, 0L);
+            details.put("kind", kind == null ? JSONObject.NULL : kind);
+            details.put("periodStartMs", startMs);
+            details.put("periodEndMs", endMs);
+            details.put("runAttemptCount", getRunAttemptCount());
+            details.put("provider", AiProviderStore.getProvider(context));
+            AppLogger.event(context, "AI_ANALYSIS_WORKER_STOPPED", details);
+        } catch (Exception ignored) {
         }
     }
 
