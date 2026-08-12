@@ -62,7 +62,7 @@ object GemmaHourlyCheckpointStore {
     ) = synchronized(lock) {
         if (chunkIndex !in 0 until chunkCount) return@synchronized
         val file = checkpointFile(context, sourceHash)
-        val root = try {
+        var root = try {
             if (file.isFile) JSONObject(file.readText(StandardCharsets.UTF_8)) else JSONObject()
         } catch (_: Exception) {
             JSONObject()
@@ -71,15 +71,12 @@ object GemmaHourlyCheckpointStore {
             root.optString("sourceHash", "") != sourceHash ||
             root.optInt("chunkCount", -1) != chunkCount
         ) {
-            while (root.keys().hasNext()) {
-                val key = root.keys().next()
-                root.remove(key)
-            }
-            root.put("schemaVersion", SCHEMA_VERSION)
-            root.put("sourceHash", sourceHash)
-            root.put("chunkCount", chunkCount)
-            root.put("createdAtMs", System.currentTimeMillis())
-            root.put("chunks", JSONObject())
+            root = JSONObject()
+                .put("schemaVersion", SCHEMA_VERSION)
+                .put("sourceHash", sourceHash)
+                .put("chunkCount", chunkCount)
+                .put("createdAtMs", System.currentTimeMillis())
+                .put("chunks", JSONObject())
         }
         root.put("updatedAtMs", System.currentTimeMillis())
         val chunks = root.optJSONObject("chunks") ?: JSONObject().also { root.put("chunks", it) }
