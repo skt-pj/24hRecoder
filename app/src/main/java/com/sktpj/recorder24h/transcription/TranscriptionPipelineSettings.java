@@ -68,8 +68,6 @@ public final class TranscriptionPipelineSettings {
                         Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
                 return snapshotFromJson(row);
             } catch (Exception ignored) {
-                // A malformed durable settings file is not permission to invent a different
-                // backend. Recover the last legacy/default selection and rewrite a valid file.
                 Snapshot recovered = migrateLegacyPreferences(app);
                 writeSnapshotLocked(app, recovered);
                 return recovered;
@@ -109,8 +107,6 @@ public final class TranscriptionPipelineSettings {
                     denoise == null ? current.denoiseBackend : denoise,
                     speaker == null ? current.speakerBackend : speaker);
             writeSnapshotLocked(app, next);
-            // Keep legacy preferences synchronized for downgrade/debug compatibility. They are no
-            // longer the source of truth for running processes.
             app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                     .putString(KEY_MODE, next.executionMode)
                     .putString(KEY_ASR, next.asrBackend)
@@ -152,10 +148,12 @@ public final class TranscriptionPipelineSettings {
         if (parent != null && !parent.exists()) parent.mkdirs();
         File temp = new File(parent, target.getName()
                 + ".tmp." + Process.myPid() + "." + Thread.currentThread().getId());
-        try (FileOutputStream out = new FileOutputStream(temp, false)) {
-            out.write(row.toString().getBytes(StandardCharsets.UTF_8));
-            out.flush();
-            out.getFD().sync();
+        try {
+            try (FileOutputStream out = new FileOutputStream(temp, false)) {
+                out.write(row.toString().getBytes(StandardCharsets.UTF_8));
+                out.flush();
+                out.getFD().sync();
+            }
             try {
                 Files.move(temp.toPath(), target.toPath(),
                         StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
@@ -163,8 +161,6 @@ public final class TranscriptionPipelineSettings {
                 Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
             }
         } catch (Exception error) {
-            // A setting write must not silently continue with a different backend. Surface the
-            // persistence failure to the caller so the UI cannot claim a change that was not saved.
             throw new IllegalStateException("TRANSCRIPTION_PIPELINE_SETTINGS_WRITE_FAILED", error);
         } finally {
             if (temp.exists()) temp.delete();
@@ -318,11 +314,14 @@ public final class TranscriptionPipelineSettings {
         }
 
         public String signature() {
-            return "mode=" + executionMode
-                    + "+asr=" + asrBackend
+            String legacy = "asr=" + asrBackend
                     + "+vad=" + vadBackend
                     + "+denoise=" + denoiseBackend
                     + "+speaker=" + speakerBackend;
+            // 0.7.15 used exactly the legacy signature above. Keep it byte-for-byte for retained
+            // postprocess mode so installing 0.7.16 does not invalidate/requeue old transcripts.
+            if (MODE_SEGMENT_POSTPROCESS.equals(executionMode)) return legacy;
+            return "mode=" + executionMode + "+" + legacy;
         }
 
         public JSONObject toJson() {
