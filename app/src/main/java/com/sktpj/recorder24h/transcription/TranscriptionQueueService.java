@@ -30,7 +30,17 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** User-visible queue runner for explicit transcription requests. */
+/**
+ * User-visible queue runner for explicit transcription requests.
+ *
+ * WorkManager remains the wake-up mechanism for fully automatic background work. When the user
+ * explicitly requests transcription from a visible Activity, this mediaProcessing foreground
+ * service drains the persisted QUEUED items directly so execution is not held behind
+ * WorkManager/JobScheduler start latency or the battery-not-low constraint.
+ *
+ * The process-wide TranscriptionExecutionGate is shared with TranscriptionWorker so this service
+ * can never become a second simultaneous queue runner.
+ */
 public final class TranscriptionQueueService extends Service {
     private static final String ACTION_DRAIN = "com.sktpj.recorder24h.action.DRAIN_TRANSCRIPTION_QUEUE";
     private static final String CHANNEL_ID = "24hrecoder-transcription-queue";
@@ -115,7 +125,6 @@ public final class TranscriptionQueueService extends Service {
                     AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_PAUSED_AFTER_CURRENT_ITEM");
                     return;
                 }
-
                 SegmentRecord next = nextQueuedRecord(context);
                 if (next == null) {
                     AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DRAIN_EMPTY");
@@ -130,7 +139,9 @@ public final class TranscriptionQueueService extends Service {
                     continue;
                 }
 
+                // Prevent a pre-0.7.11 legacy per-segment job from later running the same segment.
                 WorkManager.getInstance(context).cancelUniqueWork(TranscriptionScheduler.uniqueWorkName(segmentId));
+
                 boolean manual = next.getReason() != null && next.getReason().startsWith("MANUAL_");
                 processOne(context, segmentId, new File(audioPath), manual);
             }
@@ -138,6 +149,8 @@ public final class TranscriptionQueueService extends Service {
             AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_RUNTIME_LIMIT_REACHED");
         } finally {
             TranscriptionExecutionGate.release();
+            // If the FGS reaches its runtime limit or another path queued work while it was
+            // active, hand the remaining persisted queue back to the single background Worker.
             TranscriptionScheduler.ensureDrainScheduled(context);
         }
     }
@@ -147,12 +160,11 @@ public final class TranscriptionQueueService extends Service {
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             if (TranscriptionScheduler.isQueuePaused(context)) {
-                log(context, "TRANSCRIPTION_DIRECT_QUEUE_ITEM_HELD_LIVE_PAUSED", segmentId, audioFile,
+                log(context, "TRANSCRIPTION_DIRECT_QUEUE_ITEM_HELD_QUEUE_PAUSED", segmentId, audioFile,
                         "QUEUED_ITEM_RETAINED", forceRetranscribe, attempt, null,
                         WhisperModelManager.selectedModelId(context), LocalWhisperEngine.engineId(context));
                 return;
             }
-
             String selectedModelId = WhisperModelManager.selectedModelId(context);
             TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
             String selectedEngineId = LocalWhisperEngine.engineId(context, selectedModelId, pipeline);
@@ -406,7 +418,7 @@ public final class TranscriptionQueueService extends Service {
             details.put("attempt", attempt);
             details.put("asrReady", WhisperModelManager.isModelReady(context, modelId));
             details.put("vadReady", WhisperModelManager.isVadReady(context));
-            details.put("backlogPausedForLive", TranscriptionScheduler.isQueuePaused(context));
+            details.put("queuePaused", TranscriptionScheduler.isQueuePaused(context));
             if (message != null) {
                 details.put("message", message);
             }
