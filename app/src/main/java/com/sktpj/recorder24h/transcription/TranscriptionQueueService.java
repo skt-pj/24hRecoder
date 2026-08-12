@@ -37,6 +37,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * explicitly requests transcription from a visible Activity, this mediaProcessing foreground
  * service drains the persisted QUEUED items directly so execution is not held behind
  * WorkManager/JobScheduler start latency or the battery-not-low constraint.
+ *
+ * The process-wide TranscriptionExecutionGate is shared with TranscriptionWorker so this service
+ * can never become a second simultaneous queue runner.
  */
 public final class TranscriptionQueueService extends Service {
     private static final String ACTION_DRAIN = "com.sktpj.recorder24h.action.DRAIN_TRANSCRIPTION_QUEUE";
@@ -95,31 +98,43 @@ public final class TranscriptionQueueService extends Service {
 
     private void drainQueue() {
         Context context = getApplicationContext();
-        AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DRAIN_STARTED");
-
-        while (System.currentTimeMillis() - serviceStartedAtMs < MAX_SERVICE_RUNTIME_MS) {
-            SegmentRecord next = nextQueuedRecord(context);
-            if (next == null) {
-                AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DRAIN_EMPTY");
-                return;
-            }
-
-            String segmentId = next.getSegmentId();
-            String audioPath = next.getAudioPath();
-            if (audioPath == null || audioPath.isEmpty()) {
-                SegmentRepository.appendWithoutNotify(context, segmentId, null, 0L,
-                        System.currentTimeMillis(), "FAILED", "SOURCE_AUDIO_MISSING");
-                continue;
-            }
-
-            // Prevent the same segment from later starting through the old WorkManager path.
-            WorkManager.getInstance(context).cancelUniqueWork(TranscriptionScheduler.uniqueWorkName(segmentId));
-
-            boolean manual = next.getReason() != null && next.getReason().startsWith("MANUAL_");
-            processOne(context, segmentId, new File(audioPath), manual);
+        if (!TranscriptionExecutionGate.tryAcquire()) {
+            AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DEFERRED_RUNNER_BUSY");
+            TranscriptionScheduler.ensureDrainScheduled(context);
+            return;
         }
 
-        AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_RUNTIME_LIMIT_REACHED");
+        AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DRAIN_STARTED");
+        try {
+            while (System.currentTimeMillis() - serviceStartedAtMs < MAX_SERVICE_RUNTIME_MS) {
+                SegmentRecord next = nextQueuedRecord(context);
+                if (next == null) {
+                    AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DRAIN_EMPTY");
+                    return;
+                }
+
+                String segmentId = next.getSegmentId();
+                String audioPath = next.getAudioPath();
+                if (audioPath == null || audioPath.isEmpty()) {
+                    SegmentRepository.appendWithoutNotify(context, segmentId, null, 0L,
+                            System.currentTimeMillis(), "FAILED", "SOURCE_AUDIO_MISSING");
+                    continue;
+                }
+
+                // Prevent a pre-0.7.11 legacy per-segment job from later running the same segment.
+                WorkManager.getInstance(context).cancelUniqueWork(TranscriptionScheduler.uniqueWorkName(segmentId));
+
+                boolean manual = next.getReason() != null && next.getReason().startsWith("MANUAL_");
+                processOne(context, segmentId, new File(audioPath), manual);
+            }
+
+            AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_RUNTIME_LIMIT_REACHED");
+        } finally {
+            TranscriptionExecutionGate.release();
+            // If the FGS reaches its runtime limit or another path queued work while it was
+            // active, hand the remaining persisted queue back to the single background Worker.
+            TranscriptionScheduler.ensureDrainScheduled(context);
+        }
     }
 
     private void processOne(Context context, String segmentId, File audioFile, boolean forceRetranscribe) {
@@ -226,6 +241,7 @@ public final class TranscriptionQueueService extends Service {
                     metrics.put("segmentCount", response.segmentCount);
                     metrics.put("snrProxyDb", response.snrProxyDb);
                     metrics.put("appliedGainDb", response.appliedGainDb);
+                    metrics.put("runner", "foreground-single-drain");
                     log(context, "TRANSCRIPTION_DIRECT_SAVED", segmentId, audioFile,
                             null, forceRetranscribe, attempt, metrics,
                             selectedModelId, selectedEngineId);
