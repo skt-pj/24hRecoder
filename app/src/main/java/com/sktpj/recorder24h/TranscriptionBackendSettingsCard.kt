@@ -159,6 +159,43 @@ fun TranscriptionBackendSettingsCard() {
                 }
             }
 
+            if (pipeline.executionMode == TranscriptionPipelineSettings.MODE_LIVE_STREAMING &&
+                pipeline.asrBackend != TranscriptionPipelineSettings.ASR_ANDROID_ON_DEVICE
+            ) {
+                PipelineSection("ライブWhisper経路") {
+                    BackendChip(
+                        selected = pipeline.liveWhisperRoute == TranscriptionPipelineSettings.LIVE_WHISPER_PERSISTENT,
+                        enabled = true,
+                        text = "ライブ専用常駐"
+                    ) {
+                        val before = pipeline.liveWhisperRoute
+                        TranscriptionPipelineSettings.setLiveWhisperRoute(
+                            context, TranscriptionPipelineSettings.LIVE_WHISPER_PERSISTENT
+                        )
+                        refresh(); logChange("liveWhisperRoute", before, pipeline.liveWhisperRoute)
+                    }
+                    BackendChip(
+                        selected = pipeline.liveWhisperRoute == TranscriptionPipelineSettings.LIVE_WHISPER_POSTPROCESS_NATIVE,
+                        enabled = true,
+                        text = "通常JNI（発話ごとロード）"
+                    ) {
+                        val before = pipeline.liveWhisperRoute
+                        TranscriptionPipelineSettings.setLiveWhisperRoute(
+                            context, TranscriptionPipelineSettings.LIVE_WHISPER_POSTPROCESS_NATIVE
+                        )
+                        refresh(); logChange("liveWhisperRoute", before, pipeline.liveWhisperRoute)
+                    }
+                }
+                Text(
+                    if (pipeline.liveWhisperRoute == TranscriptionPipelineSettings.LIVE_WHISPER_POSTPROCESS_NATIVE)
+                        "通常JNIは5分処理と同じnativeTranscribeDetailedを発話ごとに使い、毎回モデルをロード・解放します。"
+                    else
+                        "ライブ専用常駐はモデルを保持する既存経路です。どちらも選択backendのままで、自動フォールバックしません。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
             PipelineSection("VAD") {
                 BackendChip(
                     selected = pipeline.vadBackend == TranscriptionPipelineSettings.VAD_CANDIDATE_SILERO,
@@ -254,7 +291,7 @@ fun TranscriptionBackendSettingsCard() {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                "完全ストリーミングでは録音中PCMを専用ASRプロセスへ渡し、発話中は暫定認識、発話終了時に確定認識します。5分音声保存は従来どおり継続します。録音中の設定変更は次の5分セグメント境界から反映されます。",
+                "完全ストリーミングでは録音中PCMを専用ASRプロセスへ渡し、発話中は暫定認識、発話終了時に確定認識します。Whisperはライブ専用常駐または通常JNI（発話ごとロード）を明示選択できます。5分音声保存は従来どおり継続し、録音中の設定変更は次の5分セグメント境界から反映されます。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
