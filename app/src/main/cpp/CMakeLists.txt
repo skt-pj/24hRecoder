@@ -75,7 +75,7 @@ if(TARGET ggml-vulkan)
             ${spirv_headers_source_SOURCE_DIR}/include)
 endif()
 
-add_library(whisper_jni SHARED whisper_jni.cpp)
+add_library(whisper_jni SHARED whisper_jni.cpp live_whisper_jni.cpp)
 target_compile_features(whisper_jni PRIVATE cxx_std_17)
 target_include_directories(whisper_jni PRIVATE
         ${whisper_cpp_SOURCE_DIR}/include
