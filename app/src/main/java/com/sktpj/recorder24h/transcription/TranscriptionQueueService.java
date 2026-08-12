@@ -231,6 +231,10 @@ public final class TranscriptionQueueService extends Service {
                         return;
                     }
 
+                    long cancellationToken = TranscriptionCancellation.snapshot();
+                    if (TranscriptionScheduler.isQueuePaused(context)) {
+                        throw new IllegalStateException(TranscriptionCancellation.CANCELLED);
+                    }
                     long startedAt = System.currentTimeMillis();
                     SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
                             audioFile.lastModified(), startedAt, "TRANSCRIBING",
@@ -241,12 +245,14 @@ public final class TranscriptionQueueService extends Service {
                             selectedModelId, selectedEngineId);
 
                     LocalWhisperEngine.Response response =
-                            LocalWhisperEngine.transcribe(context, audioFile, selectedModelId, pipeline);
+                            LocalWhisperEngine.transcribe(context, audioFile, selectedModelId, pipeline, cancellationToken);
+                    TranscriptionCancellation.throwIfCancelled(cancellationToken);
                     org.json.JSONArray savedSegments = response.skippedNoSpeech
                             ? new org.json.JSONArray()
                             : TranscriptionPipelineSettings.SPEAKER_SHERPA_CPU.equals(pipeline.speakerBackend)
                                 ? SpeakerIdentifier.annotate(context, audioFile, response.segments)
                                 : new org.json.JSONArray(response.segments.toString());
+                    TranscriptionCancellation.throwIfCancelled(cancellationToken);
                     if (!TranscriptionResetManager.isCurrentGeneration(context, generation)) {
                         SegmentRepository.appendWithoutNotify(context, segmentId, audioFile, 0L,
                                 System.currentTimeMillis(), "READY", null);
@@ -294,6 +300,16 @@ public final class TranscriptionQueueService extends Service {
                         selectedModelId, selectedEngineId);
                 return;
             } catch (Exception error) {
+                if (TranscriptionCancellation.isCancellation(error)) {
+                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                            audioFile.lastModified(), System.currentTimeMillis(), "QUEUED",
+                            "USER_PAUSED_RUNNING_TRANSCRIPTION");
+                    log(context, "TRANSCRIPTION_DIRECT_RUNNING_ITEM_CANCELLED_BY_USER", segmentId, audioFile,
+                            TranscriptionCancellation.CANCELLED, forceRetranscribe, attempt, null,
+                            selectedModelId, selectedEngineId);
+                    promote("文字起こしキュー: 一時停止中");
+                    return;
+                }
                 boolean retry = attempt < MAX_ATTEMPTS;
                 String reason = forceRetranscribe
                         ? (retry ? "MANUAL_DIRECT_RETRY" : "MANUAL_DIRECT_FAILED")

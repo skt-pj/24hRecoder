@@ -138,6 +138,10 @@ public final class TranscriptionWorker extends Worker {
                         return;
                     }
 
+                    long cancellationToken = TranscriptionCancellation.snapshot();
+                    if (TranscriptionScheduler.isQueuePaused(context)) {
+                        throw new IllegalStateException(TranscriptionCancellation.CANCELLED);
+                    }
                     long startedAt = System.currentTimeMillis();
                     long queueWaitMs = Math.max(0L, startedAt - queueEnqueuedAt(record));
                     SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
@@ -156,12 +160,14 @@ public final class TranscriptionWorker extends Worker {
                             segmentId, audioFile, null, forceRetranscribe, attempt, started);
 
                     LocalWhisperEngine.Response response =
-                            LocalWhisperEngine.transcribe(context, audioFile, selectedModelId, pipeline);
+                            LocalWhisperEngine.transcribe(context, audioFile, selectedModelId, pipeline, cancellationToken);
+                    TranscriptionCancellation.throwIfCancelled(cancellationToken);
                     JSONArray annotatedSegments = response.skippedNoSpeech
                             ? new JSONArray()
                             : TranscriptionPipelineSettings.SPEAKER_SHERPA_CPU.equals(pipeline.speakerBackend)
                                 ? SpeakerIdentifier.annotate(context, audioFile, response.segments)
                                 : new JSONArray(response.segments.toString());
+                    TranscriptionCancellation.throwIfCancelled(cancellationToken);
 
                     synchronized (TranscriptionResetManager.class) {
                         if (!TranscriptionResetManager.isCurrentGeneration(context, generation)) {
@@ -254,6 +260,14 @@ public final class TranscriptionWorker extends Worker {
                         forceRetranscribe, attempt, null);
                 return;
             } catch (Exception error) {
+                if (TranscriptionCancellation.isCancellation(error)) {
+                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                            audioFile.lastModified(), System.currentTimeMillis(), "QUEUED",
+                            "USER_PAUSED_RUNNING_TRANSCRIPTION");
+                    log(context, "TRANSCRIPTION_RUNNING_ITEM_CANCELLED_BY_USER", segmentId, audioFile,
+                            TranscriptionCancellation.CANCELLED, forceRetranscribe, attempt, null);
+                    return;
+                }
                 boolean retry = attempt < MAX_ATTEMPTS;
                 String reason = forceRetranscribe
                         ? (retry ? "MANUAL_SINGLE_RUNNER_RETRY" : "MANUAL_SINGLE_RUNNER_FAILED")

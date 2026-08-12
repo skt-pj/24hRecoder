@@ -58,6 +58,13 @@ public final class LocalWhisperEngine {
     public static synchronized Response transcribe(Context context, File audioFile,
                                                    String modelId,
                                                    TranscriptionPipelineSettings.Snapshot pipeline) throws Exception {
+        return transcribe(context, audioFile, modelId, pipeline, TranscriptionCancellation.snapshot());
+    }
+
+    static Response transcribe(Context context, File audioFile, String modelId,
+                               TranscriptionPipelineSettings.Snapshot pipeline,
+                               long cancellationToken) throws Exception {
+        TranscriptionCancellation.throwIfCancelled(cancellationToken);
         TranscriptionPipelineSettings.requireRunnable(context, pipeline, modelId);
         String segmentId = TranscriptionScheduler.extractSegmentId(audioFile.getName());
         RealtimeSpeechGateStore.Snapshot gate = segmentId == null
@@ -71,6 +78,7 @@ public final class LocalWhisperEngine {
         }
 
         PreparedAudio prepared = prepareAudio(audioFile);
+        TranscriptionCancellation.throwIfCancelled(cancellationToken);
 
         // Retained audio from older builds has no realtime sidecar. Run the same cheap gate on the
         // decoded PCM so backlog items also avoid scanning all five minutes with Silero.
@@ -87,7 +95,7 @@ public final class LocalWhisperEngine {
                     ? StreamingVadStore.Snapshot.missing()
                     : StreamingVadStore.read(context, segmentId);
             if (!streaming.available || !streaming.complete) {
-                streaming = StreamingVadStore.analyzeOffline(context, prepared.frontEnd.samples);
+                streaming = StreamingVadStore.analyzeOffline(context, prepared.frontEnd.samples, cancellationToken);
             }
             vad = analyzeStreamingVad(streaming, prepared.durationMs());
         } else {
@@ -95,7 +103,8 @@ public final class LocalWhisperEngine {
                     ? analyzeVad(context, prepared, gate)
                     : analyzeVad(context, prepared);
         }
-        return transcribePrepared(context, prepared, modelId, vad, gate, false, segmentId, pipeline);
+        TranscriptionCancellation.throwIfCancelled(cancellationToken);
+        return transcribePrepared(context, prepared, modelId, vad, gate, false, segmentId, pipeline, cancellationToken);
     }
 
     static PreparedAudio prepareAudio(File audioFile) throws Exception {
@@ -275,7 +284,7 @@ public final class LocalWhisperEngine {
                 TranscriptionPipelineSettings.DENOISE_DEEPFILTER,
                 TranscriptionPipelineSettings.SPEAKER_OFF);
         return transcribePrepared(context, prepared, modelId, vad,
-                RealtimeSpeechGateStore.Snapshot.missing(), false, null, comparison);
+                RealtimeSpeechGateStore.Snapshot.missing(), false, null, comparison, TranscriptionCancellation.snapshot());
     }
 
     static Response transcribePrepared(Context context, PreparedAudio prepared, String modelId,
@@ -286,7 +295,7 @@ public final class LocalWhisperEngine {
                 TranscriptionPipelineSettings.DENOISE_DEEPFILTER,
                 TranscriptionPipelineSettings.SPEAKER_OFF);
         return transcribePrepared(context, prepared, modelId, vad,
-                RealtimeSpeechGateStore.Snapshot.missing(), false, null, comparison);
+                RealtimeSpeechGateStore.Snapshot.missing(), false, null, comparison, TranscriptionCancellation.snapshot());
     }
 
     private static Response transcribePrepared(Context context,
@@ -296,7 +305,9 @@ public final class LocalWhisperEngine {
                                                RealtimeSpeechGateStore.Snapshot gate,
                                                boolean skippedByActivityGate,
                                                String segmentId,
-                                               TranscriptionPipelineSettings.Snapshot pipeline) throws Exception {
+                                               TranscriptionPipelineSettings.Snapshot pipeline,
+                                               long cancellationToken) throws Exception {
+        TranscriptionCancellation.throwIfCancelled(cancellationToken);
         WhisperModelManager.ModelSpec spec = WhisperModelManager.modelSpec(modelId);
         if (spec == null) {
             throw new IllegalArgumentException("Unknown model: " + modelId);
@@ -324,8 +335,10 @@ public final class LocalWhisperEngine {
                     prepared.frontEnd.samples,
                     chunks.startsMs,
                     chunks.endsMs,
-                    prepared.frontEnd.snrProxyDb);
+                    prepared.frontEnd.snrProxyDb,
+                    cancellationToken);
             asrSamples = denoise.samples;
+            TranscriptionCancellation.throwIfCancelled(cancellationToken);
         }
 
         long inferenceStarted = System.currentTimeMillis();
@@ -335,7 +348,7 @@ public final class LocalWhisperEngine {
         long responseModelBytes = modelBytes;
         if (TranscriptionPipelineSettings.ASR_ANDROID_ON_DEVICE.equals(pipeline.asrBackend)) {
             AndroidOnDeviceAsr.Result androidResult = AndroidOnDeviceAsr.transcribe(
-                    context, asrSamples, chunks.startsMs, chunks.endsMs);
+                    context, asrSamples, chunks.startsMs, chunks.endsMs, cancellationToken);
             nativeResult = new JSONObject()
                     .put("text", androidResult.text)
                     .put("segments", androidResult.segments)
@@ -348,12 +361,13 @@ public final class LocalWhisperEngine {
         } else {
             boolean useGpu = TranscriptionPipelineSettings.ASR_WHISPER_VULKAN.equals(pipeline.asrBackend);
             String raw = nativeTranscribeDetailed(model.getAbsolutePath(), asrSamples,
-                    chunks.startsMs, chunks.endsMs, LANGUAGE, threads, useGpu);
+                    chunks.startsMs, chunks.endsMs, LANGUAGE, threads, useGpu, cancellationToken);
             if (raw == null) {
                 throw new IllegalStateException("Local Whisper returned null");
             }
             nativeResult = new JSONObject(raw);
         }
+        TranscriptionCancellation.throwIfCancelled(cancellationToken);
         long inferenceMs = System.currentTimeMillis() - inferenceStarted;
         String text = nativeResult.optString("text", "").trim();
         JSONArray segments = nativeResult.optJSONArray("segments");
@@ -431,9 +445,16 @@ public final class LocalWhisperEngine {
 
     private static native String nativeAnalyzeVadDetailed(String vadModelPath, float[] pcm, int threads);
 
+    static void setNativePostprocessCancellationGeneration(long generation) {
+        nativeSetPostprocessCancellationGeneration(generation);
+    }
+
+    private static native void nativeSetPostprocessCancellationGeneration(long generation);
+
     private static native String nativeTranscribeDetailed(String modelPath, float[] pcm,
                                                            int[] chunkStartsMs, int[] chunkEndsMs,
-                                                           String language, int threads, boolean useGpu);
+                                                           String language, int threads, boolean useGpu,
+                                                           long cancellationGeneration);
 
     static final class PreparedAudio {
         final AudioPreprocessor.Result frontEnd;

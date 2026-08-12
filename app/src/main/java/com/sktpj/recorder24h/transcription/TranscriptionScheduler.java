@@ -73,11 +73,13 @@ public final class TranscriptionScheduler {
                 .edit()
                 .putBoolean(KEY_QUEUE_PAUSED, paused)
                 .commit();
+        long cancellationGeneration = paused ? TranscriptionCancellation.cancelCurrent() : -1L;
         try {
             JSONObject details = new JSONObject();
             details.put("paused", paused);
             details.put("queuedItemsRetained", true);
-            details.put("runningItemAllowedToFinish", true);
+            details.put("runningItemCancelledOnPause", paused);
+            details.put("cancellationGeneration", cancellationGeneration);
             AppLogger.event(app,
                     paused ? "TRANSCRIPTION_QUEUE_PAUSED_BY_USER"
                             : "TRANSCRIPTION_QUEUE_RESUMED_BY_USER",

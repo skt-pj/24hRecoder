@@ -1,5 +1,6 @@
 #include <jni.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <sstream>
@@ -58,6 +59,22 @@ bool app_has_gpu_backend() {
         }
     }
     return false;
+}
+
+std::atomic<long long> g_postprocess_cancel_generation{0};
+
+struct PostprocessAbortContext {
+    long long expected_generation;
+};
+
+bool postprocess_abort_callback(void * user_data) {
+    auto * state = static_cast<PostprocessAbortContext *>(user_data);
+    return state != nullptr
+            && g_postprocess_cancel_generation.load(std::memory_order_relaxed) != state->expected_generation;
+}
+
+bool postprocess_cancelled(long long expected_generation) {
+    return g_postprocess_cancel_generation.load(std::memory_order_relaxed) != expected_generation;
 }
 
 std::mutex g_stream_vad_mutex;
@@ -277,6 +294,12 @@ Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeAnalyzeVadDeta
     return env->NewStringUTF(output.c_str());
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeSetPostprocessCancellationGeneration(
+        JNIEnv *, jclass, jlong generation) {
+    g_postprocess_cancel_generation.store(static_cast<long long>(generation), std::memory_order_relaxed);
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribeDetailed(
         JNIEnv * env,
@@ -287,7 +310,13 @@ Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribeDeta
         jintArray chunk_ends_ms,
         jstring language,
         jint threads,
-        jboolean use_gpu) {
+        jboolean use_gpu,
+        jlong cancellation_generation) {
+    const long long expected_generation = static_cast<long long>(cancellation_generation);
+    if (postprocess_cancelled(expected_generation)) {
+        throw_runtime(env, "POSTPROCESS_TRANSCRIPTION_CANCELLED");
+        return nullptr;
+    }
     if (model_path == nullptr || pcm == nullptr || chunk_starts_ms == nullptr ||
             chunk_ends_ms == nullptr || language == nullptr) {
         throw_runtime(env, "Invalid local Whisper arguments");
@@ -351,6 +380,15 @@ Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribeDeta
         return nullptr;
     }
 
+    if (postprocess_cancelled(expected_generation)) {
+        whisper_free(ctx);
+        env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+        env->ReleaseStringUTFChars(language, lang);
+        env->ReleaseStringUTFChars(model_path, model);
+        throw_runtime(env, "POSTPROCESS_TRANSCRIPTION_CANCELLED");
+        return nullptr;
+    }
+
     whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     params.n_threads = threads > 0 ? threads : 1;
     params.translate = false;
@@ -372,6 +410,9 @@ Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribeDeta
     // VAD already ran before the Whisper model was loaded. Only the selected speech chunks
     // reach whisper_full(), so do not run Whisper's internal VAD a second time.
     params.vad = false;
+    PostprocessAbortContext abort_context{expected_generation};
+    params.abort_callback = postprocess_abort_callback;
+    params.abort_callback_user_data = &abort_context;
 
     std::string text;
     std::ostringstream json;
@@ -383,6 +424,14 @@ Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribeDeta
          << ",\"segments\":[";
 
     for (jsize chunk_index = 0; chunk_index < chunk_count; ++chunk_index) {
+        if (postprocess_cancelled(expected_generation)) {
+            whisper_free(ctx);
+            env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+            env->ReleaseStringUTFChars(language, lang);
+            env->ReleaseStringUTFChars(model_path, model);
+            throw_runtime(env, "POSTPROCESS_TRANSCRIPTION_CANCELLED");
+            return nullptr;
+        }
         const long long requested_start_ms = std::max(0, starts[static_cast<size_t>(chunk_index)]);
         const long long requested_end_ms = std::max(0, ends[static_cast<size_t>(chunk_index)]);
         long long start_sample = requested_start_ms * 16LL;
@@ -400,11 +449,14 @@ Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeTranscribeDeta
         const auto whisper_finished = std::chrono::steady_clock::now();
         whisper_full_ms += elapsed_ms(whisper_started, whisper_finished);
         if (result != 0) {
+            const bool cancelled = postprocess_cancelled(expected_generation);
             whisper_free(ctx);
             env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
             env->ReleaseStringUTFChars(language, lang);
             env->ReleaseStringUTFChars(model_path, model);
-            throw_runtime(env, "whisper_full for speech chunk failed");
+            throw_runtime(env, cancelled
+                    ? "POSTPROCESS_TRANSCRIPTION_CANCELLED"
+                    : "whisper_full for speech chunk failed");
             return nullptr;
         }
 
