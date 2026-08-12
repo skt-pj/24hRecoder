@@ -44,8 +44,8 @@ public final class TranscriptionQueueService extends Service {
 
     public static boolean kick(Context context) {
         Context app = context.getApplicationContext();
-        if (TranscriptionScheduler.isBacklogPaused(app)) {
-            AppLogger.event(app, "TRANSCRIPTION_DIRECT_QUEUE_KICK_IGNORED_LIVE_PAUSED");
+        if (TranscriptionScheduler.isQueuePaused(app)) {
+            AppLogger.event(app, "TRANSCRIPTION_DIRECT_QUEUE_KICK_IGNORED_QUEUE_PAUSED");
             return false;
         }
         Intent intent = new Intent(app, TranscriptionQueueService.class).setAction(ACTION_DRAIN);
@@ -75,8 +75,8 @@ public final class TranscriptionQueueService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (TranscriptionScheduler.isBacklogPaused(this)) {
-            AppLogger.event(getApplicationContext(), "TRANSCRIPTION_DIRECT_QUEUE_START_SKIPPED_LIVE_PAUSED");
+        if (TranscriptionScheduler.isQueuePaused(this)) {
+            AppLogger.event(getApplicationContext(), "TRANSCRIPTION_DIRECT_QUEUE_START_SKIPPED_QUEUE_PAUSED");
             stopForeground(STOP_FOREGROUND_REMOVE);
             stopSelf();
             return START_NOT_STICKY;
@@ -98,8 +98,8 @@ public final class TranscriptionQueueService extends Service {
 
     private void drainQueue() {
         Context context = getApplicationContext();
-        if (TranscriptionScheduler.isBacklogPaused(context)) {
-            AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DRAIN_SKIPPED_LIVE_PAUSED");
+        if (TranscriptionScheduler.isQueuePaused(context)) {
+            AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DRAIN_SKIPPED_QUEUE_PAUSED");
             return;
         }
         if (!TranscriptionExecutionGate.tryAcquire()) {
@@ -111,8 +111,8 @@ public final class TranscriptionQueueService extends Service {
         AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DRAIN_STARTED");
         try {
             while (System.currentTimeMillis() - serviceStartedAtMs < MAX_SERVICE_RUNTIME_MS) {
-                if (TranscriptionScheduler.isBacklogPaused(context)) {
-                    AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_PAUSED_AFTER_CURRENT_FOR_LIVE");
+                if (TranscriptionScheduler.isQueuePaused(context)) {
+                    AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_PAUSED_AFTER_CURRENT_ITEM");
                     return;
                 }
 
@@ -146,7 +146,7 @@ public final class TranscriptionQueueService extends Service {
         int generation = TranscriptionResetManager.currentGeneration(context);
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            if (TranscriptionScheduler.isBacklogPaused(context)) {
+            if (TranscriptionScheduler.isQueuePaused(context)) {
                 log(context, "TRANSCRIPTION_DIRECT_QUEUE_ITEM_HELD_LIVE_PAUSED", segmentId, audioFile,
                         "QUEUED_ITEM_RETAINED", forceRetranscribe, attempt, null,
                         WhisperModelManager.selectedModelId(context), LocalWhisperEngine.engineId(context));
@@ -406,7 +406,7 @@ public final class TranscriptionQueueService extends Service {
             details.put("attempt", attempt);
             details.put("asrReady", WhisperModelManager.isModelReady(context, modelId));
             details.put("vadReady", WhisperModelManager.isVadReady(context));
-            details.put("backlogPausedForLive", TranscriptionScheduler.isBacklogPaused(context));
+            details.put("backlogPausedForLive", TranscriptionScheduler.isQueuePaused(context));
             if (message != null) {
                 details.put("message", message);
             }

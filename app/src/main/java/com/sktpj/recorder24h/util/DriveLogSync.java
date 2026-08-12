@@ -207,6 +207,7 @@ public final class DriveLogSync {
         transcription.put("asrReady", WhisperModelManager.isAsrReady(context));
         transcription.put("vadReady", WhisperModelManager.isVadReady(context));
         transcription.put("pendingAudioCount", TranscriptionScheduler.pendingAudioCount(context));
+        transcription.put("queuePaused", TranscriptionScheduler.isQueuePaused(context));
         transcription.put("transcriptCount", TranscriptionRepository.count(context));
         File audioDir = StoragePolicy.getAudioDir(context);
         transcription.put("audioFileCount", countFiles(audioDir, ".m4a"));

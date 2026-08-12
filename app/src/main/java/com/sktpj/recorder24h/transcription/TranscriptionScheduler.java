@@ -35,6 +35,7 @@ public final class TranscriptionScheduler {
     private static final String DRAIN_WORK_NAME = "transcription-drain-single-runner";
     private static final String PREFS = "transcription_scheduler";
     private static final String KEY_SINGLE_RUNNER_MIGRATED = "single_runner_migrated_v1";
+    private static final String KEY_QUEUE_PAUSED = "queue_paused";
     private static final ExecutorService RECOVERY_EXECUTOR = Executors.newSingleThreadExecutor();
 
     private TranscriptionScheduler() {
@@ -51,31 +52,41 @@ public final class TranscriptionScheduler {
         context.sendBroadcast(intent);
     }
 
-    public static boolean isBacklogPaused(Context context) {
-        return TranscriptionPipelineSettings.isLiveStreaming(
-                TranscriptionPipelineSettings.snapshot(context.getApplicationContext()));
+    public static boolean isQueuePaused(Context context) {
+        Context app = context.getApplicationContext();
+        return app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getBoolean(KEY_QUEUE_PAUSED, false);
     }
 
     /**
-     * Live streaming owns current speech recognition. Keep the persisted postprocess backlog intact,
-     * but do not let it compete for CPU/GPU until the user explicitly switches back.
+     * Explicit user-controlled pause for the persisted transcription backlog.
+     * A currently running item is not cancelled; the drain stops before starting the next item.
      */
-    public static void onExecutionModeChanged(Context context) {
+    public static void setQueuePaused(Context context, boolean paused) {
         Context app = context.getApplicationContext();
-        boolean paused = isBacklogPaused(app);
-        if (paused) {
-            WorkManager.getInstance(app).cancelUniqueWork(DRAIN_WORK_NAME);
-            try {
-                JSONObject details = new JSONObject();
-                details.put("executionMode", TranscriptionPipelineSettings.MODE_LIVE_STREAMING);
-                details.put("queuedItemsRetained", true);
-                AppLogger.event(app, "TRANSCRIPTION_BACKLOG_PAUSED_FOR_LIVE", details);
-            } catch (Exception ignored) {
-            }
+        boolean before = isQueuePaused(app);
+        if (before == paused) {
+            if (!paused) ensureDrainScheduled(app);
             return;
         }
-        AppLogger.event(app, "TRANSCRIPTION_BACKLOG_RESUMED_AFTER_LIVE");
-        ensureDrainScheduled(app);
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_QUEUE_PAUSED, paused)
+                .commit();
+        try {
+            JSONObject details = new JSONObject();
+            details.put("paused", paused);
+            details.put("queuedItemsRetained", true);
+            details.put("runningItemAllowedToFinish", true);
+            AppLogger.event(app,
+                    paused ? "TRANSCRIPTION_QUEUE_PAUSED_BY_USER"
+                            : "TRANSCRIPTION_QUEUE_RESUMED_BY_USER",
+                    details);
+        } catch (Exception ignored) {
+        }
+        if (!paused) {
+            ensureDrainScheduled(app);
+        }
     }
 
     public static void enqueue(Context context, String segmentId, File file) {
@@ -108,9 +119,9 @@ public final class TranscriptionScheduler {
                 System.currentTimeMillis(), "QUEUED", "MANUAL_DIRECT_QUEUE_ENQUEUED");
         log(context, "MANUAL_RETRANSCRIPTION_DIRECT_ENQUEUED", segmentId, file, null);
 
-        if (isBacklogPaused(context)) {
-            log(context, "MANUAL_RETRANSCRIPTION_QUEUED_LIVE_PAUSED", segmentId, file,
-                    "QUEUED_ITEM_RETAINED_UNTIL_POSTPROCESS_MODE");
+        if (isQueuePaused(context)) {
+            log(context, "MANUAL_RETRANSCRIPTION_QUEUED_PAUSED", segmentId, file,
+                    "QUEUED_ITEM_RETAINED_UNTIL_QUEUE_RESUME");
             return true;
         }
 
@@ -187,8 +198,7 @@ public final class TranscriptionScheduler {
 
     public static void ensureDrainScheduled(Context context) {
         Context app = context.getApplicationContext();
-        if (isBacklogPaused(app)) {
-            WorkManager.getInstance(app).cancelUniqueWork(DRAIN_WORK_NAME);
+        if (isQueuePaused(app)) {
             return;
         }
         if (!hasQueuedWork(app)) {
@@ -203,7 +213,7 @@ public final class TranscriptionScheduler {
 
     static void appendDrainContinuationIfPending(Context context) {
         Context app = context.getApplicationContext();
-        if (isBacklogPaused(app) || !hasQueuedWork(app)) {
+        if (isQueuePaused(app) || !hasQueuedWork(app)) {
             return;
         }
         WorkManager.getInstance(app).enqueueUniqueWork(
@@ -265,7 +275,7 @@ public final class TranscriptionScheduler {
                 JSONObject details = new JSONObject();
                 details.put("legacyWorkCancelled", migrated);
                 details.put("recoveredTranscribingCount", recovered);
-                details.put("backlogPausedForLive", isBacklogPaused(app));
+                details.put("queuePaused", isQueuePaused(app));
                 AppLogger.event(app, "TRANSCRIPTION_SINGLE_RUNNER_RECOVERY_COMPLETED", details);
             } catch (Exception error) {
                 try {
@@ -393,7 +403,7 @@ public final class TranscriptionScheduler {
             details.put("engine", LocalWhisperEngine.engineId(context));
             details.put("modelId", WhisperModelManager.selectedModelId(context));
             details.put("vadReady", WhisperModelManager.isVadReady(context));
-            details.put("backlogPausedForLive", isBacklogPaused(context));
+            details.put("queuePaused", isQueuePaused(context));
             if (message != null) {
                 details.put("message", message);
             }

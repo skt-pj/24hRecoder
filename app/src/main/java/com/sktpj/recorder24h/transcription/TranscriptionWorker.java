@@ -36,12 +36,20 @@ public final class TranscriptionWorker extends Worker {
     @Override
     public Result doWork() {
         Context context = getApplicationContext();
+        if (TranscriptionScheduler.isQueuePaused(context)) {
+            AppLogger.event(context, "TRANSCRIPTION_DRAIN_WORKER_SKIPPED_QUEUE_PAUSED");
+            return Result.success();
+        }
         if (!TranscriptionExecutionGate.tryAcquire()) {
             AppLogger.event(context, "TRANSCRIPTION_DRAIN_WORKER_EXITED_RUNNER_BUSY");
             return Result.success();
         }
 
         try {
+            if (TranscriptionScheduler.isQueuePaused(context)) {
+                AppLogger.event(context, "TRANSCRIPTION_DRAIN_WORKER_HELD_QUEUE_PAUSED");
+                return Result.success();
+            }
             SegmentRecord next = nextQueuedRecord(context);
             if (next == null) {
                 AppLogger.event(context, "TRANSCRIPTION_DRAIN_WORKER_EMPTY");

@@ -31,7 +31,7 @@ android {
         // ASR/VAD/denoise/speaker paths are explicitly user-selectable; backend failure never auto-falls back.
         // Transcription execution is explicitly selectable between retained five-minute postprocess and full live streaming.
         // Full streaming runs ASR in a dedicated process so heavy inference cannot block the AudioRecord loop.
-        // While full live streaming is selected, the retained postprocess backlog stays queued but does not execute.
+        // The persisted transcription backlog has an explicit user-controlled pause/resume state.
 
         ndk {
             abiFilters 'arm64-v8a'

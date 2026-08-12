@@ -112,6 +112,13 @@ fun TranscriptionBackendSettingsCard() {
                 }
             }
 
+            if (pipeline.executionMode == TranscriptionPipelineSettings.MODE_LIVE_STREAMING) {
+                Text(
+                    "通常の文字起こしキューは自動停止しません。ライブ中に止める場合は、キュー画面の「一時停止」を使ってください。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
             if (pipeline.executionMode == TranscriptionPipelineSettings.MODE_LIVE_STREAMING &&
                 pipeline.vadBackend != TranscriptionPipelineSettings.VAD_STREAMING_SILERO
             ) {
