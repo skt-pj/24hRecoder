@@ -58,6 +58,12 @@
             android:foregroundServiceType="microphone"
             android:process=":recorder" />
 
+        <!-- Bound from :recorder. It receives already-captured PCM and never opens a microphone. -->
+        <service
+            android:name=".transcription.StreamingTranscriptionService"
+            android:exported="false"
+            android:process=":streaming_asr" />
+
         <!-- User-triggered queue requests run directly here instead of waiting for JobScheduler. -->
         <service
             android:name=".transcription.TranscriptionQueueService"
