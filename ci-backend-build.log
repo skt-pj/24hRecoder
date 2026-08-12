@@ -16,7 +16,6 @@ Starting a Gradle Daemon (subsequent builds will be faster)
 > Task :app:parseDebugLocalResources
 > Task :app:processDebugMainManifest
 > Task :app:processDebugManifest
-> Task :app:processDebugManifestForPackage
 > Task :app:javaPreCompileDebug
 > Task :app:mergeDebugShaders
 > Task :app:compileDebugShaders NO-SOURCE
@@ -25,43 +24,21 @@ Starting a Gradle Daemon (subsequent builds will be faster)
 > Task :app:compressDebugAssets
 > Task :app:desugarDebugFileDependencies
 > Task :app:checkDebugDuplicateClasses
-> Task :app:processDebugResources
 > Task :app:configureCMakeDebug[arm64-v8a]
+> Task :app:processDebugManifestForPackage
 > Task :app:mergeLibDexDebug
-> Task :app:compileDebugKotlin
+> Task :app:processDebugResources
 > Task :app:mergeExtDexDebug
 > Task :app:buildCMakeDebug[arm64-v8a]
-
-> Task :app:compileDebugKotlin
-w: file:///home/runner/work/24hRecoder/24hRecoder/app/src/main/java/com/sktpj/recorder24h/AiQueueTargetActivity.kt:79:59 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
-w: file:///home/runner/work/24hRecoder/24hRecoder/app/src/main/java/com/sktpj/recorder24h/MainActivity.kt:155:18 This declaration overrides a deprecated member but is not marked as deprecated itself. Add the '@Deprecated' annotation or suppress the diagnostic.
-w: file:///home/runner/work/24hRecoder/24hRecoder/app/src/main/java/com/sktpj/recorder24h/MainActivity.kt:160:15 'fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray): Unit' is deprecated. This method has been deprecated in favor of using the Activity Result API
-      which brings increased type safety via an {@link ActivityResultContract} and the prebuilt
-      contracts for common intents available in
-      {@link androidx.activity.result.contract.ActivityResultContracts}, provides hooks for
-      testing, and allow receiving results in separate, testable classes independent from your
-      activity. Use
-      {@link #registerForActivityResult(ActivityResultContract, ActivityResultCallback)} passing
-      in a {@link RequestMultiplePermissions} object for the {@link ActivityResultContract} and
-      handling the result in the {@link ActivityResultCallback#onActivityResult(Object) callback}.
-w: file:///home/runner/work/24hRecoder/24hRecoder/app/src/main/java/com/sktpj/recorder24h/MainActivity.kt:343:51 'val Icons.Filled.ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack.
-w: file:///home/runner/work/24hRecoder/24hRecoder/app/src/main/java/com/sktpj/recorder24h/MainActivity.kt:462:44 'val Icons.Filled.List: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.List.
-w: file:///home/runner/work/24hRecoder/24hRecoder/app/src/main/java/com/sktpj/recorder24h/MainActivity.kt:883:108 Unnecessary non-null assertion (!!) on a non-null receiver of type 'String'.
-w: file:///home/runner/work/24hRecoder/24hRecoder/app/src/main/java/com/sktpj/recorder24h/UnifiedQueueScreen.kt:74:9 'fun TabRow(selectedTabIndex: Int, modifier: Modifier = ..., containerColor: Color = ..., contentColor: Color = ..., indicator: ComposableFunction1<List<TabPosition>, Unit> = ..., divider: ComposableFunction0<Unit> = ..., tabs: ComposableFunction0<Unit>): Unit' is deprecated. Replaced with PrimaryTabRow and SecondaryTabRow.
-w: file:///home/runner/work/24hRecoder/24hRecoder/app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptEditRepository.kt:45:92 Java type mismatch: inferred type is 'Nothing?', but 'String' was expected.
-w: file:///home/runner/work/24hRecoder/24hRecoder/app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptEditRepository.kt:46:101 Java type mismatch: inferred type is 'Nothing?', but 'String' was expected.
-w: file:///home/runner/work/24hRecoder/24hRecoder/app/src/main/java/com/sktpj/recorder24h/ui/SegmentHistoryRepository.kt:149:105 Java type mismatch: inferred type is 'Nothing?', but 'String' was expected.
-
-> Task :app:buildCMakeDebug[arm64-v8a]
 C/C++: ninja: Entering directory `/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a'
-C/C++: /usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++ --target=aarch64-none-linux-android29 --sysroot=/usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/sysroot -DGGML_SCHED_MAX_COPIES=4 -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/.. -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-build/ggml/src/ggml-vulkan -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/../include -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security  -std=c++17 -fno-limit-debug-info  -fPIC -O3 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wunreachable-code-break -Wunreachable-code-return -Wmissing-prototypes -Wextra-semi -std=gnu++17 -MD -MT _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -MF _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o.d -o _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -c /home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/ggml-vulkan.cpp
-C/C++: /home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/ggml-vulkan.cpp:22:10: fatal error: 'vulkan/vulkan.hpp' file not found
-C/C++:    22 | #include <vulkan/vulkan.hpp>
-C/C++:       |          ^~~~~~~~~~~~~~~~~~~
+C/C++: /usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++ --target=aarch64-none-linux-android29 --sysroot=/usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/sysroot -DGGML_SCHED_MAX_COPIES=4 -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/vulkan_headers_source-src/include -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/.. -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-build/ggml/src/ggml-vulkan -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/../include -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security  -std=c++17 -fno-limit-debug-info  -fPIC -O3 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wunreachable-code-break -Wunreachable-code-return -Wmissing-prototypes -Wextra-semi -std=gnu++17 -MD -MT _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -MF _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o.d -o _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -c /home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+C/C++: /home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/ggml-vulkan.cpp:48:14: fatal error: 'spirv/unified1/spirv.hpp' file not found
+C/C++:    48 | #    include <spirv/unified1/spirv.hpp>
+C/C++:       |              ^~~~~~~~~~~~~~~~~~~~~~~~~~
 C/C++: 1 error generated.
 
 > Task :app:buildCMakeDebug[arm64-v8a] FAILED
-gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__run_2-1786516692427.json
+gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__run_2-1786517056846.json
 
 [Incubating] Problems report is available at: file:///home/runner/work/24hRecoder/24hRecoder/build/reports/problems/problems-report.html
 
@@ -71,8 +48,8 @@ FAILURE: Build failed with an exception.
 Execution failed for task ':app:buildCMakeDebug[arm64-v8a]'.
 > com.android.ide.common.process.ProcessException: ninja: Entering directory `/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a'
   [0/2] Re-checking globbed directories...
-  [1/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml.cpp.o
-  [2/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-alloc.c.o
+  [1/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-alloc.c.o
+  [2/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml.cpp.o
   [3/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-threading.cpp.o
   [4/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-opt.cpp.o
   [5/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml.c.o
@@ -80,12 +57,12 @@ Execution failed for task ':app:buildCMakeDebug[arm64-v8a]'.
   [7/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.c.o
   [8/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.cpp.o
   [9/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/hbm.cpp.o
-  [10/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/quants.c.o
-  [11/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/binary-ops.cpp.o
-  [12/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend-meta.cpp.o
+  [10/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/binary-ops.cpp.o
+  [11/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend-meta.cpp.o
+  [12/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/quants.c.o
   [13/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/traits.cpp.o
-  [14/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-quants.c.o
-  [15/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/amx.cpp.o
+  [14/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/amx.cpp.o
+  [15/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-quants.c.o
   [16/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/mmq.cpp.o
   [17/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/arm/quants.c.o
   [18/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/vec.cpp.o
@@ -93,9 +70,9 @@ Execution failed for task ':app:buildCMakeDebug[arm64-v8a]'.
   [20/353] No download step for 'vulkan-shaders-gen'
   [21/353] No update step for 'vulkan-shaders-gen'
   [22/353] No patch step for 'vulkan-shaders-gen'
-  [23/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/gguf.cpp.o
-  [24/353] Linking CXX static library _deps/whisper_cpp-build/ggml/src/libggml-base.a
-  [25/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/arm/repack.cpp.o
+  [23/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/arm/repack.cpp.o
+  [24/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/gguf.cpp.o
+  [25/353] Linking CXX static library _deps/whisper_cpp-build/ggml/src/libggml-base.a
   [26/353] Performing configure step for 'vulkan-shaders-gen'
   -- The C compiler identification is GNU 13.3.0
   -- The CXX compiler identification is GNU 13.3.0
@@ -127,160 +104,160 @@ Execution failed for task ':app:buildCMakeDebug[arm64-v8a]'.
   [32/353] Performing install step for 'vulkan-shaders-gen'
   -- Installing: /home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/Debug/./vulkan-shaders-gen
   [33/353] Completed 'vulkan-shaders-gen'
-  [34/353] Generate vulkan shaders for arange.comp
+  [34/353] Generate vulkan shaders for clamp.comp
   [35/353] Generate vulkan shaders for argsort.comp
   [36/353] Generate vulkan shaders for upscale.comp
-  [37/353] Generate vulkan shaders for wkv6.comp
+  [37/353] Generate vulkan shaders for add_id.comp
   [38/353] Generate vulkan shaders for abs.comp
-  [39/353] Generate vulkan shaders for ceil.comp
+  [39/353] Generate vulkan shaders for add1.comp
   [40/353] Generate vulkan shaders header
-  [41/353] Generate vulkan shaders for add1.comp
-  [42/353] Generate vulkan shaders for conv2d_mm.comp
-  [43/353] Generate vulkan shaders for argmax.comp
-  [44/353] Generate vulkan shaders for clamp.comp
-  [45/353] Generate vulkan shaders for add_id.comp
-  [46/353] Generate vulkan shaders for acc.comp
-  [47/353] Generate vulkan shaders for conv2d_dw.comp
-  [48/353] Generate vulkan shaders for argsort_large.comp
+  [41/353] Generate vulkan shaders for arange.comp
+  [42/353] Generate vulkan shaders for ceil.comp
+  [43/353] Generate vulkan shaders for wkv6.comp
+  [44/353] Generate vulkan shaders for argmax.comp
+  [45/353] Generate vulkan shaders for acc.comp
+  [46/353] Generate vulkan shaders for argsort_large.comp
+  [47/353] Generate vulkan shaders for cumsum.comp
+  [48/353] Generate vulkan shaders for conv2d_dw.comp
   [49/353] Generate vulkan shaders for concat.comp
-  [50/353] Generate vulkan shaders for cumsum.comp
-  [51/353] Generate vulkan shaders for add.comp
-  [52/353] Generate vulkan shaders for cos.comp
-  [53/353] Generate vulkan shaders for conv_transpose_1d.comp
-  [54/353] Generate vulkan shaders for diag.comp
-  [55/353] Generate vulkan shaders for floor.comp
+  [50/353] Generate vulkan shaders for cos.comp
+  [51/353] Generate vulkan shaders for conv2d_mm.comp
+  [52/353] Generate vulkan shaders for conv_transpose_1d.comp
+  [53/353] Generate vulkan shaders for add.comp
+  [54/353] Generate vulkan shaders for contig_copy.comp
+  [55/353] Generate vulkan shaders for diag.comp
   [56/353] Generate vulkan shaders for copy.comp
-  [57/353] Generate vulkan shaders for contig_copy.comp
-  [58/353] Generate vulkan shaders for copy_transpose.comp
+  [57/353] Generate vulkan shaders for floor.comp
+  [58/353] Generate vulkan shaders for count_equal.comp
   [59/353] Generate vulkan shaders for elu.comp
-  [60/353] Generate vulkan shaders for count_equal.comp
-  [61/353] Generate vulkan shaders for count_experts.comp
-  [62/353] Generate vulkan shaders for cumsum_multipass2.comp
+  [60/353] Generate vulkan shaders for count_experts.comp
+  [61/353] Generate vulkan shaders for copy_transpose.comp
+  [62/353] Generate vulkan shaders for copy_from_quant.comp
   [63/353] Generate vulkan shaders for cumsum_multipass1.comp
-  [64/353] Generate vulkan shaders for copy_from_quant.comp
+  [64/353] Generate vulkan shaders for cumsum_multipass2.comp
   [65/353] Generate vulkan shaders for dequant_f32.comp
-  [66/353] Generate vulkan shaders for dequant_iq1_s.comp
-  [67/353] Generate vulkan shaders for dequant_iq2_xs.comp
-  [68/353] Generate vulkan shaders for dequant_iq2_s.comp
-  [69/353] Generate vulkan shaders for dequant_iq1_m.comp
-  [70/353] Generate vulkan shaders for dequant_iq2_xxs.comp
+  [66/353] Generate vulkan shaders for dequant_iq1_m.comp
+  [67/353] Generate vulkan shaders for dequant_iq2_s.comp
+  [68/353] Generate vulkan shaders for dequant_iq1_s.comp
+  [69/353] Generate vulkan shaders for dequant_iq2_xs.comp
+  [70/353] Generate vulkan shaders for div.comp
   [71/353] Generate vulkan shaders for dequant_iq3_s.comp
-  [72/353] Generate vulkan shaders for dequant_iq3_xxs.comp
-  [73/353] Generate vulkan shaders for div.comp
-  [74/353] Generate vulkan shaders for dequant_nvfp4.comp
+  [72/353] Generate vulkan shaders for dequant_iq2_xxs.comp
+  [73/353] Generate vulkan shaders for dequant_iq3_xxs.comp
+  [74/353] Generate vulkan shaders for dequant_iq4_xs.comp
   [75/353] Generate vulkan shaders for dequant_iq4_nl.comp
   [76/353] Generate vulkan shaders for dequant_mxfp4.comp
-  [77/353] Generate vulkan shaders for dequant_q1_0.comp
-  [78/353] Generate vulkan shaders for dequant_iq4_xs.comp
-  [79/353] Generate vulkan shaders for dequant_q2_k.comp
-  [80/353] Generate vulkan shaders for dequant_q4_0.comp
-  [81/353] Generate vulkan shaders for dequant_q3_k.comp
-  [82/353] Generate vulkan shaders for dequant_q4_k.comp
-  [83/353] Generate vulkan shaders for dequant_q5_0.comp
-  [84/353] Generate vulkan shaders for dequant_q4_1.comp
+  [77/353] Generate vulkan shaders for dequant_q3_k.comp
+  [78/353] Generate vulkan shaders for dequant_q1_0.comp
+  [79/353] Generate vulkan shaders for dequant_nvfp4.comp
+  [80/353] Generate vulkan shaders for dequant_q2_k.comp
+  [81/353] Generate vulkan shaders for dequant_q4_0.comp
+  [82/353] Generate vulkan shaders for dequant_q4_1.comp
+  [83/353] Generate vulkan shaders for dequant_q4_k.comp
+  [84/353] Generate vulkan shaders for dequant_q6_k.comp
   [85/353] Generate vulkan shaders for dequant_q5_1.comp
-  [86/353] Generate vulkan shaders for dequant_q6_k.comp
+  [86/353] Generate vulkan shaders for dequant_q5_0.comp
   [87/353] Generate vulkan shaders for dequant_q5_k.comp
-  [88/353] Generate vulkan shaders for dequant_q8_0.comp
-  [89/353] Generate vulkan shaders for flash_attn_mask_opt.comp
+  [88/353] Generate vulkan shaders for flash_attn_mask_opt.comp
+  [89/353] Generate vulkan shaders for dequant_q8_0.comp
   [90/353] Generate vulkan shaders for diag_mask_inf.comp
-  [91/353] Generate vulkan shaders for exp.comp
-  [92/353] Generate vulkan shaders for flash_attn_cm1.comp
-  [93/353] Generate vulkan shaders for flash_attn_cm2.comp
-  [94/353] Generate vulkan shaders for fill.comp
-  [95/353] Generate vulkan shaders for geglu.comp
-  [96/353] Generate vulkan shaders for geglu_erf.comp
+  [91/353] Generate vulkan shaders for fill.comp
+  [92/353] Generate vulkan shaders for exp.comp
+  [93/353] Generate vulkan shaders for geglu_erf.comp
+  [94/353] Generate vulkan shaders for flash_attn_cm1.comp
+  [95/353] Generate vulkan shaders for flash_attn_cm2.comp
+  [96/353] Generate vulkan shaders for geglu.comp
   [97/353] Generate vulkan shaders for flash_attn_split_k_reduce.comp
-  [98/353] Generate vulkan shaders for gelu.comp
-  [99/353] Generate vulkan shaders for copy_to_quant.comp
-  [100/353] Generate vulkan shaders for fwht.comp
-  [101/353] Generate vulkan shaders for mul_mmq.comp
-  [102/353] Generate vulkan shaders for gelu_erf.comp
+  [98/353] Generate vulkan shaders for gelu_erf.comp
+  [99/353] Generate vulkan shaders for fwht.comp
+  [100/353] Generate vulkan shaders for gelu.comp
+  [101/353] Generate vulkan shaders for copy_to_quant.comp
+  [102/353] Generate vulkan shaders for log.comp
   [103/353] Generate vulkan shaders for gated_delta_net.comp
-  [104/353] Generate vulkan shaders for hardswish.comp
-  [105/353] Generate vulkan shaders for geglu_quick.comp
-  [106/353] Generate vulkan shaders for im2col.comp
+  [104/353] Generate vulkan shaders for geglu_quick.comp
+  [105/353] Generate vulkan shaders for im2col.comp
+  [106/353] Generate vulkan shaders for hardswish.comp
   [107/353] Generate vulkan shaders for gelu_quick.comp
   [108/353] Generate vulkan shaders for get_rows.comp
-  [109/353] Generate vulkan shaders for log.comp
-  [110/353] Generate vulkan shaders for group_norm.comp
-  [111/353] Generate vulkan shaders for hardsigmoid.comp
-  [112/353] Generate vulkan shaders for flash_attn.comp
-  [113/353] Generate vulkan shaders for im2col_3d.comp
-  [114/353] Generate vulkan shaders for l2_norm.comp
-  [115/353] Generate vulkan shaders for leaky_relu.comp
-  [116/353] Generate vulkan shaders for multi_add.comp
+  [109/353] Generate vulkan shaders for group_norm.comp
+  [110/353] Generate vulkan shaders for hardsigmoid.comp
+  [111/353] Generate vulkan shaders for mul_mmq.comp
+  [112/353] Generate vulkan shaders for im2col_3d.comp
+  [113/353] Generate vulkan shaders for l2_norm.comp
+  [114/353] Generate vulkan shaders for mul.comp
+  [115/353] Generate vulkan shaders for multi_add.comp
+  [116/353] Generate vulkan shaders for leaky_relu.comp
   [117/353] Generate vulkan shaders for mul_mat_split_k_reduce.comp
-  [118/353] Generate vulkan shaders for mul.comp
-  [119/353] Generate vulkan shaders for mul_mat_vec_iq1_s.comp
-  [120/353] Generate vulkan shaders for mul_mat_vec_iq1_m.comp
+  [118/353] Generate vulkan shaders for flash_attn.comp
+  [119/353] Generate vulkan shaders for mul_mat_vec_iq1_m.comp
+  [120/353] Generate vulkan shaders for mul_mat_vec_iq1_s.comp
   [121/353] Generate vulkan shaders for mul_mat_vec_iq2_s.comp
-  [122/353] Generate vulkan shaders for mul_mat_vec_iq2_xs.comp
-  [123/353] Generate vulkan shaders for mul_mat_vec_iq2_xxs.comp
-  [124/353] Generate vulkan shaders for get_rows_quant.comp
-  [125/353] Generate vulkan shaders for reglu.comp
-  [126/353] Generate vulkan shaders for mul_mat_vec_nc.comp
-  [127/353] Generate vulkan shaders for mul_mat_vec_p021.comp
-  [128/353] Generate vulkan shaders for mul_mat_vec_iq3_s.comp
+  [122/353] Generate vulkan shaders for mul_mat_vec_iq2_xxs.comp
+  [123/353] Generate vulkan shaders for mul_mat_vec_iq3_s.comp
+  [124/353] Generate vulkan shaders for mul_mat_vec_iq2_xs.comp
+  [125/353] Generate vulkan shaders for get_rows_quant.comp
+  [126/353] Generate vulkan shaders for reglu.comp
+  [127/353] Generate vulkan shaders for mul_mat_vec_nc.comp
+  [128/353] Generate vulkan shaders for mul_mat_vec_p021.comp
   [129/353] Generate vulkan shaders for mul_mat_vec_iq3_xxs.comp
   [130/353] Generate vulkan shaders for mul_mat_vec_q2_k.comp
   [131/353] Generate vulkan shaders for mul_mat_vec_q3_k.comp
   [132/353] Generate vulkan shaders for mul_mat_vecq.comp
   [133/353] Generate vulkan shaders for mul_mat_vec_q4_k.comp
   [134/353] Generate vulkan shaders for mul_mm_cm2.comp
-  [135/353] Generate vulkan shaders for mul_mat_vec_q5_k.comp
-  [136/353] Generate vulkan shaders for relu.comp
-  [137/353] Generate vulkan shaders for neg.comp
+  [135/353] Generate vulkan shaders for relu.comp
+  [136/353] Generate vulkan shaders for neg.comp
+  [137/353] Generate vulkan shaders for mul_mat_vec_q5_k.comp
   [138/353] Generate vulkan shaders for norm.comp
   [139/353] Generate vulkan shaders for pad.comp
   [140/353] Generate vulkan shaders for pool2d.comp
   [141/353] Generate vulkan shaders for opt_step_adamw.comp
   [142/353] Generate vulkan shaders for opt_step_sgd.comp
-  [143/353] Generate vulkan shaders for rope_norm.comp
-  [144/353] Generate vulkan shaders for mul_mat_vec_q6_k.comp
-  [145/353] Generate vulkan shaders for quantize_q8_1.comp
-  [146/353] Generate vulkan shaders for repeat.comp
-  [147/353] Generate vulkan shaders for rms_norm.comp
-  [148/353] Generate vulkan shaders for rms_norm_partials.comp
+  [143/353] Generate vulkan shaders for mul_mat_vec_q6_k.comp
+  [144/353] Generate vulkan shaders for rope_norm.comp
+  [145/353] Generate vulkan shaders for repeat.comp
+  [146/353] Generate vulkan shaders for quantize_q8_1.comp
+  [147/353] Generate vulkan shaders for rms_norm_partials.comp
+  [148/353] Generate vulkan shaders for rms_norm.comp
   [149/353] Generate vulkan shaders for rope_neox.comp
   [150/353] Generate vulkan shaders for repeat_back.comp
-  [151/353] Generate vulkan shaders for rms_norm_back.comp
-  [152/353] Generate vulkan shaders for roll.comp
+  [151/353] Generate vulkan shaders for roll.comp
+  [152/353] Generate vulkan shaders for rms_norm_back.comp
   [153/353] Generate vulkan shaders for round.comp
   [154/353] Generate vulkan shaders for rope_multi.comp
-  [155/353] Generate vulkan shaders for rope_vision.comp
-  [156/353] Generate vulkan shaders for tanh.comp
+  [155/353] Generate vulkan shaders for tanh.comp
+  [156/353] Generate vulkan shaders for rope_vision.comp
   [157/353] Generate vulkan shaders for scale.comp
   [158/353] Generate vulkan shaders for sgn.comp
   [159/353] Generate vulkan shaders for sigmoid.comp
   [160/353] Generate vulkan shaders for silu.comp
   [161/353] Generate vulkan shaders for silu_back.comp
-  [162/353] Generate vulkan shaders for sin.comp
-  [163/353] Generate vulkan shaders for snake.comp
+  [162/353] Generate vulkan shaders for snake.comp
+  [163/353] Generate vulkan shaders for sin.comp
   [164/353] Generate vulkan shaders for softplus.comp
-  [165/353] Generate vulkan shaders for solve_tri.comp
-  [166/353] Generate vulkan shaders for soft_max_back.comp
+  [165/353] Generate vulkan shaders for soft_max_back.comp
+  [166/353] Generate vulkan shaders for solve_tri.comp
   [167/353] Generate vulkan shaders for soft_max_large1.comp
-  [168/353] Generate vulkan shaders for soft_max_large2.comp
-  [169/353] Generate vulkan shaders for soft_max.comp
+  [168/353] Generate vulkan shaders for soft_max.comp
+  [169/353] Generate vulkan shaders for soft_max_large2.comp
   [170/353] Generate vulkan shaders for soft_max_large3.comp
   [171/353] Generate vulkan shaders for sqrt.comp
   [172/353] Generate vulkan shaders for square.comp
   [173/353] Generate vulkan shaders for ssm_conv.comp
   [174/353] Generate vulkan shaders for ssm_scan.comp
   [175/353] Generate vulkan shaders for step.comp
-  [176/353] Generate vulkan shaders for swiglu.comp
-  [177/353] Generate vulkan shaders for sum_rows.comp
+  [176/353] Generate vulkan shaders for sum_rows.comp
+  [177/353] Generate vulkan shaders for swiglu.comp
   [178/353] Generate vulkan shaders for trunc.comp
-  [179/353] Generate vulkan shaders for topk_moe.comp
-  [180/353] Generate vulkan shaders for swiglu_oai.comp
+  [179/353] Generate vulkan shaders for swiglu_oai.comp
+  [180/353] Generate vulkan shaders for topk_moe.comp
   [181/353] Generate vulkan shaders for timestep_embedding.comp
   [182/353] Generate vulkan shaders for sub.comp
   [183/353] Generate vulkan shaders for topk_argsort.comp
   [184/353] Generate vulkan shaders for tri.comp
   [185/353] Generate vulkan shaders for topk_nary_search.comp
-  [186/353] Generate vulkan shaders for xielu.comp
-  [187/353] Generate vulkan shaders for wkv7.comp
+  [186/353] Generate vulkan shaders for wkv7.comp
+  [187/353] Generate vulkan shaders for xielu.comp
   [188/353] Generate vulkan shaders for mul_mat_vec.comp
   [189/353] Generate vulkan shaders for mul_mm.comp
   [190/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/abs.comp.cpp.o
@@ -295,21 +272,122 @@ Execution failed for task ':app:buildCMakeDebug[arm64-v8a]'.
   [199/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/cos.comp.cpp.o
   [200/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy_from_quant.comp.cpp.o
   [201/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/count_equal.comp.cpp.o
-  [202/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv2d_dw.comp.cpp.o
-  [203/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv2d_mm.comp.cpp.o
-  [204/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml.dir/ggml-backend-dl.cpp.o
-  [205/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o
+  [202/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy_to_quant.comp.cpp.o
+  [203/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv2d_dw.comp.cpp.o
+  [204/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/acc.comp.cpp.o
+  [205/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv2d_mm.comp.cpp.o
+  [206/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml.dir/ggml-backend-dl.cpp.o
+  [207/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/argmax.comp.cpp.o
+  [208/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/argsort_large.comp.cpp.o
+  [209/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy.comp.cpp.o
+  [210/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add.comp.cpp.o
+  [211/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ceil.comp.cpp.o
+  [212/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/clamp.comp.cpp.o
+  [213/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/argsort.comp.cpp.o
+  [214/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add_id.comp.cpp.o
+  [215/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add1.comp.cpp.o
+  [216/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/arange.comp.cpp.o
+  [217/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/concat.comp.cpp.o
+  [218/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/elu.comp.cpp.o
+  [219/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq1_m.comp.cpp.o
+  [220/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq2_xs.comp.cpp.o
+  [221/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq1_s.comp.cpp.o
+  [222/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq2_s.comp.cpp.o
+  [223/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq2_xxs.comp.cpp.o
+  [224/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq3_s.comp.cpp.o
+  [225/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq3_xxs.comp.cpp.o
+  [226/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq4_xs.comp.cpp.o
+  [227/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq4_nl.comp.cpp.o
+  [228/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_mxfp4.comp.cpp.o
+  [229/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_nvfp4.comp.cpp.o
+  [230/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q1_0.comp.cpp.o
+  [231/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q2_k.comp.cpp.o
+  [232/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q3_k.comp.cpp.o
+  [233/353] Building CXX object CMakeFiles/whisper_jni.dir/whisper_jni.cpp.o
+  [234/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q4_0.comp.cpp.o
+  [235/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q4_1.comp.cpp.o
+  [236/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q5_1.comp.cpp.o
+  [237/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q4_k.comp.cpp.o
+  [238/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q5_0.comp.cpp.o
+  [239/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q6_k.comp.cpp.o
+  [240/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/diag.comp.cpp.o
+  [241/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q5_k.comp.cpp.o
+  [242/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q8_0.comp.cpp.o
+  [243/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/diag_mask_inf.comp.cpp.o
+  [244/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/exp.comp.cpp.o
+  [245/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/fill.comp.cpp.o
+  [246/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_cm1.comp.cpp.o
+  [247/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_cm2.comp.cpp.o
+  [248/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/div.comp.cpp.o
+  [249/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_mask_opt.comp.cpp.o
+  [250/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_split_k_reduce.comp.cpp.o
+  [251/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/floor.comp.cpp.o
+  [252/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml.dir/ggml-backend-reg.cpp.o
+  [253/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/geglu.comp.cpp.o
+  [254/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/gated_delta_net.comp.cpp.o
+  [255/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/fwht.comp.cpp.o
+  [256/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/gelu.comp.cpp.o
+  [257/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/geglu_erf.comp.cpp.o
+  [258/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/geglu_quick.comp.cpp.o
+  [259/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/gelu_erf.comp.cpp.o
+  [260/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/gelu_quick.comp.cpp.o
+  [261/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/group_norm.comp.cpp.o
+  [262/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/hardswish.comp.cpp.o
+  [263/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/hardsigmoid.comp.cpp.o
+  [264/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/get_rows.comp.cpp.o
+  [265/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/im2col.comp.cpp.o
+  [266/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/l2_norm.comp.cpp.o
+  [267/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/im2col_3d.comp.cpp.o
+  [268/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/leaky_relu.comp.cpp.o
+  [269/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/log.comp.cpp.o
+  [270/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_split_k_reduce.comp.cpp.o
+  [271/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul.comp.cpp.o
+  [272/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn.comp.cpp.o
+  [273/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/get_rows_quant.comp.cpp.o
+  [274/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq1_s.comp.cpp.o
+  [275/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq2_s.comp.cpp.o
+  [276/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq1_m.comp.cpp.o
+  [277/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq2_xxs.comp.cpp.o
+  [278/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq3_xxs.comp.cpp.o
+  [279/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_nc.comp.cpp.o
+  [280/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_p021.comp.cpp.o
+  [281/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq2_xs.comp.cpp.o
+  [282/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq3_s.comp.cpp.o
+  [283/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q4_k.comp.cpp.o
+  [284/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q3_k.comp.cpp.o
+  [285/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q5_k.comp.cpp.o
+  [286/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vecq.comp.cpp.o
+  [287/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q2_k.comp.cpp.o
+  [288/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mm_cm2.comp.cpp.o
+  [289/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mmq.comp.cpp.o
+  [290/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/multi_add.comp.cpp.o
+  [291/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/norm.comp.cpp.o
+  [292/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/neg.comp.cpp.o
+  [293/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/opt_step_adamw.comp.cpp.o
+  [294/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q6_k.comp.cpp.o
+  [295/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/opt_step_sgd.comp.cpp.o
+  [296/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/quantize_q8_1.comp.cpp.o
+  [297/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/pad.comp.cpp.o
+  [298/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/pool2d.comp.cpp.o
+  [299/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/relu.comp.cpp.o
+  [300/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/reglu.comp.cpp.o
+  [301/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/repeat.comp.cpp.o
+  [302/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rms_norm_back.comp.cpp.o
+  [303/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/repeat_back.comp.cpp.o
+  [304/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/roll.comp.cpp.o
+  [305/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rms_norm_partials.comp.cpp.o
+  [306/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o
   FAILED: _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o 
-  /usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++ --target=aarch64-none-linux-android29 --sysroot=/usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/sysroot -DGGML_SCHED_MAX_COPIES=4 -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/.. -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-build/ggml/src/ggml-vulkan -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/../include -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security  -std=c++17 -fno-limit-debug-info  -fPIC -O3 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wunreachable-code-break -Wunreachable-code-return -Wmissing-prototypes -Wextra-semi -std=gnu++17 -MD -MT _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -MF _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o.d -o _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -c /home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/ggml-vulkan.cpp
-  /home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/ggml-vulkan.cpp:22:10: fatal error: 'vulkan/vulkan.hpp' file not found
-     22 | #include <vulkan/vulkan.hpp>
-        |          ^~~~~~~~~~~~~~~~~~~
+  /usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++ --target=aarch64-none-linux-android29 --sysroot=/usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/sysroot -DGGML_SCHED_MAX_COPIES=4 -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/vulkan_headers_source-src/include -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/.. -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-build/ggml/src/ggml-vulkan -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/../include -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security  -std=c++17 -fno-limit-debug-info  -fPIC -O3 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wunreachable-code-break -Wunreachable-code-return -Wmissing-prototypes -Wextra-semi -std=gnu++17 -MD -MT _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -MF _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o.d -o _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -c /home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+  /home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/ggml-vulkan.cpp:48:14: fatal error: 'spirv/unified1/spirv.hpp' file not found
+     48 | #    include <spirv/unified1/spirv.hpp>
+        |              ^~~~~~~~~~~~~~~~~~~~~~~~~~
   1 error generated.
-  [206/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/acc.comp.cpp.o
-  [207/353] Building CXX object CMakeFiles/whisper_jni.dir/whisper_jni.cpp.o
-  [208/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy_to_quant.comp.cpp.o
-  [209/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add.comp.cpp.o
-  [210/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml.dir/ggml-backend-reg.cpp.o
+  [307/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rms_norm.comp.cpp.o
+  [308/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rope_multi.comp.cpp.o
+  [309/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rope_neox.comp.cpp.o
+  [310/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec.comp.cpp.o
+  [311/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mm.comp.cpp.o
   ninja: build stopped: subcommand failed.
   
   C++ build system [build] failed while executing:
@@ -360,8 +438,8 @@ org.gradle.api.tasks.TaskExecutionException: Execution failed for task ':app:bui
 	at org.gradle.internal.concurrent.AbstractManagedExecutor$1.run(AbstractManagedExecutor.java:48)
 Caused by: org.gradle.internal.UncheckedException: com.android.ide.common.process.ProcessException: ninja: Entering directory `/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a'
 [0/2] Re-checking globbed directories...
-[1/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml.cpp.o
-[2/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-alloc.c.o
+[1/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-alloc.c.o
+[2/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml.cpp.o
 [3/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-threading.cpp.o
 [4/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-opt.cpp.o
 [5/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml.c.o
@@ -369,12 +447,12 @@ Caused by: org.gradle.internal.UncheckedException: com.android.ide.common.proces
 [7/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.c.o
 [8/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.cpp.o
 [9/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/hbm.cpp.o
-[10/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/quants.c.o
-[11/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/binary-ops.cpp.o
-[12/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend-meta.cpp.o
+[10/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/binary-ops.cpp.o
+[11/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend-meta.cpp.o
+[12/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/quants.c.o
 [13/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/traits.cpp.o
-[14/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-quants.c.o
-[15/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/amx.cpp.o
+[14/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/amx.cpp.o
+[15/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-quants.c.o
 [16/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/mmq.cpp.o
 [17/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/arm/quants.c.o
 [18/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/vec.cpp.o
@@ -382,9 +460,9 @@ Caused by: org.gradle.internal.UncheckedException: com.android.ide.common.proces
 [20/353] No download step for 'vulkan-shaders-gen'
 [21/353] No update step for 'vulkan-shaders-gen'
 [22/353] No patch step for 'vulkan-shaders-gen'
-[23/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/gguf.cpp.o
-[24/353] Linking CXX static library _deps/whisper_cpp-build/ggml/src/libggml-base.a
-[25/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/arm/repack.cpp.o
+[23/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/arm/repack.cpp.o
+[24/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/gguf.cpp.o
+[25/353] Linking CXX static library _deps/whisper_cpp-build/ggml/src/libggml-base.a
 [26/353] Performing configure step for 'vulkan-shaders-gen'
 -- The C compiler identification is GNU 13.3.0
 -- The CXX compiler identification is GNU 13.3.0
@@ -416,160 +494,160 @@ Caused by: org.gradle.internal.UncheckedException: com.android.ide.common.proces
 [32/353] Performing install step for 'vulkan-shaders-gen'
 -- Installing: /home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/Debug/./vulkan-shaders-gen
 [33/353] Completed 'vulkan-shaders-gen'
-[34/353] Generate vulkan shaders for arange.comp
+[34/353] Generate vulkan shaders for clamp.comp
 [35/353] Generate vulkan shaders for argsort.comp
 [36/353] Generate vulkan shaders for upscale.comp
-[37/353] Generate vulkan shaders for wkv6.comp
+[37/353] Generate vulkan shaders for add_id.comp
 [38/353] Generate vulkan shaders for abs.comp
-[39/353] Generate vulkan shaders for ceil.comp
+[39/353] Generate vulkan shaders for add1.comp
 [40/353] Generate vulkan shaders header
-[41/353] Generate vulkan shaders for add1.comp
-[42/353] Generate vulkan shaders for conv2d_mm.comp
-[43/353] Generate vulkan shaders for argmax.comp
-[44/353] Generate vulkan shaders for clamp.comp
-[45/353] Generate vulkan shaders for add_id.comp
-[46/353] Generate vulkan shaders for acc.comp
-[47/353] Generate vulkan shaders for conv2d_dw.comp
-[48/353] Generate vulkan shaders for argsort_large.comp
+[41/353] Generate vulkan shaders for arange.comp
+[42/353] Generate vulkan shaders for ceil.comp
+[43/353] Generate vulkan shaders for wkv6.comp
+[44/353] Generate vulkan shaders for argmax.comp
+[45/353] Generate vulkan shaders for acc.comp
+[46/353] Generate vulkan shaders for argsort_large.comp
+[47/353] Generate vulkan shaders for cumsum.comp
+[48/353] Generate vulkan shaders for conv2d_dw.comp
 [49/353] Generate vulkan shaders for concat.comp
-[50/353] Generate vulkan shaders for cumsum.comp
-[51/353] Generate vulkan shaders for add.comp
-[52/353] Generate vulkan shaders for cos.comp
-[53/353] Generate vulkan shaders for conv_transpose_1d.comp
-[54/353] Generate vulkan shaders for diag.comp
-[55/353] Generate vulkan shaders for floor.comp
+[50/353] Generate vulkan shaders for cos.comp
+[51/353] Generate vulkan shaders for conv2d_mm.comp
+[52/353] Generate vulkan shaders for conv_transpose_1d.comp
+[53/353] Generate vulkan shaders for add.comp
+[54/353] Generate vulkan shaders for contig_copy.comp
+[55/353] Generate vulkan shaders for diag.comp
 [56/353] Generate vulkan shaders for copy.comp
-[57/353] Generate vulkan shaders for contig_copy.comp
-[58/353] Generate vulkan shaders for copy_transpose.comp
+[57/353] Generate vulkan shaders for floor.comp
+[58/353] Generate vulkan shaders for count_equal.comp
 [59/353] Generate vulkan shaders for elu.comp
-[60/353] Generate vulkan shaders for count_equal.comp
-[61/353] Generate vulkan shaders for count_experts.comp
-[62/353] Generate vulkan shaders for cumsum_multipass2.comp
+[60/353] Generate vulkan shaders for count_experts.comp
+[61/353] Generate vulkan shaders for copy_transpose.comp
+[62/353] Generate vulkan shaders for copy_from_quant.comp
 [63/353] Generate vulkan shaders for cumsum_multipass1.comp
-[64/353] Generate vulkan shaders for copy_from_quant.comp
+[64/353] Generate vulkan shaders for cumsum_multipass2.comp
 [65/353] Generate vulkan shaders for dequant_f32.comp
-[66/353] Generate vulkan shaders for dequant_iq1_s.comp
-[67/353] Generate vulkan shaders for dequant_iq2_xs.comp
-[68/353] Generate vulkan shaders for dequant_iq2_s.comp
-[69/353] Generate vulkan shaders for dequant_iq1_m.comp
-[70/353] Generate vulkan shaders for dequant_iq2_xxs.comp
+[66/353] Generate vulkan shaders for dequant_iq1_m.comp
+[67/353] Generate vulkan shaders for dequant_iq2_s.comp
+[68/353] Generate vulkan shaders for dequant_iq1_s.comp
+[69/353] Generate vulkan shaders for dequant_iq2_xs.comp
+[70/353] Generate vulkan shaders for div.comp
 [71/353] Generate vulkan shaders for dequant_iq3_s.comp
-[72/353] Generate vulkan shaders for dequant_iq3_xxs.comp
-[73/353] Generate vulkan shaders for div.comp
-[74/353] Generate vulkan shaders for dequant_nvfp4.comp
+[72/353] Generate vulkan shaders for dequant_iq2_xxs.comp
+[73/353] Generate vulkan shaders for dequant_iq3_xxs.comp
+[74/353] Generate vulkan shaders for dequant_iq4_xs.comp
 [75/353] Generate vulkan shaders for dequant_iq4_nl.comp
 [76/353] Generate vulkan shaders for dequant_mxfp4.comp
-[77/353] Generate vulkan shaders for dequant_q1_0.comp
-[78/353] Generate vulkan shaders for dequant_iq4_xs.comp
-[79/353] Generate vulkan shaders for dequant_q2_k.comp
-[80/353] Generate vulkan shaders for dequant_q4_0.comp
-[81/353] Generate vulkan shaders for dequant_q3_k.comp
-[82/353] Generate vulkan shaders for dequant_q4_k.comp
-[83/353] Generate vulkan shaders for dequant_q5_0.comp
-[84/353] Generate vulkan shaders for dequant_q4_1.comp
+[77/353] Generate vulkan shaders for dequant_q3_k.comp
+[78/353] Generate vulkan shaders for dequant_q1_0.comp
+[79/353] Generate vulkan shaders for dequant_nvfp4.comp
+[80/353] Generate vulkan shaders for dequant_q2_k.comp
+[81/353] Generate vulkan shaders for dequant_q4_0.comp
+[82/353] Generate vulkan shaders for dequant_q4_1.comp
+[83/353] Generate vulkan shaders for dequant_q4_k.comp
+[84/353] Generate vulkan shaders for dequant_q6_k.comp
 [85/353] Generate vulkan shaders for dequant_q5_1.comp
-[86/353] Generate vulkan shaders for dequant_q6_k.comp
+[86/353] Generate vulkan shaders for dequant_q5_0.comp
 [87/353] Generate vulkan shaders for dequant_q5_k.comp
-[88/353] Generate vulkan shaders for dequant_q8_0.comp
-[89/353] Generate vulkan shaders for flash_attn_mask_opt.comp
+[88/353] Generate vulkan shaders for flash_attn_mask_opt.comp
+[89/353] Generate vulkan shaders for dequant_q8_0.comp
 [90/353] Generate vulkan shaders for diag_mask_inf.comp
-[91/353] Generate vulkan shaders for exp.comp
-[92/353] Generate vulkan shaders for flash_attn_cm1.comp
-[93/353] Generate vulkan shaders for flash_attn_cm2.comp
-[94/353] Generate vulkan shaders for fill.comp
-[95/353] Generate vulkan shaders for geglu.comp
-[96/353] Generate vulkan shaders for geglu_erf.comp
+[91/353] Generate vulkan shaders for fill.comp
+[92/353] Generate vulkan shaders for exp.comp
+[93/353] Generate vulkan shaders for geglu_erf.comp
+[94/353] Generate vulkan shaders for flash_attn_cm1.comp
+[95/353] Generate vulkan shaders for flash_attn_cm2.comp
+[96/353] Generate vulkan shaders for geglu.comp
 [97/353] Generate vulkan shaders for flash_attn_split_k_reduce.comp
-[98/353] Generate vulkan shaders for gelu.comp
-[99/353] Generate vulkan shaders for copy_to_quant.comp
-[100/353] Generate vulkan shaders for fwht.comp
-[101/353] Generate vulkan shaders for mul_mmq.comp
-[102/353] Generate vulkan shaders for gelu_erf.comp
+[98/353] Generate vulkan shaders for gelu_erf.comp
+[99/353] Generate vulkan shaders for fwht.comp
+[100/353] Generate vulkan shaders for gelu.comp
+[101/353] Generate vulkan shaders for copy_to_quant.comp
+[102/353] Generate vulkan shaders for log.comp
 [103/353] Generate vulkan shaders for gated_delta_net.comp
-[104/353] Generate vulkan shaders for hardswish.comp
-[105/353] Generate vulkan shaders for geglu_quick.comp
-[106/353] Generate vulkan shaders for im2col.comp
+[104/353] Generate vulkan shaders for geglu_quick.comp
+[105/353] Generate vulkan shaders for im2col.comp
+[106/353] Generate vulkan shaders for hardswish.comp
 [107/353] Generate vulkan shaders for gelu_quick.comp
 [108/353] Generate vulkan shaders for get_rows.comp
-[109/353] Generate vulkan shaders for log.comp
-[110/353] Generate vulkan shaders for group_norm.comp
-[111/353] Generate vulkan shaders for hardsigmoid.comp
-[112/353] Generate vulkan shaders for flash_attn.comp
-[113/353] Generate vulkan shaders for im2col_3d.comp
-[114/353] Generate vulkan shaders for l2_norm.comp
-[115/353] Generate vulkan shaders for leaky_relu.comp
-[116/353] Generate vulkan shaders for multi_add.comp
+[109/353] Generate vulkan shaders for group_norm.comp
+[110/353] Generate vulkan shaders for hardsigmoid.comp
+[111/353] Generate vulkan shaders for mul_mmq.comp
+[112/353] Generate vulkan shaders for im2col_3d.comp
+[113/353] Generate vulkan shaders for l2_norm.comp
+[114/353] Generate vulkan shaders for mul.comp
+[115/353] Generate vulkan shaders for multi_add.comp
+[116/353] Generate vulkan shaders for leaky_relu.comp
 [117/353] Generate vulkan shaders for mul_mat_split_k_reduce.comp
-[118/353] Generate vulkan shaders for mul.comp
-[119/353] Generate vulkan shaders for mul_mat_vec_iq1_s.comp
-[120/353] Generate vulkan shaders for mul_mat_vec_iq1_m.comp
+[118/353] Generate vulkan shaders for flash_attn.comp
+[119/353] Generate vulkan shaders for mul_mat_vec_iq1_m.comp
+[120/353] Generate vulkan shaders for mul_mat_vec_iq1_s.comp
 [121/353] Generate vulkan shaders for mul_mat_vec_iq2_s.comp
-[122/353] Generate vulkan shaders for mul_mat_vec_iq2_xs.comp
-[123/353] Generate vulkan shaders for mul_mat_vec_iq2_xxs.comp
-[124/353] Generate vulkan shaders for get_rows_quant.comp
-[125/353] Generate vulkan shaders for reglu.comp
-[126/353] Generate vulkan shaders for mul_mat_vec_nc.comp
-[127/353] Generate vulkan shaders for mul_mat_vec_p021.comp
-[128/353] Generate vulkan shaders for mul_mat_vec_iq3_s.comp
+[122/353] Generate vulkan shaders for mul_mat_vec_iq2_xxs.comp
+[123/353] Generate vulkan shaders for mul_mat_vec_iq3_s.comp
+[124/353] Generate vulkan shaders for mul_mat_vec_iq2_xs.comp
+[125/353] Generate vulkan shaders for get_rows_quant.comp
+[126/353] Generate vulkan shaders for reglu.comp
+[127/353] Generate vulkan shaders for mul_mat_vec_nc.comp
+[128/353] Generate vulkan shaders for mul_mat_vec_p021.comp
 [129/353] Generate vulkan shaders for mul_mat_vec_iq3_xxs.comp
 [130/353] Generate vulkan shaders for mul_mat_vec_q2_k.comp
 [131/353] Generate vulkan shaders for mul_mat_vec_q3_k.comp
 [132/353] Generate vulkan shaders for mul_mat_vecq.comp
 [133/353] Generate vulkan shaders for mul_mat_vec_q4_k.comp
 [134/353] Generate vulkan shaders for mul_mm_cm2.comp
-[135/353] Generate vulkan shaders for mul_mat_vec_q5_k.comp
-[136/353] Generate vulkan shaders for relu.comp
-[137/353] Generate vulkan shaders for neg.comp
+[135/353] Generate vulkan shaders for relu.comp
+[136/353] Generate vulkan shaders for neg.comp
+[137/353] Generate vulkan shaders for mul_mat_vec_q5_k.comp
 [138/353] Generate vulkan shaders for norm.comp
 [139/353] Generate vulkan shaders for pad.comp
 [140/353] Generate vulkan shaders for pool2d.comp
 [141/353] Generate vulkan shaders for opt_step_adamw.comp
 [142/353] Generate vulkan shaders for opt_step_sgd.comp
-[143/353] Generate vulkan shaders for rope_norm.comp
-[144/353] Generate vulkan shaders for mul_mat_vec_q6_k.comp
-[145/353] Generate vulkan shaders for quantize_q8_1.comp
-[146/353] Generate vulkan shaders for repeat.comp
-[147/353] Generate vulkan shaders for rms_norm.comp
-[148/353] Generate vulkan shaders for rms_norm_partials.comp
+[143/353] Generate vulkan shaders for mul_mat_vec_q6_k.comp
+[144/353] Generate vulkan shaders for rope_norm.comp
+[145/353] Generate vulkan shaders for repeat.comp
+[146/353] Generate vulkan shaders for quantize_q8_1.comp
+[147/353] Generate vulkan shaders for rms_norm_partials.comp
+[148/353] Generate vulkan shaders for rms_norm.comp
 [149/353] Generate vulkan shaders for rope_neox.comp
 [150/353] Generate vulkan shaders for repeat_back.comp
-[151/353] Generate vulkan shaders for rms_norm_back.comp
-[152/353] Generate vulkan shaders for roll.comp
+[151/353] Generate vulkan shaders for roll.comp
+[152/353] Generate vulkan shaders for rms_norm_back.comp
 [153/353] Generate vulkan shaders for round.comp
 [154/353] Generate vulkan shaders for rope_multi.comp
-[155/353] Generate vulkan shaders for rope_vision.comp
-[156/353] Generate vulkan shaders for tanh.comp
+[155/353] Generate vulkan shaders for tanh.comp
+[156/353] Generate vulkan shaders for rope_vision.comp
 [157/353] Generate vulkan shaders for scale.comp
 [158/353] Generate vulkan shaders for sgn.comp
 [159/353] Generate vulkan shaders for sigmoid.comp
 [160/353] Generate vulkan shaders for silu.comp
 [161/353] Generate vulkan shaders for silu_back.comp
-[162/353] Generate vulkan shaders for sin.comp
-[163/353] Generate vulkan shaders for snake.comp
+[162/353] Generate vulkan shaders for snake.comp
+[163/353] Generate vulkan shaders for sin.comp
 [164/353] Generate vulkan shaders for softplus.comp
-[165/353] Generate vulkan shaders for solve_tri.comp
-[166/353] Generate vulkan shaders for soft_max_back.comp
+[165/353] Generate vulkan shaders for soft_max_back.comp
+[166/353] Generate vulkan shaders for solve_tri.comp
 [167/353] Generate vulkan shaders for soft_max_large1.comp
-[168/353] Generate vulkan shaders for soft_max_large2.comp
-[169/353] Generate vulkan shaders for soft_max.comp
+[168/353] Generate vulkan shaders for soft_max.comp
+[169/353] Generate vulkan shaders for soft_max_large2.comp
 [170/353] Generate vulkan shaders for soft_max_large3.comp
 [171/353] Generate vulkan shaders for sqrt.comp
 [172/353] Generate vulkan shaders for square.comp
 [173/353] Generate vulkan shaders for ssm_conv.comp
 [174/353] Generate vulkan shaders for ssm_scan.comp
 [175/353] Generate vulkan shaders for step.comp
-[176/353] Generate vulkan shaders for swiglu.comp
-[177/353] Generate vulkan shaders for sum_rows.comp
+[176/353] Generate vulkan shaders for sum_rows.comp
+[177/353] Generate vulkan shaders for swiglu.comp
 [178/353] Generate vulkan shaders for trunc.comp
-[179/353] Generate vulkan shaders for topk_moe.comp
-[180/353] Generate vulkan shaders for swiglu_oai.comp
+[179/353] Generate vulkan shaders for swiglu_oai.comp
+[180/353] Generate vulkan shaders for topk_moe.comp
 [181/353] Generate vulkan shaders for timestep_embedding.comp
 [182/353] Generate vulkan shaders for sub.comp
 [183/353] Generate vulkan shaders for topk_argsort.comp
 [184/353] Generate vulkan shaders for tri.comp
 [185/353] Generate vulkan shaders for topk_nary_search.comp
-[186/353] Generate vulkan shaders for xielu.comp
-[187/353] Generate vulkan shaders for wkv7.comp
+[186/353] Generate vulkan shaders for wkv7.comp
+[187/353] Generate vulkan shaders for xielu.comp
 [188/353] Generate vulkan shaders for mul_mat_vec.comp
 [189/353] Generate vulkan shaders for mul_mm.comp
 [190/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/abs.comp.cpp.o
@@ -584,21 +662,122 @@ Caused by: org.gradle.internal.UncheckedException: com.android.ide.common.proces
 [199/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/cos.comp.cpp.o
 [200/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy_from_quant.comp.cpp.o
 [201/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/count_equal.comp.cpp.o
-[202/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv2d_dw.comp.cpp.o
-[203/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv2d_mm.comp.cpp.o
-[204/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml.dir/ggml-backend-dl.cpp.o
-[205/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o
+[202/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy_to_quant.comp.cpp.o
+[203/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv2d_dw.comp.cpp.o
+[204/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/acc.comp.cpp.o
+[205/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv2d_mm.comp.cpp.o
+[206/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml.dir/ggml-backend-dl.cpp.o
+[207/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/argmax.comp.cpp.o
+[208/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/argsort_large.comp.cpp.o
+[209/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy.comp.cpp.o
+[210/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add.comp.cpp.o
+[211/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ceil.comp.cpp.o
+[212/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/clamp.comp.cpp.o
+[213/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/argsort.comp.cpp.o
+[214/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add_id.comp.cpp.o
+[215/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add1.comp.cpp.o
+[216/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/arange.comp.cpp.o
+[217/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/concat.comp.cpp.o
+[218/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/elu.comp.cpp.o
+[219/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq1_m.comp.cpp.o
+[220/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq2_xs.comp.cpp.o
+[221/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq1_s.comp.cpp.o
+[222/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq2_s.comp.cpp.o
+[223/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq2_xxs.comp.cpp.o
+[224/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq3_s.comp.cpp.o
+[225/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq3_xxs.comp.cpp.o
+[226/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq4_xs.comp.cpp.o
+[227/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq4_nl.comp.cpp.o
+[228/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_mxfp4.comp.cpp.o
+[229/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_nvfp4.comp.cpp.o
+[230/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q1_0.comp.cpp.o
+[231/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q2_k.comp.cpp.o
+[232/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q3_k.comp.cpp.o
+[233/353] Building CXX object CMakeFiles/whisper_jni.dir/whisper_jni.cpp.o
+[234/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q4_0.comp.cpp.o
+[235/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q4_1.comp.cpp.o
+[236/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q5_1.comp.cpp.o
+[237/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q4_k.comp.cpp.o
+[238/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q5_0.comp.cpp.o
+[239/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q6_k.comp.cpp.o
+[240/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/diag.comp.cpp.o
+[241/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q5_k.comp.cpp.o
+[242/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q8_0.comp.cpp.o
+[243/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/diag_mask_inf.comp.cpp.o
+[244/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/exp.comp.cpp.o
+[245/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/fill.comp.cpp.o
+[246/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_cm1.comp.cpp.o
+[247/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_cm2.comp.cpp.o
+[248/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/div.comp.cpp.o
+[249/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_mask_opt.comp.cpp.o
+[250/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_split_k_reduce.comp.cpp.o
+[251/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/floor.comp.cpp.o
+[252/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml.dir/ggml-backend-reg.cpp.o
+[253/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/geglu.comp.cpp.o
+[254/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/gated_delta_net.comp.cpp.o
+[255/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/fwht.comp.cpp.o
+[256/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/gelu.comp.cpp.o
+[257/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/geglu_erf.comp.cpp.o
+[258/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/geglu_quick.comp.cpp.o
+[259/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/gelu_erf.comp.cpp.o
+[260/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/gelu_quick.comp.cpp.o
+[261/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/group_norm.comp.cpp.o
+[262/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/hardswish.comp.cpp.o
+[263/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/hardsigmoid.comp.cpp.o
+[264/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/get_rows.comp.cpp.o
+[265/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/im2col.comp.cpp.o
+[266/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/l2_norm.comp.cpp.o
+[267/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/im2col_3d.comp.cpp.o
+[268/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/leaky_relu.comp.cpp.o
+[269/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/log.comp.cpp.o
+[270/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_split_k_reduce.comp.cpp.o
+[271/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul.comp.cpp.o
+[272/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn.comp.cpp.o
+[273/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/get_rows_quant.comp.cpp.o
+[274/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq1_s.comp.cpp.o
+[275/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq2_s.comp.cpp.o
+[276/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq1_m.comp.cpp.o
+[277/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq2_xxs.comp.cpp.o
+[278/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq3_xxs.comp.cpp.o
+[279/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_nc.comp.cpp.o
+[280/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_p021.comp.cpp.o
+[281/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq2_xs.comp.cpp.o
+[282/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq3_s.comp.cpp.o
+[283/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q4_k.comp.cpp.o
+[284/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q3_k.comp.cpp.o
+[285/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q5_k.comp.cpp.o
+[286/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vecq.comp.cpp.o
+[287/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q2_k.comp.cpp.o
+[288/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mm_cm2.comp.cpp.o
+[289/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mmq.comp.cpp.o
+[290/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/multi_add.comp.cpp.o
+[291/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/norm.comp.cpp.o
+[292/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/neg.comp.cpp.o
+[293/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/opt_step_adamw.comp.cpp.o
+[294/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q6_k.comp.cpp.o
+[295/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/opt_step_sgd.comp.cpp.o
+[296/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/quantize_q8_1.comp.cpp.o
+[297/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/pad.comp.cpp.o
+[298/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/pool2d.comp.cpp.o
+[299/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/relu.comp.cpp.o
+[300/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/reglu.comp.cpp.o
+[301/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/repeat.comp.cpp.o
+[302/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rms_norm_back.comp.cpp.o
+[303/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/repeat_back.comp.cpp.o
+[304/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/roll.comp.cpp.o
+[305/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rms_norm_partials.comp.cpp.o
+[306/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o
 FAILED: _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o 
-/usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++ --target=aarch64-none-linux-android29 --sysroot=/usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/sysroot -DGGML_SCHED_MAX_COPIES=4 -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/.. -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-build/ggml/src/ggml-vulkan -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/../include -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security  -std=c++17 -fno-limit-debug-info  -fPIC -O3 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wunreachable-code-break -Wunreachable-code-return -Wmissing-prototypes -Wextra-semi -std=gnu++17 -MD -MT _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -MF _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o.d -o _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -c /home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/ggml-vulkan.cpp
-/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/ggml-vulkan.cpp:22:10: fatal error: 'vulkan/vulkan.hpp' file not found
-   22 | #include <vulkan/vulkan.hpp>
-      |          ^~~~~~~~~~~~~~~~~~~
+/usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++ --target=aarch64-none-linux-android29 --sysroot=/usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/sysroot -DGGML_SCHED_MAX_COPIES=4 -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/vulkan_headers_source-src/include -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/.. -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-build/ggml/src/ggml-vulkan -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/../include -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security  -std=c++17 -fno-limit-debug-info  -fPIC -O3 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wunreachable-code-break -Wunreachable-code-return -Wmissing-prototypes -Wextra-semi -std=gnu++17 -MD -MT _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -MF _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o.d -o _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -c /home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/ggml-vulkan.cpp:48:14: fatal error: 'spirv/unified1/spirv.hpp' file not found
+   48 | #    include <spirv/unified1/spirv.hpp>
+      |              ^~~~~~~~~~~~~~~~~~~~~~~~~~
 1 error generated.
-[206/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/acc.comp.cpp.o
-[207/353] Building CXX object CMakeFiles/whisper_jni.dir/whisper_jni.cpp.o
-[208/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy_to_quant.comp.cpp.o
-[209/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add.comp.cpp.o
-[210/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml.dir/ggml-backend-reg.cpp.o
+[307/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rms_norm.comp.cpp.o
+[308/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rope_multi.comp.cpp.o
+[309/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rope_neox.comp.cpp.o
+[310/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec.comp.cpp.o
+[311/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mm.comp.cpp.o
 ninja: build stopped: subcommand failed.
 
 C++ build system [build] failed while executing:
@@ -729,8 +908,8 @@ C++ build system [build] failed while executing:
 	at org.gradle.internal.concurrent.AbstractManagedExecutor$1.run(AbstractManagedExecutor.java:48)
 Caused by: com.android.ide.common.process.ProcessException: ninja: Entering directory `/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a'
 [0/2] Re-checking globbed directories...
-[1/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml.cpp.o
-[2/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-alloc.c.o
+[1/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-alloc.c.o
+[2/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml.cpp.o
 [3/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-threading.cpp.o
 [4/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-opt.cpp.o
 [5/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml.c.o
@@ -738,12 +917,12 @@ Caused by: com.android.ide.common.process.ProcessException: ninja: Entering dire
 [7/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.c.o
 [8/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/ggml-cpu.cpp.o
 [9/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/hbm.cpp.o
-[10/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/quants.c.o
-[11/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/binary-ops.cpp.o
-[12/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend-meta.cpp.o
+[10/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/binary-ops.cpp.o
+[11/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-backend-meta.cpp.o
+[12/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/quants.c.o
 [13/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/traits.cpp.o
-[14/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-quants.c.o
-[15/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/amx.cpp.o
+[14/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/amx.cpp.o
+[15/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/ggml-quants.c.o
 [16/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/amx/mmq.cpp.o
 [17/353] Building C object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/arm/quants.c.o
 [18/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/vec.cpp.o
@@ -751,9 +930,9 @@ Caused by: com.android.ide.common.process.ProcessException: ninja: Entering dire
 [20/353] No download step for 'vulkan-shaders-gen'
 [21/353] No update step for 'vulkan-shaders-gen'
 [22/353] No patch step for 'vulkan-shaders-gen'
-[23/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/gguf.cpp.o
-[24/353] Linking CXX static library _deps/whisper_cpp-build/ggml/src/libggml-base.a
-[25/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/arm/repack.cpp.o
+[23/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-cpu.dir/ggml-cpu/arch/arm/repack.cpp.o
+[24/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml-base.dir/gguf.cpp.o
+[25/353] Linking CXX static library _deps/whisper_cpp-build/ggml/src/libggml-base.a
 [26/353] Performing configure step for 'vulkan-shaders-gen'
 -- The C compiler identification is GNU 13.3.0
 -- The CXX compiler identification is GNU 13.3.0
@@ -785,160 +964,160 @@ Caused by: com.android.ide.common.process.ProcessException: ninja: Entering dire
 [32/353] Performing install step for 'vulkan-shaders-gen'
 -- Installing: /home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/Debug/./vulkan-shaders-gen
 [33/353] Completed 'vulkan-shaders-gen'
-[34/353] Generate vulkan shaders for arange.comp
+[34/353] Generate vulkan shaders for clamp.comp
 [35/353] Generate vulkan shaders for argsort.comp
 [36/353] Generate vulkan shaders for upscale.comp
-[37/353] Generate vulkan shaders for wkv6.comp
+[37/353] Generate vulkan shaders for add_id.comp
 [38/353] Generate vulkan shaders for abs.comp
-[39/353] Generate vulkan shaders for ceil.comp
+[39/353] Generate vulkan shaders for add1.comp
 [40/353] Generate vulkan shaders header
-[41/353] Generate vulkan shaders for add1.comp
-[42/353] Generate vulkan shaders for conv2d_mm.comp
-[43/353] Generate vulkan shaders for argmax.comp
-[44/353] Generate vulkan shaders for clamp.comp
-[45/353] Generate vulkan shaders for add_id.comp
-[46/353] Generate vulkan shaders for acc.comp
-[47/353] Generate vulkan shaders for conv2d_dw.comp
-[48/353] Generate vulkan shaders for argsort_large.comp
+[41/353] Generate vulkan shaders for arange.comp
+[42/353] Generate vulkan shaders for ceil.comp
+[43/353] Generate vulkan shaders for wkv6.comp
+[44/353] Generate vulkan shaders for argmax.comp
+[45/353] Generate vulkan shaders for acc.comp
+[46/353] Generate vulkan shaders for argsort_large.comp
+[47/353] Generate vulkan shaders for cumsum.comp
+[48/353] Generate vulkan shaders for conv2d_dw.comp
 [49/353] Generate vulkan shaders for concat.comp
-[50/353] Generate vulkan shaders for cumsum.comp
-[51/353] Generate vulkan shaders for add.comp
-[52/353] Generate vulkan shaders for cos.comp
-[53/353] Generate vulkan shaders for conv_transpose_1d.comp
-[54/353] Generate vulkan shaders for diag.comp
-[55/353] Generate vulkan shaders for floor.comp
+[50/353] Generate vulkan shaders for cos.comp
+[51/353] Generate vulkan shaders for conv2d_mm.comp
+[52/353] Generate vulkan shaders for conv_transpose_1d.comp
+[53/353] Generate vulkan shaders for add.comp
+[54/353] Generate vulkan shaders for contig_copy.comp
+[55/353] Generate vulkan shaders for diag.comp
 [56/353] Generate vulkan shaders for copy.comp
-[57/353] Generate vulkan shaders for contig_copy.comp
-[58/353] Generate vulkan shaders for copy_transpose.comp
+[57/353] Generate vulkan shaders for floor.comp
+[58/353] Generate vulkan shaders for count_equal.comp
 [59/353] Generate vulkan shaders for elu.comp
-[60/353] Generate vulkan shaders for count_equal.comp
-[61/353] Generate vulkan shaders for count_experts.comp
-[62/353] Generate vulkan shaders for cumsum_multipass2.comp
+[60/353] Generate vulkan shaders for count_experts.comp
+[61/353] Generate vulkan shaders for copy_transpose.comp
+[62/353] Generate vulkan shaders for copy_from_quant.comp
 [63/353] Generate vulkan shaders for cumsum_multipass1.comp
-[64/353] Generate vulkan shaders for copy_from_quant.comp
+[64/353] Generate vulkan shaders for cumsum_multipass2.comp
 [65/353] Generate vulkan shaders for dequant_f32.comp
-[66/353] Generate vulkan shaders for dequant_iq1_s.comp
-[67/353] Generate vulkan shaders for dequant_iq2_xs.comp
-[68/353] Generate vulkan shaders for dequant_iq2_s.comp
-[69/353] Generate vulkan shaders for dequant_iq1_m.comp
-[70/353] Generate vulkan shaders for dequant_iq2_xxs.comp
+[66/353] Generate vulkan shaders for dequant_iq1_m.comp
+[67/353] Generate vulkan shaders for dequant_iq2_s.comp
+[68/353] Generate vulkan shaders for dequant_iq1_s.comp
+[69/353] Generate vulkan shaders for dequant_iq2_xs.comp
+[70/353] Generate vulkan shaders for div.comp
 [71/353] Generate vulkan shaders for dequant_iq3_s.comp
-[72/353] Generate vulkan shaders for dequant_iq3_xxs.comp
-[73/353] Generate vulkan shaders for div.comp
-[74/353] Generate vulkan shaders for dequant_nvfp4.comp
+[72/353] Generate vulkan shaders for dequant_iq2_xxs.comp
+[73/353] Generate vulkan shaders for dequant_iq3_xxs.comp
+[74/353] Generate vulkan shaders for dequant_iq4_xs.comp
 [75/353] Generate vulkan shaders for dequant_iq4_nl.comp
 [76/353] Generate vulkan shaders for dequant_mxfp4.comp
-[77/353] Generate vulkan shaders for dequant_q1_0.comp
-[78/353] Generate vulkan shaders for dequant_iq4_xs.comp
-[79/353] Generate vulkan shaders for dequant_q2_k.comp
-[80/353] Generate vulkan shaders for dequant_q4_0.comp
-[81/353] Generate vulkan shaders for dequant_q3_k.comp
-[82/353] Generate vulkan shaders for dequant_q4_k.comp
-[83/353] Generate vulkan shaders for dequant_q5_0.comp
-[84/353] Generate vulkan shaders for dequant_q4_1.comp
+[77/353] Generate vulkan shaders for dequant_q3_k.comp
+[78/353] Generate vulkan shaders for dequant_q1_0.comp
+[79/353] Generate vulkan shaders for dequant_nvfp4.comp
+[80/353] Generate vulkan shaders for dequant_q2_k.comp
+[81/353] Generate vulkan shaders for dequant_q4_0.comp
+[82/353] Generate vulkan shaders for dequant_q4_1.comp
+[83/353] Generate vulkan shaders for dequant_q4_k.comp
+[84/353] Generate vulkan shaders for dequant_q6_k.comp
 [85/353] Generate vulkan shaders for dequant_q5_1.comp
-[86/353] Generate vulkan shaders for dequant_q6_k.comp
+[86/353] Generate vulkan shaders for dequant_q5_0.comp
 [87/353] Generate vulkan shaders for dequant_q5_k.comp
-[88/353] Generate vulkan shaders for dequant_q8_0.comp
-[89/353] Generate vulkan shaders for flash_attn_mask_opt.comp
+[88/353] Generate vulkan shaders for flash_attn_mask_opt.comp
+[89/353] Generate vulkan shaders for dequant_q8_0.comp
 [90/353] Generate vulkan shaders for diag_mask_inf.comp
-[91/353] Generate vulkan shaders for exp.comp
-[92/353] Generate vulkan shaders for flash_attn_cm1.comp
-[93/353] Generate vulkan shaders for flash_attn_cm2.comp
-[94/353] Generate vulkan shaders for fill.comp
-[95/353] Generate vulkan shaders for geglu.comp
-[96/353] Generate vulkan shaders for geglu_erf.comp
+[91/353] Generate vulkan shaders for fill.comp
+[92/353] Generate vulkan shaders for exp.comp
+[93/353] Generate vulkan shaders for geglu_erf.comp
+[94/353] Generate vulkan shaders for flash_attn_cm1.comp
+[95/353] Generate vulkan shaders for flash_attn_cm2.comp
+[96/353] Generate vulkan shaders for geglu.comp
 [97/353] Generate vulkan shaders for flash_attn_split_k_reduce.comp
-[98/353] Generate vulkan shaders for gelu.comp
-[99/353] Generate vulkan shaders for copy_to_quant.comp
-[100/353] Generate vulkan shaders for fwht.comp
-[101/353] Generate vulkan shaders for mul_mmq.comp
-[102/353] Generate vulkan shaders for gelu_erf.comp
+[98/353] Generate vulkan shaders for gelu_erf.comp
+[99/353] Generate vulkan shaders for fwht.comp
+[100/353] Generate vulkan shaders for gelu.comp
+[101/353] Generate vulkan shaders for copy_to_quant.comp
+[102/353] Generate vulkan shaders for log.comp
 [103/353] Generate vulkan shaders for gated_delta_net.comp
-[104/353] Generate vulkan shaders for hardswish.comp
-[105/353] Generate vulkan shaders for geglu_quick.comp
-[106/353] Generate vulkan shaders for im2col.comp
+[104/353] Generate vulkan shaders for geglu_quick.comp
+[105/353] Generate vulkan shaders for im2col.comp
+[106/353] Generate vulkan shaders for hardswish.comp
 [107/353] Generate vulkan shaders for gelu_quick.comp
 [108/353] Generate vulkan shaders for get_rows.comp
-[109/353] Generate vulkan shaders for log.comp
-[110/353] Generate vulkan shaders for group_norm.comp
-[111/353] Generate vulkan shaders for hardsigmoid.comp
-[112/353] Generate vulkan shaders for flash_attn.comp
-[113/353] Generate vulkan shaders for im2col_3d.comp
-[114/353] Generate vulkan shaders for l2_norm.comp
-[115/353] Generate vulkan shaders for leaky_relu.comp
-[116/353] Generate vulkan shaders for multi_add.comp
+[109/353] Generate vulkan shaders for group_norm.comp
+[110/353] Generate vulkan shaders for hardsigmoid.comp
+[111/353] Generate vulkan shaders for mul_mmq.comp
+[112/353] Generate vulkan shaders for im2col_3d.comp
+[113/353] Generate vulkan shaders for l2_norm.comp
+[114/353] Generate vulkan shaders for mul.comp
+[115/353] Generate vulkan shaders for multi_add.comp
+[116/353] Generate vulkan shaders for leaky_relu.comp
 [117/353] Generate vulkan shaders for mul_mat_split_k_reduce.comp
-[118/353] Generate vulkan shaders for mul.comp
-[119/353] Generate vulkan shaders for mul_mat_vec_iq1_s.comp
-[120/353] Generate vulkan shaders for mul_mat_vec_iq1_m.comp
+[118/353] Generate vulkan shaders for flash_attn.comp
+[119/353] Generate vulkan shaders for mul_mat_vec_iq1_m.comp
+[120/353] Generate vulkan shaders for mul_mat_vec_iq1_s.comp
 [121/353] Generate vulkan shaders for mul_mat_vec_iq2_s.comp
-[122/353] Generate vulkan shaders for mul_mat_vec_iq2_xs.comp
-[123/353] Generate vulkan shaders for mul_mat_vec_iq2_xxs.comp
-[124/353] Generate vulkan shaders for get_rows_quant.comp
-[125/353] Generate vulkan shaders for reglu.comp
-[126/353] Generate vulkan shaders for mul_mat_vec_nc.comp
-[127/353] Generate vulkan shaders for mul_mat_vec_p021.comp
-[128/353] Generate vulkan shaders for mul_mat_vec_iq3_s.comp
+[122/353] Generate vulkan shaders for mul_mat_vec_iq2_xxs.comp
+[123/353] Generate vulkan shaders for mul_mat_vec_iq3_s.comp
+[124/353] Generate vulkan shaders for mul_mat_vec_iq2_xs.comp
+[125/353] Generate vulkan shaders for get_rows_quant.comp
+[126/353] Generate vulkan shaders for reglu.comp
+[127/353] Generate vulkan shaders for mul_mat_vec_nc.comp
+[128/353] Generate vulkan shaders for mul_mat_vec_p021.comp
 [129/353] Generate vulkan shaders for mul_mat_vec_iq3_xxs.comp
 [130/353] Generate vulkan shaders for mul_mat_vec_q2_k.comp
 [131/353] Generate vulkan shaders for mul_mat_vec_q3_k.comp
 [132/353] Generate vulkan shaders for mul_mat_vecq.comp
 [133/353] Generate vulkan shaders for mul_mat_vec_q4_k.comp
 [134/353] Generate vulkan shaders for mul_mm_cm2.comp
-[135/353] Generate vulkan shaders for mul_mat_vec_q5_k.comp
-[136/353] Generate vulkan shaders for relu.comp
-[137/353] Generate vulkan shaders for neg.comp
+[135/353] Generate vulkan shaders for relu.comp
+[136/353] Generate vulkan shaders for neg.comp
+[137/353] Generate vulkan shaders for mul_mat_vec_q5_k.comp
 [138/353] Generate vulkan shaders for norm.comp
 [139/353] Generate vulkan shaders for pad.comp
 [140/353] Generate vulkan shaders for pool2d.comp
 [141/353] Generate vulkan shaders for opt_step_adamw.comp
 [142/353] Generate vulkan shaders for opt_step_sgd.comp
-[143/353] Generate vulkan shaders for rope_norm.comp
-[144/353] Generate vulkan shaders for mul_mat_vec_q6_k.comp
-[145/353] Generate vulkan shaders for quantize_q8_1.comp
-[146/353] Generate vulkan shaders for repeat.comp
-[147/353] Generate vulkan shaders for rms_norm.comp
-[148/353] Generate vulkan shaders for rms_norm_partials.comp
+[143/353] Generate vulkan shaders for mul_mat_vec_q6_k.comp
+[144/353] Generate vulkan shaders for rope_norm.comp
+[145/353] Generate vulkan shaders for repeat.comp
+[146/353] Generate vulkan shaders for quantize_q8_1.comp
+[147/353] Generate vulkan shaders for rms_norm_partials.comp
+[148/353] Generate vulkan shaders for rms_norm.comp
 [149/353] Generate vulkan shaders for rope_neox.comp
 [150/353] Generate vulkan shaders for repeat_back.comp
-[151/353] Generate vulkan shaders for rms_norm_back.comp
-[152/353] Generate vulkan shaders for roll.comp
+[151/353] Generate vulkan shaders for roll.comp
+[152/353] Generate vulkan shaders for rms_norm_back.comp
 [153/353] Generate vulkan shaders for round.comp
 [154/353] Generate vulkan shaders for rope_multi.comp
-[155/353] Generate vulkan shaders for rope_vision.comp
-[156/353] Generate vulkan shaders for tanh.comp
+[155/353] Generate vulkan shaders for tanh.comp
+[156/353] Generate vulkan shaders for rope_vision.comp
 [157/353] Generate vulkan shaders for scale.comp
 [158/353] Generate vulkan shaders for sgn.comp
 [159/353] Generate vulkan shaders for sigmoid.comp
 [160/353] Generate vulkan shaders for silu.comp
 [161/353] Generate vulkan shaders for silu_back.comp
-[162/353] Generate vulkan shaders for sin.comp
-[163/353] Generate vulkan shaders for snake.comp
+[162/353] Generate vulkan shaders for snake.comp
+[163/353] Generate vulkan shaders for sin.comp
 [164/353] Generate vulkan shaders for softplus.comp
-[165/353] Generate vulkan shaders for solve_tri.comp
-[166/353] Generate vulkan shaders for soft_max_back.comp
+[165/353] Generate vulkan shaders for soft_max_back.comp
+[166/353] Generate vulkan shaders for solve_tri.comp
 [167/353] Generate vulkan shaders for soft_max_large1.comp
-[168/353] Generate vulkan shaders for soft_max_large2.comp
-[169/353] Generate vulkan shaders for soft_max.comp
+[168/353] Generate vulkan shaders for soft_max.comp
+[169/353] Generate vulkan shaders for soft_max_large2.comp
 [170/353] Generate vulkan shaders for soft_max_large3.comp
 [171/353] Generate vulkan shaders for sqrt.comp
 [172/353] Generate vulkan shaders for square.comp
 [173/353] Generate vulkan shaders for ssm_conv.comp
 [174/353] Generate vulkan shaders for ssm_scan.comp
 [175/353] Generate vulkan shaders for step.comp
-[176/353] Generate vulkan shaders for swiglu.comp
-[177/353] Generate vulkan shaders for sum_rows.comp
+[176/353] Generate vulkan shaders for sum_rows.comp
+[177/353] Generate vulkan shaders for swiglu.comp
 [178/353] Generate vulkan shaders for trunc.comp
-[179/353] Generate vulkan shaders for topk_moe.comp
-[180/353] Generate vulkan shaders for swiglu_oai.comp
+[179/353] Generate vulkan shaders for swiglu_oai.comp
+[180/353] Generate vulkan shaders for topk_moe.comp
 [181/353] Generate vulkan shaders for timestep_embedding.comp
 [182/353] Generate vulkan shaders for sub.comp
 [183/353] Generate vulkan shaders for topk_argsort.comp
 [184/353] Generate vulkan shaders for tri.comp
 [185/353] Generate vulkan shaders for topk_nary_search.comp
-[186/353] Generate vulkan shaders for xielu.comp
-[187/353] Generate vulkan shaders for wkv7.comp
+[186/353] Generate vulkan shaders for wkv7.comp
+[187/353] Generate vulkan shaders for xielu.comp
 [188/353] Generate vulkan shaders for mul_mat_vec.comp
 [189/353] Generate vulkan shaders for mul_mm.comp
 [190/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/abs.comp.cpp.o
@@ -953,21 +1132,122 @@ Caused by: com.android.ide.common.process.ProcessException: ninja: Entering dire
 [199/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/cos.comp.cpp.o
 [200/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy_from_quant.comp.cpp.o
 [201/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/count_equal.comp.cpp.o
-[202/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv2d_dw.comp.cpp.o
-[203/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv2d_mm.comp.cpp.o
-[204/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml.dir/ggml-backend-dl.cpp.o
-[205/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o
+[202/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy_to_quant.comp.cpp.o
+[203/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv2d_dw.comp.cpp.o
+[204/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/acc.comp.cpp.o
+[205/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/conv2d_mm.comp.cpp.o
+[206/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml.dir/ggml-backend-dl.cpp.o
+[207/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/argmax.comp.cpp.o
+[208/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/argsort_large.comp.cpp.o
+[209/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy.comp.cpp.o
+[210/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add.comp.cpp.o
+[211/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ceil.comp.cpp.o
+[212/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/clamp.comp.cpp.o
+[213/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/argsort.comp.cpp.o
+[214/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add_id.comp.cpp.o
+[215/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add1.comp.cpp.o
+[216/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/arange.comp.cpp.o
+[217/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/concat.comp.cpp.o
+[218/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/elu.comp.cpp.o
+[219/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq1_m.comp.cpp.o
+[220/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq2_xs.comp.cpp.o
+[221/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq1_s.comp.cpp.o
+[222/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq2_s.comp.cpp.o
+[223/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq2_xxs.comp.cpp.o
+[224/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq3_s.comp.cpp.o
+[225/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq3_xxs.comp.cpp.o
+[226/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq4_xs.comp.cpp.o
+[227/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_iq4_nl.comp.cpp.o
+[228/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_mxfp4.comp.cpp.o
+[229/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_nvfp4.comp.cpp.o
+[230/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q1_0.comp.cpp.o
+[231/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q2_k.comp.cpp.o
+[232/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q3_k.comp.cpp.o
+[233/353] Building CXX object CMakeFiles/whisper_jni.dir/whisper_jni.cpp.o
+[234/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q4_0.comp.cpp.o
+[235/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q4_1.comp.cpp.o
+[236/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q5_1.comp.cpp.o
+[237/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q4_k.comp.cpp.o
+[238/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q5_0.comp.cpp.o
+[239/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q6_k.comp.cpp.o
+[240/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/diag.comp.cpp.o
+[241/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q5_k.comp.cpp.o
+[242/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/dequant_q8_0.comp.cpp.o
+[243/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/diag_mask_inf.comp.cpp.o
+[244/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/exp.comp.cpp.o
+[245/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/fill.comp.cpp.o
+[246/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_cm1.comp.cpp.o
+[247/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_cm2.comp.cpp.o
+[248/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/div.comp.cpp.o
+[249/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_mask_opt.comp.cpp.o
+[250/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn_split_k_reduce.comp.cpp.o
+[251/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/floor.comp.cpp.o
+[252/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml.dir/ggml-backend-reg.cpp.o
+[253/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/geglu.comp.cpp.o
+[254/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/gated_delta_net.comp.cpp.o
+[255/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/fwht.comp.cpp.o
+[256/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/gelu.comp.cpp.o
+[257/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/geglu_erf.comp.cpp.o
+[258/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/geglu_quick.comp.cpp.o
+[259/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/gelu_erf.comp.cpp.o
+[260/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/gelu_quick.comp.cpp.o
+[261/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/group_norm.comp.cpp.o
+[262/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/hardswish.comp.cpp.o
+[263/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/hardsigmoid.comp.cpp.o
+[264/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/get_rows.comp.cpp.o
+[265/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/im2col.comp.cpp.o
+[266/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/l2_norm.comp.cpp.o
+[267/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/im2col_3d.comp.cpp.o
+[268/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/leaky_relu.comp.cpp.o
+[269/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/log.comp.cpp.o
+[270/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_split_k_reduce.comp.cpp.o
+[271/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul.comp.cpp.o
+[272/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flash_attn.comp.cpp.o
+[273/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/get_rows_quant.comp.cpp.o
+[274/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq1_s.comp.cpp.o
+[275/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq2_s.comp.cpp.o
+[276/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq1_m.comp.cpp.o
+[277/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq2_xxs.comp.cpp.o
+[278/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq3_xxs.comp.cpp.o
+[279/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_nc.comp.cpp.o
+[280/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_p021.comp.cpp.o
+[281/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq2_xs.comp.cpp.o
+[282/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_iq3_s.comp.cpp.o
+[283/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q4_k.comp.cpp.o
+[284/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q3_k.comp.cpp.o
+[285/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q5_k.comp.cpp.o
+[286/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vecq.comp.cpp.o
+[287/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q2_k.comp.cpp.o
+[288/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mm_cm2.comp.cpp.o
+[289/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mmq.comp.cpp.o
+[290/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/multi_add.comp.cpp.o
+[291/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/norm.comp.cpp.o
+[292/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/neg.comp.cpp.o
+[293/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/opt_step_adamw.comp.cpp.o
+[294/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec_q6_k.comp.cpp.o
+[295/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/opt_step_sgd.comp.cpp.o
+[296/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/quantize_q8_1.comp.cpp.o
+[297/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/pad.comp.cpp.o
+[298/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/pool2d.comp.cpp.o
+[299/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/relu.comp.cpp.o
+[300/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/reglu.comp.cpp.o
+[301/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/repeat.comp.cpp.o
+[302/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rms_norm_back.comp.cpp.o
+[303/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/repeat_back.comp.cpp.o
+[304/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/roll.comp.cpp.o
+[305/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rms_norm_partials.comp.cpp.o
+[306/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o
 FAILED: _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o 
-/usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++ --target=aarch64-none-linux-android29 --sysroot=/usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/sysroot -DGGML_SCHED_MAX_COPIES=4 -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/.. -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-build/ggml/src/ggml-vulkan -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/../include -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security  -std=c++17 -fno-limit-debug-info  -fPIC -O3 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wunreachable-code-break -Wunreachable-code-return -Wmissing-prototypes -Wextra-semi -std=gnu++17 -MD -MT _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -MF _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o.d -o _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -c /home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/ggml-vulkan.cpp
-/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/ggml-vulkan.cpp:22:10: fatal error: 'vulkan/vulkan.hpp' file not found
-   22 | #include <vulkan/vulkan.hpp>
-      |          ^~~~~~~~~~~~~~~~~~~
+/usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++ --target=aarch64-none-linux-android29 --sysroot=/usr/local/lib/android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/sysroot -DGGML_SCHED_MAX_COPIES=4 -D_GNU_SOURCE -D_XOPEN_SOURCE=600 -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/vulkan_headers_source-src/include -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/.. -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-build/ggml/src/ggml-vulkan -I/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/../include -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security  -std=c++17 -fno-limit-debug-info  -fPIC -O3 -Wmissing-declarations -Wmissing-noreturn -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wunreachable-code-break -Wunreachable-code-return -Wmissing-prototypes -Wextra-semi -std=gnu++17 -MD -MT _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -MF _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o.d -o _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/ggml-vulkan.cpp.o -c /home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+/home/runner/work/24hRecoder/24hRecoder/app/.cxx/Debug/4o31326u/arm64-v8a/_deps/whisper_cpp-src/ggml/src/ggml-vulkan/ggml-vulkan.cpp:48:14: fatal error: 'spirv/unified1/spirv.hpp' file not found
+   48 | #    include <spirv/unified1/spirv.hpp>
+      |              ^~~~~~~~~~~~~~~~~~~~~~~~~~
 1 error generated.
-[206/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/acc.comp.cpp.o
-[207/353] Building CXX object CMakeFiles/whisper_jni.dir/whisper_jni.cpp.o
-[208/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/copy_to_quant.comp.cpp.o
-[209/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/add.comp.cpp.o
-[210/353] Building CXX object _deps/whisper_cpp-build/ggml/src/CMakeFiles/ggml.dir/ggml-backend-reg.cpp.o
+[307/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rms_norm.comp.cpp.o
+[308/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rope_multi.comp.cpp.o
+[309/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/rope_neox.comp.cpp.o
+[310/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mat_vec.comp.cpp.o
+[311/353] Building CXX object _deps/whisper_cpp-build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/mul_mm.comp.cpp.o
 ninja: build stopped: subcommand failed.
 
 C++ build system [build] failed while executing:
@@ -1010,6 +1290,6 @@ You can use '--warning-mode all' to show the individual deprecation warnings and
 
 For more on this, please refer to https://docs.gradle.org/8.13/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
 
-BUILD FAILED in 3m 5s
-26 actionable tasks: 26 executed
+BUILD FAILED in 3m 18s
+25 actionable tasks: 25 executed
 BUILD_EXIT_CODE=1
