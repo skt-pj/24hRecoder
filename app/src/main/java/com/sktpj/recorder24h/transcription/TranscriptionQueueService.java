@@ -30,17 +30,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * User-visible queue runner for explicit transcription requests.
- *
- * WorkManager remains the wake-up mechanism for fully automatic background work. When the user
- * explicitly requests transcription from a visible Activity, this mediaProcessing foreground
- * service drains the persisted QUEUED items directly so execution is not held behind
- * WorkManager/JobScheduler start latency or the battery-not-low constraint.
- *
- * The process-wide TranscriptionExecutionGate is shared with TranscriptionWorker so this service
- * can never become a second simultaneous queue runner.
- */
+/** User-visible queue runner for explicit transcription requests. */
 public final class TranscriptionQueueService extends Service {
     private static final String ACTION_DRAIN = "com.sktpj.recorder24h.action.DRAIN_TRANSCRIPTION_QUEUE";
     private static final String CHANNEL_ID = "24hrecoder-transcription-queue";
@@ -54,6 +44,10 @@ public final class TranscriptionQueueService extends Service {
 
     public static boolean kick(Context context) {
         Context app = context.getApplicationContext();
+        if (TranscriptionScheduler.isBacklogPaused(app)) {
+            AppLogger.event(app, "TRANSCRIPTION_DIRECT_QUEUE_KICK_IGNORED_LIVE_PAUSED");
+            return false;
+        }
         Intent intent = new Intent(app, TranscriptionQueueService.class).setAction(ACTION_DRAIN);
         try {
             app.startForegroundService(intent);
@@ -81,6 +75,12 @@ public final class TranscriptionQueueService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (TranscriptionScheduler.isBacklogPaused(this)) {
+            AppLogger.event(getApplicationContext(), "TRANSCRIPTION_DIRECT_QUEUE_START_SKIPPED_LIVE_PAUSED");
+            stopForeground(STOP_FOREGROUND_REMOVE);
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         promote("文字起こしキューを処理中");
         if (draining.compareAndSet(false, true)) {
             executor.execute(() -> {
@@ -98,6 +98,10 @@ public final class TranscriptionQueueService extends Service {
 
     private void drainQueue() {
         Context context = getApplicationContext();
+        if (TranscriptionScheduler.isBacklogPaused(context)) {
+            AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DRAIN_SKIPPED_LIVE_PAUSED");
+            return;
+        }
         if (!TranscriptionExecutionGate.tryAcquire()) {
             AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DEFERRED_RUNNER_BUSY");
             TranscriptionScheduler.ensureDrainScheduled(context);
@@ -107,6 +111,11 @@ public final class TranscriptionQueueService extends Service {
         AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DRAIN_STARTED");
         try {
             while (System.currentTimeMillis() - serviceStartedAtMs < MAX_SERVICE_RUNTIME_MS) {
+                if (TranscriptionScheduler.isBacklogPaused(context)) {
+                    AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_PAUSED_AFTER_CURRENT_FOR_LIVE");
+                    return;
+                }
+
                 SegmentRecord next = nextQueuedRecord(context);
                 if (next == null) {
                     AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DRAIN_EMPTY");
@@ -121,9 +130,7 @@ public final class TranscriptionQueueService extends Service {
                     continue;
                 }
 
-                // Prevent a pre-0.7.11 legacy per-segment job from later running the same segment.
                 WorkManager.getInstance(context).cancelUniqueWork(TranscriptionScheduler.uniqueWorkName(segmentId));
-
                 boolean manual = next.getReason() != null && next.getReason().startsWith("MANUAL_");
                 processOne(context, segmentId, new File(audioPath), manual);
             }
@@ -131,8 +138,6 @@ public final class TranscriptionQueueService extends Service {
             AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_RUNTIME_LIMIT_REACHED");
         } finally {
             TranscriptionExecutionGate.release();
-            // If the FGS reaches its runtime limit or another path queued work while it was
-            // active, hand the remaining persisted queue back to the single background Worker.
             TranscriptionScheduler.ensureDrainScheduled(context);
         }
     }
@@ -141,6 +146,13 @@ public final class TranscriptionQueueService extends Service {
         int generation = TranscriptionResetManager.currentGeneration(context);
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            if (TranscriptionScheduler.isBacklogPaused(context)) {
+                log(context, "TRANSCRIPTION_DIRECT_QUEUE_ITEM_HELD_LIVE_PAUSED", segmentId, audioFile,
+                        "QUEUED_ITEM_RETAINED", forceRetranscribe, attempt, null,
+                        WhisperModelManager.selectedModelId(context), LocalWhisperEngine.engineId(context));
+                return;
+            }
+
             String selectedModelId = WhisperModelManager.selectedModelId(context);
             TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
             String selectedEngineId = LocalWhisperEngine.engineId(context, selectedModelId, pipeline);
@@ -394,6 +406,7 @@ public final class TranscriptionQueueService extends Service {
             details.put("attempt", attempt);
             details.put("asrReady", WhisperModelManager.isModelReady(context, modelId));
             details.put("vadReady", WhisperModelManager.isVadReady(context));
+            details.put("backlogPausedForLive", TranscriptionScheduler.isBacklogPaused(context));
             if (message != null) {
                 details.put("message", message);
             }
