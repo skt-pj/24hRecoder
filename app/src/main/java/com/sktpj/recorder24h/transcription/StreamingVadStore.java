@@ -196,6 +196,11 @@ public final class StreamingVadStore {
     }
 
     public static Snapshot analyzeOffline(Context context, float[] samples) throws Exception {
+        return analyzeOffline(context, samples, TranscriptionCancellation.snapshot());
+    }
+
+    static Snapshot analyzeOffline(Context context, float[] samples, long cancellationToken) throws Exception {
+        TranscriptionCancellation.throwIfCancelled(cancellationToken);
         if (samples == null || samples.length == 0) {
             return new Snapshot(true, false, true, "streaming-silero-offline", 0L,
                     new ArrayList<>(), null);
@@ -216,6 +221,7 @@ public final class StreamingVadStore {
             int offset = 0;
             try {
                 while (offset < samples.length) {
+                    TranscriptionCancellation.throwIfCancelled(cancellationToken);
                     int count = Math.min(1600, samples.length - offset);
                     float[] chunk = new float[count];
                     System.arraycopy(samples, offset, chunk, 0, count);
@@ -234,6 +240,7 @@ public final class StreamingVadStore {
                     }
                     offset += count;
                 }
+                TranscriptionCancellation.throwIfCancelled(cancellationToken);
                 long durationUs = samples.length * 1_000_000L / SAMPLE_RATE;
                 List<Range> ranges = toMsRanges(localDetector.snapshotRanges(durationUs));
                 return new Snapshot(true, false, true, "streaming-silero-offline",

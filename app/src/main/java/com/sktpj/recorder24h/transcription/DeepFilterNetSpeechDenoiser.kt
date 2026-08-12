@@ -74,7 +74,19 @@ object DeepFilterNetSpeechDenoiser {
         startsMs: IntArray,
         endsMs: IntArray,
         inputSnrProxyDb: Double,
+    ): Result = denoise(context, segmentId, source, startsMs, endsMs, inputSnrProxyDb, TranscriptionCancellation.snapshot())
+
+    @JvmStatic
+    fun denoise(
+        context: Context,
+        segmentId: String?,
+        source: FloatArray,
+        startsMs: IntArray,
+        endsMs: IntArray,
+        inputSnrProxyDb: Double,
+        cancellationToken: Long,
     ): Result {
+        TranscriptionCancellation.throwIfCancelled(cancellationToken)
         val startedAt = System.currentTimeMillis()
         val speechMs = startsMs.indices.sumOf { index ->
             max(0, endsMs.getOrElse(index) { 0 } - startsMs[index]).toLong()
@@ -103,14 +115,19 @@ object DeepFilterNetSpeechDenoiser {
                     loadLatch.countDown()
                 }
             }
-            if (!loadLatch.await(MODEL_LOAD_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                loadTimedOut.set(true)
-                instance.release()
-                return fallback(
+            val loadDeadline = System.currentTimeMillis() + MODEL_LOAD_TIMEOUT_MS
+            while (!loadLatch.await(100L, TimeUnit.MILLISECONDS)) {
+                TranscriptionCancellation.throwIfCancelled(cancellationToken)
+                if (System.currentTimeMillis() >= loadDeadline) {
+                    loadTimedOut.set(true)
+                    instance.release()
+                    return fallback(
                     context, segmentId, source, startedAt, speechMs, inputSnrProxyDb,
-                    "model-load-timeout", null,
-                )
+                        "model-load-timeout", null,
+                    )
+                }
             }
+            TranscriptionCancellation.throwIfCancelled(cancellationToken)
 
             val frameBytes = instance.frameLength.toInt()
             if (frameBytes <= 0 || frameBytes % 2 != 0) {
@@ -129,6 +146,7 @@ object DeepFilterNetSpeechDenoiser {
             var appliedChunks = 0
 
             for (index in startsMs.indices) {
+                TranscriptionCancellation.throwIfCancelled(cancellationToken)
                 if (index >= endsMs.size) break
                 val coreStartMs = max(0, startsMs[index])
                 val coreEndMs = max(coreStartMs, endsMs[index])
@@ -144,11 +162,11 @@ object DeepFilterNetSpeechDenoiser {
                 if (expandedEndSample <= expandedStartSample || coreEndSample <= coreStartSample) continue
 
                 if (appliedChunks > 0) {
-                    flushState(instance, frameBytes)
+                    flushState(instance, frameBytes, cancellationToken)
                 }
 
                 val region = source.copyOfRange(expandedStartSample, expandedEndSample)
-                val processed = processRegion(instance, frameBytes, region)
+                val processed = processRegion(instance, frameBytes, region, cancellationToken)
                     ?: return fallback(
                         context, segmentId, source, startedAt, speechMs, inputSnrProxyDb,
                         "native-frame-processing-failed", null,
@@ -196,6 +214,7 @@ object DeepFilterNetSpeechDenoiser {
             log(context, segmentId, "DEEPFILTERNET_DENOISE_APPLIED", result, inputSnrProxyDb, null)
             result
         } catch (error: Throwable) {
+            if (TranscriptionCancellation.isCancellation(error)) throw error
             fallback(
                 context, segmentId, source, startedAt, speechMs, inputSnrProxyDb,
                 "exception", error,
@@ -216,8 +235,19 @@ object DeepFilterNetSpeechDenoiser {
         startsMs: IntArray,
         endsMs: IntArray,
         inputSnrProxyDb: Double,
+    ): Result = denoiseSelected(context, segmentId, source, startsMs, endsMs, inputSnrProxyDb, TranscriptionCancellation.snapshot())
+
+    @JvmStatic
+    fun denoiseSelected(
+        context: Context,
+        segmentId: String?,
+        source: FloatArray,
+        startsMs: IntArray,
+        endsMs: IntArray,
+        inputSnrProxyDb: Double,
+        cancellationToken: Long,
     ): Result {
-        val result = denoise(context, segmentId, source, startsMs, endsMs, inputSnrProxyDb)
+        val result = denoise(context, segmentId, source, startsMs, endsMs, inputSnrProxyDb, cancellationToken)
         val intentionalSkip = result.reason == "snr-clean-enough" ||
             result.reason == "no-speech-chunks" ||
             result.reason == "no-valid-speech-ranges"
@@ -242,6 +272,7 @@ object DeepFilterNetSpeechDenoiser {
         deepFilterNet: NativeDeepFilterNet,
         frameBytes: Int,
         source16k: FloatArray,
+        cancellationToken: Long,
     ): FloatArray? {
         val upsampled = upsample16To48Pcm16(source16k)
         val frameSamples = frameBytes / 2
@@ -250,6 +281,7 @@ object DeepFilterNetSpeechDenoiser {
         val frame = ByteBuffer.allocateDirect(frameBytes).order(ByteOrder.LITTLE_ENDIAN)
         var offset = 0
         while (offset < upsampled.size) {
+            TranscriptionCancellation.throwIfCancelled(cancellationToken)
             frame.clear()
             val valid = min(frameSamples, upsampled.size - offset)
             for (i in 0 until frameSamples) {
@@ -267,12 +299,13 @@ object DeepFilterNetSpeechDenoiser {
         return downsample48To16(processed48, source16k.size)
     }
 
-    private fun flushState(deepFilterNet: NativeDeepFilterNet, frameBytes: Int) {
+    private fun flushState(deepFilterNet: NativeDeepFilterNet, frameBytes: Int, cancellationToken: Long) {
         val frameSamples = frameBytes / 2
         if (frameSamples <= 0) return
         val frames = max(1, ceil(STATE_FLUSH_MS * FILTER_SAMPLE_RATE / 1000.0 / frameSamples).toInt())
         val zero = ByteBuffer.allocateDirect(frameBytes).order(ByteOrder.LITTLE_ENDIAN)
         repeat(frames) {
+            TranscriptionCancellation.throwIfCancelled(cancellationToken)
             zero.clear()
             repeat(frameSamples) { zero.putShort(0) }
             zero.flip()

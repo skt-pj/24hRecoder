@@ -54,6 +54,10 @@ public final class TranscriptionQueueService extends Service {
 
     public static boolean kick(Context context) {
         Context app = context.getApplicationContext();
+        if (TranscriptionScheduler.isQueuePaused(app)) {
+            AppLogger.event(app, "TRANSCRIPTION_DIRECT_QUEUE_KICK_IGNORED_QUEUE_PAUSED");
+            return false;
+        }
         Intent intent = new Intent(app, TranscriptionQueueService.class).setAction(ACTION_DRAIN);
         try {
             app.startForegroundService(intent);
@@ -81,6 +85,12 @@ public final class TranscriptionQueueService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (TranscriptionScheduler.isQueuePaused(this)) {
+            AppLogger.event(getApplicationContext(), "TRANSCRIPTION_DIRECT_QUEUE_START_SKIPPED_QUEUE_PAUSED");
+            stopForeground(STOP_FOREGROUND_REMOVE);
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         promote("文字起こしキューを処理中");
         if (draining.compareAndSet(false, true)) {
             executor.execute(() -> {
@@ -98,6 +108,10 @@ public final class TranscriptionQueueService extends Service {
 
     private void drainQueue() {
         Context context = getApplicationContext();
+        if (TranscriptionScheduler.isQueuePaused(context)) {
+            AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DRAIN_SKIPPED_QUEUE_PAUSED");
+            return;
+        }
         if (!TranscriptionExecutionGate.tryAcquire()) {
             AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DEFERRED_RUNNER_BUSY");
             TranscriptionScheduler.ensureDrainScheduled(context);
@@ -107,6 +121,10 @@ public final class TranscriptionQueueService extends Service {
         AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DRAIN_STARTED");
         try {
             while (System.currentTimeMillis() - serviceStartedAtMs < MAX_SERVICE_RUNTIME_MS) {
+                if (TranscriptionScheduler.isQueuePaused(context)) {
+                    AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_PAUSED_AFTER_CURRENT_ITEM");
+                    return;
+                }
                 SegmentRecord next = nextQueuedRecord(context);
                 if (next == null) {
                     AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DRAIN_EMPTY");
@@ -141,6 +159,12 @@ public final class TranscriptionQueueService extends Service {
         int generation = TranscriptionResetManager.currentGeneration(context);
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            if (TranscriptionScheduler.isQueuePaused(context)) {
+                log(context, "TRANSCRIPTION_DIRECT_QUEUE_ITEM_HELD_QUEUE_PAUSED", segmentId, audioFile,
+                        "QUEUED_ITEM_RETAINED", forceRetranscribe, attempt, null,
+                        WhisperModelManager.selectedModelId(context), LocalWhisperEngine.engineId(context));
+                return;
+            }
             String selectedModelId = WhisperModelManager.selectedModelId(context);
             TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
             String selectedEngineId = LocalWhisperEngine.engineId(context, selectedModelId, pipeline);
@@ -207,6 +231,10 @@ public final class TranscriptionQueueService extends Service {
                         return;
                     }
 
+                    long cancellationToken = TranscriptionCancellation.snapshot();
+                    if (TranscriptionScheduler.isQueuePaused(context)) {
+                        throw new IllegalStateException(TranscriptionCancellation.CANCELLED);
+                    }
                     long startedAt = System.currentTimeMillis();
                     SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
                             audioFile.lastModified(), startedAt, "TRANSCRIBING",
@@ -217,12 +245,14 @@ public final class TranscriptionQueueService extends Service {
                             selectedModelId, selectedEngineId);
 
                     LocalWhisperEngine.Response response =
-                            LocalWhisperEngine.transcribe(context, audioFile, selectedModelId, pipeline);
+                            LocalWhisperEngine.transcribe(context, audioFile, selectedModelId, pipeline, cancellationToken);
+                    TranscriptionCancellation.throwIfCancelled(cancellationToken);
                     org.json.JSONArray savedSegments = response.skippedNoSpeech
                             ? new org.json.JSONArray()
                             : TranscriptionPipelineSettings.SPEAKER_SHERPA_CPU.equals(pipeline.speakerBackend)
-                                ? SpeakerIdentifier.annotate(context, audioFile, response.segments)
+                                ? SpeakerIdentifier.annotate(context, audioFile, response.segments, cancellationToken)
                                 : new org.json.JSONArray(response.segments.toString());
+                    TranscriptionCancellation.throwIfCancelled(cancellationToken);
                     if (!TranscriptionResetManager.isCurrentGeneration(context, generation)) {
                         SegmentRepository.appendWithoutNotify(context, segmentId, audioFile, 0L,
                                 System.currentTimeMillis(), "READY", null);
@@ -270,6 +300,16 @@ public final class TranscriptionQueueService extends Service {
                         selectedModelId, selectedEngineId);
                 return;
             } catch (Exception error) {
+                if (TranscriptionCancellation.isCancellation(error)) {
+                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                            audioFile.lastModified(), System.currentTimeMillis(), "QUEUED",
+                            "USER_PAUSED_RUNNING_TRANSCRIPTION");
+                    log(context, "TRANSCRIPTION_DIRECT_RUNNING_ITEM_CANCELLED_BY_USER", segmentId, audioFile,
+                            TranscriptionCancellation.CANCELLED, forceRetranscribe, attempt, null,
+                            selectedModelId, selectedEngineId);
+                    promote("文字起こしキュー: 一時停止中");
+                    return;
+                }
                 boolean retry = attempt < MAX_ATTEMPTS;
                 String reason = forceRetranscribe
                         ? (retry ? "MANUAL_DIRECT_RETRY" : "MANUAL_DIRECT_FAILED")
@@ -394,6 +434,7 @@ public final class TranscriptionQueueService extends Service {
             details.put("attempt", attempt);
             details.put("asrReady", WhisperModelManager.isModelReady(context, modelId));
             details.put("vadReady", WhisperModelManager.isVadReady(context));
+            details.put("queuePaused", TranscriptionScheduler.isQueuePaused(context));
             if (message != null) {
                 details.put("message", message);
             }

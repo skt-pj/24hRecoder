@@ -31,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,10 +41,12 @@ import com.sktpj.recorder24h.ai.AiAnalysisScheduler
 import com.sktpj.recorder24h.ai.AiPriorityGate
 import com.sktpj.recorder24h.ai.AiQueueStore
 import com.sktpj.recorder24h.transcription.TranscriptionPriorityController
+import com.sktpj.recorder24h.transcription.TranscriptionScheduler
 import com.sktpj.recorder24h.ui.SegmentRecord
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -99,6 +102,8 @@ private fun TranscriptionQueueTab(
     onRemove: (SegmentRecord) -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var queuePaused by remember { mutableStateOf(TranscriptionScheduler.isQueuePaused(context)) }
     var selectedPriorityId by remember { mutableStateOf<String?>(null) }
     var priorityRevision by remember { mutableIntStateOf(0) }
     val queued = remember(records, priorityRevision) {
@@ -122,6 +127,23 @@ private fun TranscriptionQueueTab(
             selectedPriorityId = null
         }
     }
+    LaunchedEffect(Unit) {
+        while (true) {
+            queuePaused = withContext(Dispatchers.IO) { TranscriptionScheduler.isQueuePaused(context) }
+            delay(500L)
+        }
+    }
+
+    TranscriptionQueuePauseControls(
+        paused = queuePaused,
+        onToggle = {
+            val next = !queuePaused
+            queuePaused = next
+            scope.launch(Dispatchers.IO) {
+                TranscriptionScheduler.setQueuePaused(context, next)
+            }
+        }
+    )
 
     if (queued.isEmpty()) {
         EmptyQueue("文字起こしキューは空です")
@@ -187,6 +209,40 @@ private fun TranscriptionQueueTab(
                 )
                 HorizontalDivider()
             }
+        }
+    }
+}
+
+
+@Composable
+private fun TranscriptionQueuePauseControls(
+    paused: Boolean,
+    onToggle: () -> Unit
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                if (paused) "通常文字起こしキュー: 一時停止中" else "通常文字起こしキュー: 実行中",
+                style = MaterialTheme.typography.titleSmall
+            )
+            Text(
+                if (paused) {
+                    "待機中の項目は保持します。実行中の通常文字起こしも中断して待機へ戻します。"
+                } else {
+                    "完全ストリーミング中に通常キューを止めたい場合は一時停止してください。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        OutlinedButton(onClick = onToggle) {
+            Text(if (paused) "再開" else "一時停止")
         }
     }
 }

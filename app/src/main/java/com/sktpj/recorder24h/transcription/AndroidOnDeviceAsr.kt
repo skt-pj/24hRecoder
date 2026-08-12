@@ -31,6 +31,16 @@ object AndroidOnDeviceAsr {
     private const val START_TIMEOUT_SECONDS = 10L
     private const val MIN_RESULT_TIMEOUT_SECONDS = 30L
     private const val MAX_RESULT_TIMEOUT_SECONDS = 180L
+    private val activeRecognizer = AtomicReference<SpeechRecognizer?>()
+    private val activeCompletion = AtomicReference<CountDownLatch?>()
+
+    @JvmStatic
+    fun cancelActivePostprocessRecognition() {
+        activeCompletion.get()?.countDown()
+        Handler(Looper.getMainLooper()).post {
+            try { activeRecognizer.get()?.cancel() } catch (_: Throwable) { }
+        }
+    }
 
     class Result(
         @JvmField val text: String,
@@ -50,7 +60,17 @@ object AndroidOnDeviceAsr {
         source: FloatArray,
         startsMs: IntArray,
         endsMs: IntArray,
+    ): Result = transcribe(context, source, startsMs, endsMs, TranscriptionCancellation.snapshot())
+
+    @JvmStatic
+    fun transcribe(
+        context: Context,
+        source: FloatArray,
+        startsMs: IntArray,
+        endsMs: IntArray,
+        cancellationToken: Long,
     ): Result {
+        TranscriptionCancellation.throwIfCancelled(cancellationToken)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             throw IllegalStateException("ANDROID_ON_DEVICE_ASR_REQUIRES_API_33")
         }
@@ -66,6 +86,7 @@ object AndroidOnDeviceAsr {
         val sourceDurationMs = source.size * 1000L / SAMPLE_RATE
 
         for (index in startsMs.indices) {
+            TranscriptionCancellation.throwIfCancelled(cancellationToken)
             val chunkStartMs = startsMs[index].toLong().coerceIn(0L, sourceDurationMs)
             val chunkEndMs = endsMs[index].toLong().coerceIn(chunkStartMs, sourceDurationMs)
             if (chunkEndMs <= chunkStartMs) continue
@@ -74,7 +95,7 @@ object AndroidOnDeviceAsr {
             if (endSample <= startSample) continue
 
             val chunk = source.copyOfRange(startSample, endSample)
-            val recognized = recognizeChunk(context.applicationContext, chunk)
+            val recognized = recognizeChunk(context.applicationContext, chunk, cancellationToken)
             if (recognized.text.isNotBlank()) {
                 if (allText.isNotEmpty()) allText.append(' ')
                 allText.append(recognized.text.trim())
@@ -109,7 +130,8 @@ object AndroidOnDeviceAsr {
         )
     }
 
-    private fun recognizeChunk(context: Context, samples: FloatArray): ChunkResult {
+    private fun recognizeChunk(context: Context, samples: FloatArray, cancellationToken: Long): ChunkResult {
+        TranscriptionCancellation.throwIfCancelled(cancellationToken)
         val pipe = ParcelFileDescriptor.createPipe()
         val readFd = pipe[0]
         val writeFd = pipe[1]
@@ -126,6 +148,8 @@ object AndroidOnDeviceAsr {
             try {
                 val recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
                 recognizerRef.set(recognizer)
+                activeRecognizer.set(recognizer)
+                activeCompletion.set(completed)
                 recognizer.setRecognitionListener(object : RecognitionListener {
                     override fun onReadyForSpeech(params: Bundle?) = Unit
                     override fun onBeginningOfSpeech() = Unit
@@ -200,6 +224,7 @@ object AndroidOnDeviceAsr {
                 val buffer = ByteArray(8192)
                 var offset = 0
                 while (offset < samples.size) {
+                    TranscriptionCancellation.throwIfCancelled(cancellationToken)
                     val sampleCount = min(buffer.size / 2, samples.size - offset)
                     var byteIndex = 0
                     for (i in 0 until sampleCount) {
@@ -219,7 +244,15 @@ object AndroidOnDeviceAsr {
         val audioSeconds = max(1L, samples.size.toLong() / SAMPLE_RATE)
         val timeoutSeconds = (audioSeconds * 3L + 20L)
             .coerceIn(MIN_RESULT_TIMEOUT_SECONDS, MAX_RESULT_TIMEOUT_SECONDS)
-        if (!completed.await(timeoutSeconds, TimeUnit.SECONDS)) {
+        var completedNormally = false
+        val resultDeadline = System.currentTimeMillis() + timeoutSeconds * 1000L
+        while (!completed.await(100L, TimeUnit.MILLISECONDS)) {
+            TranscriptionCancellation.throwIfCancelled(cancellationToken)
+            if (System.currentTimeMillis() >= resultDeadline) break
+        }
+        completedNormally = completed.count == 0L
+        TranscriptionCancellation.throwIfCancelled(cancellationToken)
+        if (!completedNormally) {
             closeQuietly(readFd)
             handler.post {
                 try { recognizerRef.get()?.cancel() } catch (_: Throwable) { }
@@ -229,7 +262,11 @@ object AndroidOnDeviceAsr {
         }
 
         closeQuietly(readFd)
-        handler.post { destroyQuietly(recognizerRef.getAndSet(null)) }
+        activeCompletion.compareAndSet(completed, null)
+        val finishedRecognizer = recognizerRef.getAndSet(null)
+        activeRecognizer.compareAndSet(finishedRecognizer, null)
+        handler.post { destroyQuietly(finishedRecognizer) }
+        TranscriptionCancellation.throwIfCancelled(cancellationToken)
 
         val errorCode = recognitionError.get()
         if (errorCode != 0 &&

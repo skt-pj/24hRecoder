@@ -18,10 +18,18 @@ object SpeakerIdentifier {
     private const val SAMPLE_RATE = 16_000
 
     @JvmStatic
-    fun annotate(context: Context, audioFile: File, sourceSegments: JSONArray): JSONArray {
+    fun annotate(context: Context, audioFile: File, sourceSegments: JSONArray): JSONArray =
+        annotate(context, audioFile, sourceSegments, TranscriptionCancellation.snapshot())
+
+    @JvmStatic
+    fun annotate(context: Context, audioFile: File, sourceSegments: JSONArray, cancellationToken: Long): JSONArray {
+        TranscriptionCancellation.throwIfCancelled(cancellationToken)
         return try {
-            annotatePcm(context, M4aPcmDecoder.decode(audioFile), sourceSegments)
+            val samples = M4aPcmDecoder.decode(audioFile)
+            TranscriptionCancellation.throwIfCancelled(cancellationToken)
+            annotatePcm(context, samples, sourceSegments, cancellationToken)
         } catch (error: Exception) {
+            if (TranscriptionCancellation.isCancellation(error)) throw error
             val segments = JSONArray(sourceSegments.toString())
             markUnknown(segments)
             AppLogger.event(
@@ -37,7 +45,12 @@ object SpeakerIdentifier {
 
     /** Speaker annotation for an already captured live PCM utterance; no second audio decode. */
     @JvmStatic
-    fun annotatePcm(context: Context, samples: FloatArray, sourceSegments: JSONArray): JSONArray {
+    fun annotatePcm(context: Context, samples: FloatArray, sourceSegments: JSONArray): JSONArray =
+        annotatePcm(context, samples, sourceSegments, TranscriptionCancellation.snapshot())
+
+    @JvmStatic
+    fun annotatePcm(context: Context, samples: FloatArray, sourceSegments: JSONArray, cancellationToken: Long): JSONArray {
+        TranscriptionCancellation.throwIfCancelled(cancellationToken)
         val segments = JSONArray(sourceSegments.toString())
         val profile = SpeakerProfileStore.load(context)
         if (profile == null) {
@@ -54,6 +67,7 @@ object SpeakerIdentifier {
         return try {
             extractor = createExtractor(context)
             for (index in 0 until segments.length()) {
+                TranscriptionCancellation.throwIfCancelled(cancellationToken)
                 val row = segments.optJSONObject(index) ?: continue
                 val startMs = row.optLong("startMs", -1L)
                 val endMs = row.optLong("endMs", -1L)
@@ -64,6 +78,7 @@ object SpeakerIdentifier {
                 }
                 val chunk = slice(samples, startMs, endMs)
                 val embedding = computeEmbedding(extractor, chunk)
+                TranscriptionCancellation.throwIfCancelled(cancellationToken)
                 if (embedding == null) {
                     row.put("autoSpeaker", UNKNOWN)
                     row.put("autoSpeakerScore", JSONObject.NULL)
@@ -80,6 +95,7 @@ object SpeakerIdentifier {
             }
             segments
         } catch (error: Exception) {
+            if (TranscriptionCancellation.isCancellation(error)) throw error
             markUnknown(segments)
             AppLogger.event(
                 context,
