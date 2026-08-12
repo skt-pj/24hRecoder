@@ -64,11 +64,15 @@ public final class TranscriptionScheduler {
         if (segmentId == null || segmentId.isEmpty() || file == null || !file.isFile()) {
             return false;
         }
-        if (!WhisperModelManager.isReady(context)) {
-            WhisperModelManager.enqueueDownload(context);
-            String reason = WhisperModelManager.isAsrReady(context)
-                    ? "SILERO_VAD_MODEL_MISSING" : "LOCAL_MODEL_MISSING";
-            log(context, "TRANSCRIPTION_WAITING_FOR_LOCAL_MODELS", segmentId, file, reason);
+        TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
+        String pipelineReason = TranscriptionPipelineSettings.unavailableReason(
+                context, pipeline, WhisperModelManager.selectedModelId(context));
+        if (pipelineReason != null) {
+            if ("SILERO_VAD_MODEL_MISSING".equals(pipelineReason)
+                    || "LOCAL_WHISPER_MODEL_MISSING".equals(pipelineReason)) {
+                WhisperModelManager.enqueueDownload(context);
+            }
+            log(context, "TRANSCRIPTION_SELECTED_PIPELINE_NOT_READY", segmentId, file, pipelineReason);
             return false;
         }
 
@@ -118,11 +122,15 @@ public final class TranscriptionScheduler {
             log(context, "TRANSCRIPT_CURRENT_ENGINE_AUDIO_RETAINED", segmentId, file, null);
             return false;
         }
-        if (!WhisperModelManager.isReady(context)) {
-            WhisperModelManager.enqueueDownload(context);
-            String reason = WhisperModelManager.isAsrReady(context)
-                    ? "SILERO_VAD_MODEL_MISSING" : "LOCAL_MODEL_MISSING";
-            log(context, "TRANSCRIPTION_WAITING_FOR_LOCAL_MODELS", segmentId, file, reason);
+        TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
+        String pipelineReason = TranscriptionPipelineSettings.unavailableReason(
+                context, pipeline, WhisperModelManager.selectedModelId(context));
+        if (pipelineReason != null) {
+            if ("SILERO_VAD_MODEL_MISSING".equals(pipelineReason)
+                    || "LOCAL_WHISPER_MODEL_MISSING".equals(pipelineReason)) {
+                WhisperModelManager.enqueueDownload(context);
+            }
+            log(context, "TRANSCRIPTION_SELECTED_PIPELINE_NOT_READY", segmentId, file, pipelineReason);
             return false;
         }
 

@@ -208,6 +208,36 @@ object DeepFilterNetSpeechDenoiser {
         }
     }
 
+    @JvmStatic
+    fun denoiseSelected(
+        context: Context,
+        segmentId: String?,
+        source: FloatArray,
+        startsMs: IntArray,
+        endsMs: IntArray,
+        inputSnrProxyDb: Double,
+    ): Result {
+        val result = denoise(context, segmentId, source, startsMs, endsMs, inputSnrProxyDb)
+        val intentionalSkip = result.reason == "snr-clean-enough" ||
+            result.reason == "no-speech-chunks" ||
+            result.reason == "no-valid-speech-ranges"
+        if (!result.applied && !intentionalSkip) {
+            try {
+                AppLogger.event(
+                    context,
+                    "DEEPFILTERNET_SELECTED_FAILED_NO_FALLBACK",
+                    JSONObject()
+                        .put("segmentId", segmentId ?: JSONObject.NULL)
+                        .put("reason", result.reason)
+                        .put("automaticFallback", false)
+                )
+            } catch (_: Throwable) {
+            }
+            throw IllegalStateException("DEEPFILTERNET_SELECTED_FAILED:${result.reason}")
+        }
+        return result
+    }
+
     private fun processRegion(
         deepFilterNet: NativeDeepFilterNet,
         frameBytes: Int,

@@ -29,7 +29,13 @@ public final class LocalWhisperEngine {
     }
 
     public static String engineId(Context context) {
-        return engineId(WhisperModelManager.selectedModelId(context));
+        TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
+        return engineId(context, WhisperModelManager.selectedModelId(context), pipeline);
+    }
+
+    public static String engineId(Context context, String modelId,
+                                  TranscriptionPipelineSettings.Snapshot pipeline) {
+        return engineId(modelId) + "+" + pipeline.signature();
     }
 
     public static String engineId(String modelId) {
@@ -45,6 +51,14 @@ public final class LocalWhisperEngine {
 
     public static synchronized Response transcribe(Context context, File audioFile,
                                                    String modelId) throws Exception {
+        TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
+        return transcribe(context, audioFile, modelId, pipeline);
+    }
+
+    public static synchronized Response transcribe(Context context, File audioFile,
+                                                   String modelId,
+                                                   TranscriptionPipelineSettings.Snapshot pipeline) throws Exception {
+        TranscriptionPipelineSettings.requireRunnable(context, pipeline, modelId);
         String segmentId = TranscriptionScheduler.extractSegmentId(audioFile.getName());
         RealtimeSpeechGateStore.Snapshot gate = segmentId == null
                 ? RealtimeSpeechGateStore.Snapshot.missing()
@@ -67,10 +81,21 @@ public final class LocalWhisperEngine {
             return gateSilenceResponse(context, modelId, gate, prepared);
         }
 
-        VadDiagnostics vad = gate.available && !gate.ranges.isEmpty()
-                ? analyzeVad(context, prepared, gate)
-                : analyzeVad(context, prepared);
-        return transcribePrepared(context, prepared, modelId, vad, gate, false, segmentId);
+        VadDiagnostics vad;
+        if (TranscriptionPipelineSettings.VAD_STREAMING_SILERO.equals(pipeline.vadBackend)) {
+            StreamingVadStore.Snapshot streaming = segmentId == null
+                    ? StreamingVadStore.Snapshot.missing()
+                    : StreamingVadStore.read(context, segmentId);
+            if (!streaming.available || !streaming.complete) {
+                streaming = StreamingVadStore.analyzeOffline(context, prepared.frontEnd.samples);
+            }
+            vad = analyzeStreamingVad(streaming, prepared.durationMs());
+        } else {
+            vad = gate.available && !gate.ranges.isEmpty()
+                    ? analyzeVad(context, prepared, gate)
+                    : analyzeVad(context, prepared);
+        }
+        return transcribePrepared(context, prepared, modelId, vad, gate, false, segmentId, pipeline);
     }
 
     static PreparedAudio prepareAudio(File audioFile) throws Exception {
@@ -204,16 +229,64 @@ public final class LocalWhisperEngine {
         return new VadDiagnostics(json);
     }
 
+    private static VadDiagnostics analyzeStreamingVad(StreamingVadStore.Snapshot streaming,
+                                                       long audioDurationMs) throws Exception {
+        if (streaming == null || !streaming.available) {
+            throw new IllegalStateException("STREAMING_SILERO_RESULT_UNAVAILABLE");
+        }
+        JSONArray segments = new JSONArray();
+        long speechMs = 0L;
+        long lastEndMs = 0L;
+        for (StreamingVadStore.Range range : streaming.ranges) {
+            long start = Math.max(0L, Math.min(audioDurationMs, range.startMs));
+            long end = Math.max(start, Math.min(audioDurationMs, range.endMs));
+            if (end <= start) continue;
+            speechMs += end - start;
+            lastEndMs = Math.max(lastEndMs, end);
+            segments.put(new JSONObject()
+                    .put("index", segments.length())
+                    .put("startMs", start)
+                    .put("endMs", end)
+                    .put("durationMs", end - start));
+        }
+        JSONObject json = new JSONObject()
+                .put("vadInitMs", 0L)
+                .put("vadDetectMs", streaming.detectMs)
+                .put("vadInputMs", streaming.realtime ? 0L : audioDurationMs)
+                .put("vadScope", streaming.realtime ? "streaming-realtime" : "streaming-offline")
+                .put("probabilityCount", 0)
+                .put("meanSpeechProbability", 0.0)
+                .put("maxSpeechProbability", 0.0)
+                .put("aboveThresholdFraction", 0.0)
+                .put("threshold", 0.5)
+                .put("segmentCount", segments.length())
+                .put("segments", segments)
+                .put("totalSpeechMs", speechMs)
+                .put("lastEndMs", lastEndMs)
+                .put("activityGateSource", streaming.source);
+        return new VadDiagnostics(json);
+    }
+
     static Response transcribePrepared(Context context, PreparedAudio prepared, String modelId) throws Exception {
         VadDiagnostics vad = analyzeVad(context, prepared);
+        TranscriptionPipelineSettings.Snapshot comparison = new TranscriptionPipelineSettings.Snapshot(
+                TranscriptionPipelineSettings.ASR_WHISPER_CPU,
+                TranscriptionPipelineSettings.VAD_CANDIDATE_SILERO,
+                TranscriptionPipelineSettings.DENOISE_DEEPFILTER,
+                TranscriptionPipelineSettings.SPEAKER_OFF);
         return transcribePrepared(context, prepared, modelId, vad,
-                RealtimeSpeechGateStore.Snapshot.missing(), false, null);
+                RealtimeSpeechGateStore.Snapshot.missing(), false, null, comparison);
     }
 
     static Response transcribePrepared(Context context, PreparedAudio prepared, String modelId,
                                        VadDiagnostics vad) throws Exception {
+        TranscriptionPipelineSettings.Snapshot comparison = new TranscriptionPipelineSettings.Snapshot(
+                TranscriptionPipelineSettings.ASR_WHISPER_CPU,
+                TranscriptionPipelineSettings.VAD_CANDIDATE_SILERO,
+                TranscriptionPipelineSettings.DENOISE_DEEPFILTER,
+                TranscriptionPipelineSettings.SPEAKER_OFF);
         return transcribePrepared(context, prepared, modelId, vad,
-                RealtimeSpeechGateStore.Snapshot.missing(), false, null);
+                RealtimeSpeechGateStore.Snapshot.missing(), false, null, comparison);
     }
 
     private static Response transcribePrepared(Context context,
@@ -222,7 +295,8 @@ public final class LocalWhisperEngine {
                                                VadDiagnostics vad,
                                                RealtimeSpeechGateStore.Snapshot gate,
                                                boolean skippedByActivityGate,
-                                               String segmentId) throws Exception {
+                                               String segmentId,
+                                               TranscriptionPipelineSettings.Snapshot pipeline) throws Exception {
         WhisperModelManager.ModelSpec spec = WhisperModelManager.modelSpec(modelId);
         if (spec == null) {
             throw new IllegalArgumentException("Unknown model: " + modelId);
@@ -240,32 +314,47 @@ public final class LocalWhisperEngine {
                     gate, skippedByActivityGate);
         }
 
-        if (!WhisperModelManager.isComparisonReady(context, modelId)) {
-            throw new IllegalStateException("Whisper model is not ready: " + modelId);
-        }
+        TranscriptionPipelineSettings.requireRunnable(context, pipeline, modelId);
 
-        // Silero always sees the original 16 kHz signal. Only the already accepted speech chunks
-        // are optionally denoised, and the helper writes them back to the same sample indices.
-        // If DeepFilterNet is unavailable or a chunk cannot be processed, it returns the untouched
-        // source array so transcription still proceeds rather than failing the FIFO item.
-        DeepFilterNetSpeechDenoiser.Result denoise = DeepFilterNetSpeechDenoiser.denoise(
-                context,
-                segmentId,
-                prepared.frontEnd.samples,
-                chunks.startsMs,
-                chunks.endsMs,
-                prepared.frontEnd.snrProxyDb);
-        float[] whisperSamples = denoise.samples;
+        float[] asrSamples = prepared.frontEnd.samples;
+        if (TranscriptionPipelineSettings.DENOISE_DEEPFILTER.equals(pipeline.denoiseBackend)) {
+            DeepFilterNetSpeechDenoiser.Result denoise = DeepFilterNetSpeechDenoiser.denoiseSelected(
+                    context,
+                    segmentId,
+                    prepared.frontEnd.samples,
+                    chunks.startsMs,
+                    chunks.endsMs,
+                    prepared.frontEnd.snrProxyDb);
+            asrSamples = denoise.samples;
+        }
 
         long inferenceStarted = System.currentTimeMillis();
-        String raw = nativeTranscribeDetailed(model.getAbsolutePath(), whisperSamples,
-                chunks.startsMs, chunks.endsMs, LANGUAGE, threads);
-        long inferenceMs = System.currentTimeMillis() - inferenceStarted;
-        if (raw == null) {
-            throw new IllegalStateException("Local Whisper returned null");
+        JSONObject nativeResult;
+        String responseModelId = modelId;
+        String responseModelLabel = spec.label;
+        long responseModelBytes = modelBytes;
+        if (TranscriptionPipelineSettings.ASR_ANDROID_ON_DEVICE.equals(pipeline.asrBackend)) {
+            AndroidOnDeviceAsr.Result androidResult = AndroidOnDeviceAsr.transcribe(
+                    context, asrSamples, chunks.startsMs, chunks.endsMs);
+            nativeResult = new JSONObject()
+                    .put("text", androidResult.text)
+                    .put("segments", androidResult.segments)
+                    .put("modelLoadMs", 0L)
+                    .put("whisperFullMs", -1L)
+                    .put("lastOutputEndMs", androidResult.lastOutputEndMs);
+            responseModelId = "android-on-device-ja-JP";
+            responseModelLabel = "Android on-device ASR";
+            responseModelBytes = 0L;
+        } else {
+            boolean useGpu = TranscriptionPipelineSettings.ASR_WHISPER_VULKAN.equals(pipeline.asrBackend);
+            String raw = nativeTranscribeDetailed(model.getAbsolutePath(), asrSamples,
+                    chunks.startsMs, chunks.endsMs, LANGUAGE, threads, useGpu);
+            if (raw == null) {
+                throw new IllegalStateException("Local Whisper returned null");
+            }
+            nativeResult = new JSONObject(raw);
         }
-
-        JSONObject nativeResult = new JSONObject(raw);
+        long inferenceMs = System.currentTimeMillis() - inferenceStarted;
         String text = nativeResult.optString("text", "").trim();
         JSONArray segments = nativeResult.optJSONArray("segments");
         int segmentCount = segments == null ? 0 : segments.length();
@@ -282,7 +371,7 @@ public final class LocalWhisperEngine {
 
         return new Response(text, prepared.frontEnd.samples.length, threads,
                 prepared.decodeMs, prepared.preprocessMs, inferenceMs, prepared.frontEnd,
-                modelId, spec.label, modelBytes, segmentCount, outputSegmentDurationMs,
+                responseModelId, responseModelLabel, responseModelBytes, segmentCount, outputSegmentDurationMs,
                 segments == null ? new JSONArray() : segments,
                 nativeResult.optLong("modelLoadMs", -1L),
                 nativeResult.optLong("whisperFullMs", -1L),
@@ -344,7 +433,7 @@ public final class LocalWhisperEngine {
 
     private static native String nativeTranscribeDetailed(String modelPath, float[] pcm,
                                                            int[] chunkStartsMs, int[] chunkEndsMs,
-                                                           String language, int threads);
+                                                           String language, int threads, boolean useGpu);
 
     static final class PreparedAudio {
         final AudioPreprocessor.Result frontEnd;

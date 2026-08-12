@@ -142,7 +142,8 @@ public final class TranscriptionQueueService extends Service {
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             String selectedModelId = WhisperModelManager.selectedModelId(context);
-            String selectedEngineId = LocalWhisperEngine.engineId(selectedModelId);
+            TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
+            String selectedEngineId = LocalWhisperEngine.engineId(context, selectedModelId, pipeline);
 
             if (!isStillQueued(context, segmentId)) {
                 log(context, "TRANSCRIPTION_DIRECT_QUEUE_ITEM_SKIPPED", segmentId, audioFile,
@@ -168,14 +169,17 @@ public final class TranscriptionQueueService extends Service {
                         null, forceRetranscribe, attempt, null, selectedModelId, selectedEngineId);
                 return;
             }
-            if (!WhisperModelManager.isComparisonReady(context, selectedModelId)) {
-                WhisperModelManager.enqueueModelDownload(context, selectedModelId);
-                String reason = WhisperModelManager.isModelReady(context, selectedModelId)
-                        ? "SILERO_VAD_MODEL_MISSING" : "LOCAL_MODEL_MISSING";
+            String pipelineReason = TranscriptionPipelineSettings.unavailableReason(
+                    context, pipeline, selectedModelId);
+            if (pipelineReason != null) {
+                boolean modelWait = "SILERO_VAD_MODEL_MISSING".equals(pipelineReason)
+                        || "LOCAL_WHISPER_MODEL_MISSING".equals(pipelineReason);
+                if (modelWait) WhisperModelManager.enqueueModelDownload(context, selectedModelId);
                 SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
-                        audioFile.lastModified(), System.currentTimeMillis(), "READY", reason);
-                log(context, "TRANSCRIPTION_DIRECT_MODELS_MISSING", segmentId, audioFile,
-                        reason, forceRetranscribe, attempt, null,
+                        audioFile.lastModified(), System.currentTimeMillis(),
+                        modelWait ? "READY" : "FAILED", pipelineReason);
+                log(context, "TRANSCRIPTION_SELECTED_PIPELINE_NOT_READY", segmentId, audioFile,
+                        pipelineReason, forceRetranscribe, attempt, null,
                         selectedModelId, selectedEngineId);
                 return;
             }
@@ -207,13 +211,18 @@ public final class TranscriptionQueueService extends Service {
                     SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
                             audioFile.lastModified(), startedAt, "TRANSCRIBING",
                             forceRetranscribe ? "MANUAL_DIRECT_TRANSCRIBING" : "LOCAL_DIRECT_TRANSCRIBING");
-                    promote("文字起こし中: " + modelLabel(selectedModelId));
+                    promote("文字起こし中: " + TranscriptionPipelineSettings.asrLabel(pipeline.asrBackend));
                     log(context, "TRANSCRIPTION_DIRECT_STARTED", segmentId, audioFile,
                             null, forceRetranscribe, attempt, null,
                             selectedModelId, selectedEngineId);
 
                     LocalWhisperEngine.Response response =
-                            LocalWhisperEngine.transcribe(context, audioFile, selectedModelId);
+                            LocalWhisperEngine.transcribe(context, audioFile, selectedModelId, pipeline);
+                    org.json.JSONArray savedSegments = response.skippedNoSpeech
+                            ? new org.json.JSONArray()
+                            : TranscriptionPipelineSettings.SPEAKER_SHERPA_CPU.equals(pipeline.speakerBackend)
+                                ? SpeakerIdentifier.annotate(context, audioFile, response.segments)
+                                : new org.json.JSONArray(response.segments.toString());
                     if (!TranscriptionResetManager.isCurrentGeneration(context, generation)) {
                         SegmentRepository.appendWithoutNotify(context, segmentId, audioFile, 0L,
                                 System.currentTimeMillis(), "READY", null);
@@ -224,7 +233,7 @@ public final class TranscriptionQueueService extends Service {
                     }
 
                     TranscriptionRepository.save(context, segmentId, audioFile,
-                            selectedEngineId, response.text, response.segments);
+                            selectedEngineId, response.text, savedSegments);
                     SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
                             audioFile.lastModified(), System.currentTimeMillis(), "TRANSCRIBED", null);
 
@@ -242,6 +251,11 @@ public final class TranscriptionQueueService extends Service {
                     metrics.put("snrProxyDb", response.snrProxyDb);
                     metrics.put("appliedGainDb", response.appliedGainDb);
                     metrics.put("runner", "foreground-single-drain");
+                    metrics.put("asrBackend", pipeline.asrBackend);
+                    metrics.put("vadBackend", pipeline.vadBackend);
+                    metrics.put("denoiseBackend", pipeline.denoiseBackend);
+                    metrics.put("speakerBackend", pipeline.speakerBackend);
+                    metrics.put("automaticFallback", false);
                     log(context, "TRANSCRIPTION_DIRECT_SAVED", segmentId, audioFile,
                             null, forceRetranscribe, attempt, metrics,
                             selectedModelId, selectedEngineId);

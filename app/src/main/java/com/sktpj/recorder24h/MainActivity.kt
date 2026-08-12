@@ -109,6 +109,7 @@ import com.sktpj.recorder24h.storage.StoragePolicy
 import com.sktpj.recorder24h.transcription.LocalWhisperEngine
 import com.sktpj.recorder24h.transcription.TranscriptionRepository
 import com.sktpj.recorder24h.transcription.TranscriptionResetManager
+import com.sktpj.recorder24h.transcription.TranscriptionPipelineSettings
 import com.sktpj.recorder24h.transcription.TranscriptionScheduler
 import com.sktpj.recorder24h.transcription.WhisperModelManager
 import com.sktpj.recorder24h.ui.SegmentHistoryRepository
@@ -136,7 +137,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         AppLogger.event(this, "MAIN_ACTIVITY_CREATED")
         val resetApplied = TranscriptionResetManager.applyV049ResetIfNeeded(this)
-        if (WhisperModelManager.isReady(this)) {
+        if (TranscriptionPipelineSettings.isSelectedPipelineReady(this, WhisperModelManager.selectedModelId(this))) {
             if (resetApplied) TranscriptionScheduler.enqueueExistingAfterReset(this)
             else TranscriptionScheduler.enqueueExisting(this)
         }
@@ -424,7 +425,7 @@ private fun RecorderApp(
                                 Toast.makeText(context, "Whisper large-v3 Q5モデルのダウンロードを開始します", Toast.LENGTH_SHORT).show()
                             },
                             onRetryTranscription = {
-                                if (!WhisperModelManager.isReady(context)) {
+                                if (!TranscriptionPipelineSettings.isSelectedPipelineReady(context, WhisperModelManager.selectedModelId(context))) {
                                     Toast.makeText(context, "先にWhisperモデルを準備してください", Toast.LENGTH_SHORT).show()
                                 } else {
                                     val count = TranscriptionScheduler.enqueueExisting(context)
@@ -661,6 +662,7 @@ private fun TranscriptionCard(dashboard: DashboardSnapshot, onOpenHistory: () ->
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("ローカル文字起こし", style = MaterialTheme.typography.titleLarge)
+            Text("${TranscriptionPipelineSettings.asrLabel(TranscriptionPipelineSettings.snapshot(context).asrBackend)} / ${TranscriptionPipelineSettings.vadLabel(TranscriptionPipelineSettings.snapshot(context).vadBackend)}", style = MaterialTheme.typography.bodySmall)
             Text("${LocalWhisperEngine.engineId(context)} / ${selectedModel?.label ?: WhisperModelManager.selectedModelId(context)}")
             StatusPill(
                 if (dashboard.modelReady) "モデル準備済み" else if (dashboard.modelBytes > 0L) "モデル取得中" else "モデル未準備",
@@ -1077,7 +1079,7 @@ private fun TranscriptCard(record: SegmentRecord) {
                     if (queued) {
                         AppLogger.event(context, "UI_MANUAL_RETRANSCRIPTION_REQUESTED")
                         Toast.makeText(context, "再文字起こしを登録しました", Toast.LENGTH_SHORT).show()
-                    } else if (!WhisperModelManager.isReady(context)) {
+                    } else if (!TranscriptionPipelineSettings.isSelectedPipelineReady(context, WhisperModelManager.selectedModelId(context))) {
                         Toast.makeText(context, "モデルを準備中です。準備後にもう一度実行してください", Toast.LENGTH_LONG).show()
                     } else {
                         Toast.makeText(context, "再文字起こしを登録できませんでした", Toast.LENGTH_SHORT).show()
@@ -1328,7 +1330,7 @@ private fun readDashboard(context: Context): DashboardSnapshot {
         audioBytes = StoragePolicy.audioBytes(context),
         appBytes = StoragePolicy.appDataBytes(context),
         deviceFreeBytes = context.filesDir.usableSpace,
-        modelReady = WhisperModelManager.isReady(context),
+        modelReady = TranscriptionPipelineSettings.isSelectedPipelineReady(context, WhisperModelManager.selectedModelId(context)),
         modelBytes = WhisperModelManager.downloadedBytes(context),
         pendingAudio = TranscriptionScheduler.pendingAudioCount(context),
         transcriptCount = TranscriptionRepository.count(context)

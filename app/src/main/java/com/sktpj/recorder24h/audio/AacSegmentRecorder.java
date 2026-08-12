@@ -19,6 +19,7 @@ import com.sktpj.recorder24h.storage.RecorderStateStore;
 import com.sktpj.recorder24h.storage.SegmentRepository;
 import com.sktpj.recorder24h.storage.StoragePolicy;
 import com.sktpj.recorder24h.transcription.RealtimeSpeechGateStore;
+import com.sktpj.recorder24h.transcription.StreamingVadStore;
 import com.sktpj.recorder24h.util.AppLogger;
 
 import org.json.JSONArray;
@@ -98,6 +99,7 @@ public final class AacSegmentRecorder {
             registerRecordingCallback(audioRecord);
 
             RealtimeSpeechGateStore.resetStream();
+            StreamingVadStore.resetStream(context);
             encoder.start();
             audioRecord.startRecording();
             recordCurrentRoutedInput("RECORDING_STARTED");
@@ -258,6 +260,7 @@ public final class AacSegmentRecorder {
         lastAudioReadMs = System.currentTimeMillis();
         long ptsUs = pcmPresentationTimeUs();
         RealtimeSpeechGateStore.observePcm16(pcm, read, ptsUs);
+        StreamingVadStore.observePcm16(context, pcm, read, ptsUs);
 
         inputBuffer.clear();
         inputBuffer.put(pcm, 0, read);
@@ -382,6 +385,13 @@ public final class AacSegmentRecorder {
         if ("READY".equals(status)) {
             // Persist before publishing READY so a worker can immediately use the realtime ranges.
             RealtimeSpeechGateStore.persistSegment(
+                    context,
+                    segmentId,
+                    segmentBasePtsUs,
+                    segmentEndPtsUs,
+                    startedAt,
+                    endedAt);
+            StreamingVadStore.persistSegment(
                     context,
                     segmentId,
                     segmentBasePtsUs,
