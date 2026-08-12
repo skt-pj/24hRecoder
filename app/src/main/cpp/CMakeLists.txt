@@ -19,6 +19,9 @@ set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
 set(WHISPER_CURL OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+# Build both CPU and Vulkan backends into the same native library. Runtime selection is
+# explicit in app settings; CPU remains available and is never selected as an automatic fallback.
+set(GGML_VULKAN ON CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
         whisper_cpp
@@ -27,7 +30,9 @@ FetchContent_MakeAvailable(whisper_cpp)
 
 add_library(whisper_jni SHARED whisper_jni.cpp)
 target_compile_features(whisper_jni PRIVATE cxx_std_17)
-target_include_directories(whisper_jni PRIVATE ${whisper_cpp_SOURCE_DIR}/include)
+target_include_directories(whisper_jni PRIVATE
+        ${whisper_cpp_SOURCE_DIR}/include
+        ${whisper_cpp_SOURCE_DIR}/ggml/include)
 
 find_library(log_lib log)
 target_link_libraries(whisper_jni PRIVATE whisper ${log_lib})
