@@ -102,8 +102,7 @@ public final class FullStreamingTranscriptionCoordinator {
                 return;
             }
             ensureBoundLocked();
-            sendOrQueueLocked(configMessage(StreamingTranscriptionService.MSG_RESET, 0L,
-                    activePipeline, activeModelId));
+            sendResetLocked(0L, activePipeline, activeModelId);
             logLocked("FULL_STREAMING_RECORDER_SESSION_STARTED", null);
         }
     }
@@ -160,18 +159,29 @@ public final class FullStreamingTranscriptionCoordinator {
             String oldModelId = activeModelId == null
                     ? WhisperModelManager.selectedModelId(appContext) : activeModelId;
             boolean oldLive = TranscriptionPipelineSettings.isLiveStreaming(oldPipeline);
+            boolean oldFailed = currentFailed;
 
             TranscriptionPipelineSettings.Snapshot nextPipeline = TranscriptionPipelineSettings.snapshot(appContext);
             String nextModelId = WhisperModelManager.selectedModelId(appContext);
+            boolean nextLive = TranscriptionPipelineSettings.isLiveStreaming(nextPipeline);
+            String nextReason = nextLive
+                    ? TranscriptionPipelineSettings.unavailableReason(appContext, nextPipeline, nextModelId)
+                    : null;
 
             if (oldLive) {
                 FullStreamingStateStore.markOwned(appContext, segmentId, oldPipeline, oldModelId,
                         startedAtMs, endedAtMs);
-                if (currentFailed) {
+                if (oldFailed) {
                     String reason = currentFailure == null ? "FULL_STREAMING_RUNTIME_FAILED" : currentFailure;
                     FullStreamingStateStore.markFailed(appContext, segmentId,
                             LocalWhisperEngine.engineId(appContext, oldModelId, oldPipeline), reason);
                     markFailedWhenPublished(appContext, segmentId, reason);
+                    // A failed segment does not poison the next segment forever. Starting the next
+                    // selected live pipeline is an explicit new session, not a backend fallback.
+                    if (nextLive && nextReason == null) {
+                        ensureBoundLocked();
+                        sendResetLocked(segmentEndPtsUs, nextPipeline, nextModelId);
+                    }
                 } else {
                     ensureBoundLocked();
                     Message boundary = Message.obtain(null, StreamingTranscriptionService.MSG_BOUNDARY);
@@ -186,33 +196,37 @@ public final class FullStreamingTranscriptionCoordinator {
                     boundary.setData(data);
                     sendOrQueueLocked(boundary);
                 }
-            } else if (TranscriptionPipelineSettings.isLiveStreaming(nextPipeline)) {
-                String nextReason = TranscriptionPipelineSettings.unavailableReason(appContext, nextPipeline, nextModelId);
-                if (nextReason == null) {
-                    ensureBoundLocked();
-                    sendOrQueueLocked(configMessage(StreamingTranscriptionService.MSG_RESET,
-                            segmentEndPtsUs, nextPipeline, nextModelId));
-                }
+            } else if (nextLive && nextReason == null) {
+                ensureBoundLocked();
+                sendResetLocked(segmentEndPtsUs, nextPipeline, nextModelId);
             }
 
             activePipeline = nextPipeline;
             activeModelId = nextModelId;
             currentFailed = false;
             currentFailure = null;
-            if (TranscriptionPipelineSettings.isLiveStreaming(nextPipeline)) {
-                String reason = TranscriptionPipelineSettings.unavailableReason(appContext, nextPipeline, nextModelId);
-                if (reason != null) failLocked(reason, null);
+            if (nextLive && nextReason != null) {
+                failLocked(nextReason, null);
             }
             try {
                 JSONObject details = new JSONObject()
                         .put("segmentId", segmentId)
                         .put("oldPipeline", oldPipeline.toJson())
                         .put("nextPipeline", nextPipeline.toJson())
+                        .put("oldFailed", oldFailed)
+                        .put("nextRunnable", nextReason == null)
                         .put("automaticFallback", false);
                 AppLogger.event(appContext, "FULL_STREAMING_SEGMENT_BOUNDARY", details);
             } catch (Exception ignored) {
             }
         }
+    }
+
+    private static void sendResetLocked(long basePtsUs,
+                                        TranscriptionPipelineSettings.Snapshot pipeline,
+                                        String modelId) {
+        sendOrQueueLocked(configMessage(StreamingTranscriptionService.MSG_RESET,
+                basePtsUs, pipeline, modelId));
     }
 
     private static Message configMessage(int what, long basePtsUs,
