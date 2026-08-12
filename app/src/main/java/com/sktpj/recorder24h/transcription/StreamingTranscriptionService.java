@@ -197,12 +197,17 @@ public final class StreamingTranscriptionService extends Service {
                 TranscriptionPipelineSettings.requireRunnable(
                         this, accumulator.config.snapshot, accumulator.config.modelId);
                 long loadMs = 0L;
-                if (TranscriptionPipelineSettings.ASR_ANDROID_ON_DEVICE.equals(accumulator.config.asrBackend)) {
-                    LiveWhisperSession.close();
-                } else {
+                boolean persistentWhisper = !TranscriptionPipelineSettings.ASR_ANDROID_ON_DEVICE.equals(accumulator.config.asrBackend)
+                        && TranscriptionPipelineSettings.LIVE_WHISPER_PERSISTENT.equals(accumulator.config.liveWhisperRoute);
+                if (persistentWhisper) {
                     loadMs = LiveWhisperSession.open(this, accumulator.config.modelId, accumulator.config.snapshot);
+                } else {
+                    // Standard-per-utterance deliberately has no persistent live context.
+                    LiveWhisperSession.close();
                 }
-                JSONObject details = accumulator.config.toJson().put("modelLoadMs", loadMs);
+                JSONObject details = accumulator.config.toJson()
+                        .put("modelLoadMs", loadMs)
+                        .put("persistentLiveContext", persistentWhisper);
                 appendMemory(details, "backend-ready");
                 setProcessStage("backend-ready:" + accumulator.config.asrBackend);
                 log("FULL_STREAMING_BACKEND_READY", details);
@@ -227,6 +232,7 @@ public final class StreamingTranscriptionService extends Service {
                         .put("endPtsUs", globalEndUs)
                         .put("textChars", result.text.length())
                         .put("inferenceMs", result.inferenceMs)
+                        .put("liveWhisperRoute", accumulator.config.liveWhisperRoute)
                         .put("queueDepth", pendingInference.get()));
             } catch (Throwable error) {
                 // Partial text is preview-only. Failure does not change backend and does not poison
@@ -270,6 +276,7 @@ public final class StreamingTranscriptionService extends Service {
                         .put("endPtsUs", endUs)
                         .put("textChars", result.text.length())
                         .put("inferenceMs", result.inferenceMs)
+                        .put("liveWhisperRoute", accumulator.config.liveWhisperRoute)
                         .put("queueDepth", pendingInference.get()));
             } catch (Throwable error) {
                 markAccumulatorFailed(accumulator, "FINAL_ASR_FAILED", error);
@@ -314,21 +321,35 @@ public final class StreamingTranscriptionService extends Service {
             text = android.text;
             segments = new JSONArray(android.segments.toString());
         } else {
-            setProcessStage("whisper-begin:" + accumulator.config.asrBackend + ":" + durationMs);
+            String liveRoute = accumulator.config.liveWhisperRoute;
+            setProcessStage("whisper-begin:" + accumulator.config.asrBackend + ":" + liveRoute + ":" + durationMs);
             log("FULL_STREAMING_WHISPER_NATIVE_BEGIN", memoryDetails("whisper-native-begin")
                     .put("durationMs", durationMs)
                     .put("partial", partial)
-                    .put("backend", accumulator.config.asrBackend));
-            LiveWhisperSession.Result whisper = LiveWhisperSession.transcribe(asrSamples);
-            setProcessStage("whisper-end:" + accumulator.config.asrBackend + ":" + durationMs);
+                    .put("backend", accumulator.config.asrBackend)
+                    .put("liveWhisperRoute", liveRoute));
+            long modelLoadMs = -1L;
+            if (TranscriptionPipelineSettings.LIVE_WHISPER_POSTPROCESS_NATIVE.equals(liveRoute)) {
+                PostprocessWhisperLiveRunner.Result whisper = PostprocessWhisperLiveRunner.transcribe(
+                        this, asrSamples, accumulator.config.modelId, accumulator.config.snapshot);
+                text = whisper.text;
+                segments = new JSONArray(whisper.segments.toString());
+                whisperFullMs = whisper.whisperFullMs;
+                modelLoadMs = whisper.modelLoadMs;
+            } else {
+                LiveWhisperSession.Result whisper = LiveWhisperSession.transcribe(asrSamples);
+                text = whisper.text;
+                segments = new JSONArray(whisper.segments.toString());
+                whisperFullMs = whisper.whisperFullMs;
+            }
+            setProcessStage("whisper-end:" + accumulator.config.asrBackend + ":" + liveRoute + ":" + durationMs);
             log("FULL_STREAMING_WHISPER_NATIVE_END", memoryDetails("whisper-native-end")
                     .put("durationMs", durationMs)
                     .put("partial", partial)
                     .put("backend", accumulator.config.asrBackend)
-                    .put("whisperFullMs", whisper.whisperFullMs));
-            text = whisper.text;
-            segments = new JSONArray(whisper.segments.toString());
-            whisperFullMs = whisper.whisperFullMs;
+                    .put("liveWhisperRoute", liveRoute)
+                    .put("modelLoadMs", modelLoadMs)
+                    .put("whisperFullMs", whisperFullMs));
         }
 
         if (!partial && TranscriptionPipelineSettings.SPEAKER_SHERPA_CPU.equals(accumulator.config.speakerBackend)) {
@@ -581,28 +602,31 @@ public final class StreamingTranscriptionService extends Service {
     private static final class PipelineConfig {
         final String mode;
         final String asrBackend;
+        final String liveWhisperRoute;
         final String vadBackend;
         final String denoiseBackend;
         final String speakerBackend;
         final String modelId;
         final TranscriptionPipelineSettings.Snapshot snapshot;
 
-        PipelineConfig(String mode, String asrBackend, String vadBackend,
+        PipelineConfig(String mode, String asrBackend, String liveWhisperRoute, String vadBackend,
                        String denoiseBackend, String speakerBackend, String modelId) {
             this.mode = mode;
             this.asrBackend = asrBackend;
+            this.liveWhisperRoute = liveWhisperRoute;
             this.vadBackend = vadBackend;
             this.denoiseBackend = denoiseBackend;
             this.speakerBackend = speakerBackend;
             this.modelId = modelId;
             this.snapshot = new TranscriptionPipelineSettings.Snapshot(
-                    mode, asrBackend, vadBackend, denoiseBackend, speakerBackend);
+                    mode, asrBackend, liveWhisperRoute, vadBackend, denoiseBackend, speakerBackend);
         }
 
         static PipelineConfig fromBundle(Bundle data, String prefix) {
             return new PipelineConfig(
                     data.getString(prefix + "Mode", TranscriptionPipelineSettings.MODE_SEGMENT_POSTPROCESS),
                     data.getString(prefix + "Asr", TranscriptionPipelineSettings.ASR_WHISPER_CPU),
+                    data.getString(prefix + "LiveWhisperRoute", TranscriptionPipelineSettings.LIVE_WHISPER_PERSISTENT),
                     data.getString(prefix + "Vad", TranscriptionPipelineSettings.VAD_CANDIDATE_SILERO),
                     data.getString(prefix + "Denoise", TranscriptionPipelineSettings.DENOISE_DEEPFILTER),
                     data.getString(prefix + "Speaker", TranscriptionPipelineSettings.SPEAKER_SHERPA_CPU),
@@ -680,6 +704,7 @@ public final class StreamingTranscriptionService extends Service {
                         .put("durationMs", utteranceDurationMs)
                         .put("text", result.text)
                         .put("asrBackend", config.asrBackend)
+                        .put("liveWhisperRoute", config.liveWhisperRoute)
                         .put("streamingFinal", true));
                 return;
             }
@@ -695,6 +720,7 @@ public final class StreamingTranscriptionService extends Service {
                         .put("endMs", Math.max(mappedStart, mappedEnd))
                         .put("durationMs", Math.max(0L, mappedEnd - mappedStart))
                         .put("asrBackend", config.asrBackend)
+                        .put("liveWhisperRoute", config.liveWhisperRoute)
                         .put("streamingFinal", true));
             }
         }

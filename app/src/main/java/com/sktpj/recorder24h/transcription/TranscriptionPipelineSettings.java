@@ -33,6 +33,9 @@ public final class TranscriptionPipelineSettings {
     public static final String ASR_WHISPER_VULKAN = "whisper-vulkan";
     public static final String ASR_ANDROID_ON_DEVICE = "android-on-device";
 
+    public static final String LIVE_WHISPER_PERSISTENT = "persistent-live";
+    public static final String LIVE_WHISPER_POSTPROCESS_NATIVE = "postprocess-native-per-utterance";
+
     public static final String VAD_CANDIDATE_SILERO = "candidate-silero";
     public static final String VAD_STREAMING_SILERO = "streaming-silero";
 
@@ -47,6 +50,7 @@ public final class TranscriptionPipelineSettings {
     private static final String PREFS = "transcription_pipeline_settings";
     private static final String KEY_MODE = "execution_mode";
     private static final String KEY_ASR = "asr_backend";
+    private static final String KEY_LIVE_WHISPER_ROUTE = "live_whisper_route";
     private static final String KEY_VAD = "vad_backend";
     private static final String KEY_DENOISE = "denoise_backend";
     private static final String KEY_SPEAKER = "speaker_backend";
@@ -76,26 +80,30 @@ public final class TranscriptionPipelineSettings {
     }
 
     public static void setExecutionMode(Context context, String value) {
-        update(context, normalizeMode(value), null, null, null, null);
+        update(context, normalizeMode(value), null, null, null, null, null);
     }
 
     public static void setAsr(Context context, String value) {
-        update(context, null, normalizeAsr(value), null, null, null);
+        update(context, null, normalizeAsr(value), null, null, null, null);
+    }
+
+    public static void setLiveWhisperRoute(Context context, String value) {
+        update(context, null, null, normalizeLiveWhisperRoute(value), null, null, null);
     }
 
     public static void setVad(Context context, String value) {
-        update(context, null, null, normalizeVad(value), null, null);
+        update(context, null, null, null, normalizeVad(value), null, null);
     }
 
     public static void setDenoise(Context context, String value) {
-        update(context, null, null, null, normalizeDenoise(value), null);
+        update(context, null, null, null, null, normalizeDenoise(value), null);
     }
 
     public static void setSpeaker(Context context, String value) {
-        update(context, null, null, null, null, normalizeSpeaker(value));
+        update(context, null, null, null, null, null, normalizeSpeaker(value));
     }
 
-    private static void update(Context context, String mode, String asr, String vad,
+    private static void update(Context context, String mode, String asr, String liveWhisperRoute, String vad,
                                String denoise, String speaker) {
         Context app = context.getApplicationContext();
         synchronized (LOCK) {
@@ -103,6 +111,7 @@ public final class TranscriptionPipelineSettings {
             Snapshot next = new Snapshot(
                     mode == null ? current.executionMode : mode,
                     asr == null ? current.asrBackend : asr,
+                    liveWhisperRoute == null ? current.liveWhisperRoute : liveWhisperRoute,
                     vad == null ? current.vadBackend : vad,
                     denoise == null ? current.denoiseBackend : denoise,
                     speaker == null ? current.speakerBackend : speaker);
@@ -110,6 +119,7 @@ public final class TranscriptionPipelineSettings {
             app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                     .putString(KEY_MODE, next.executionMode)
                     .putString(KEY_ASR, next.asrBackend)
+                    .putString(KEY_LIVE_WHISPER_ROUTE, next.liveWhisperRoute)
                     .putString(KEY_VAD, next.vadBackend)
                     .putString(KEY_DENOISE, next.denoiseBackend)
                     .putString(KEY_SPEAKER, next.speakerBackend)
@@ -122,6 +132,7 @@ public final class TranscriptionPipelineSettings {
         return new Snapshot(
                 normalizeMode(prefs.getString(KEY_MODE, MODE_SEGMENT_POSTPROCESS)),
                 normalizeAsr(prefs.getString(KEY_ASR, ASR_WHISPER_CPU)),
+                normalizeLiveWhisperRoute(prefs.getString(KEY_LIVE_WHISPER_ROUTE, LIVE_WHISPER_PERSISTENT)),
                 normalizeVad(prefs.getString(KEY_VAD, VAD_CANDIDATE_SILERO)),
                 normalizeDenoise(prefs.getString(KEY_DENOISE, DENOISE_DEEPFILTER)),
                 normalizeSpeaker(prefs.getString(KEY_SPEAKER, SPEAKER_SHERPA_CPU)));
@@ -131,6 +142,7 @@ public final class TranscriptionPipelineSettings {
         return new Snapshot(
                 normalizeMode(row.optString("executionMode", MODE_SEGMENT_POSTPROCESS)),
                 normalizeAsr(row.optString("asrBackend", ASR_WHISPER_CPU)),
+                normalizeLiveWhisperRoute(row.optString("liveWhisperRoute", LIVE_WHISPER_PERSISTENT)),
                 normalizeVad(row.optString("vadBackend", VAD_CANDIDATE_SILERO)),
                 normalizeDenoise(row.optString("denoiseBackend", DENOISE_DEEPFILTER)),
                 normalizeSpeaker(row.optString("speakerBackend", SPEAKER_SHERPA_CPU)));
@@ -139,7 +151,7 @@ public final class TranscriptionPipelineSettings {
     private static void writeSnapshotLocked(Context app, Snapshot snapshot) {
         JSONObject row = snapshot.toJson();
         try {
-            row.put("schemaVersion", 1);
+            row.put("schemaVersion", 2);
             row.put("updatedAtMs", System.currentTimeMillis());
         } catch (Exception ignored) {
         }
@@ -236,6 +248,8 @@ public final class TranscriptionPipelineSettings {
             json.put("deepFilterNetPackaged", true);
             json.put("speakerSherpaCpu", true);
             json.put("fullStreaming", true);
+            json.put("liveWhisperPersistent", true);
+            json.put("liveWhisperPostprocessNativePerUtterance", true);
             json.put("settingsTransport", "atomic-json-cross-process");
             json.put("automaticFallback", false);
             json.put("selected", snapshot(context).toJson());
@@ -255,6 +269,11 @@ public final class TranscriptionPipelineSettings {
             case ASR_ANDROID_ON_DEVICE: return "Android 端末内ASR";
             default: return "Whisper CPU";
         }
+    }
+
+    public static String liveWhisperRouteLabel(String value) {
+        return LIVE_WHISPER_POSTPROCESS_NATIVE.equals(normalizeLiveWhisperRoute(value))
+                ? "通常JNI（発話ごとロード）" : "ライブ専用常駐";
     }
 
     public static String vadLabel(String value) {
@@ -281,6 +300,11 @@ public final class TranscriptionPipelineSettings {
         return ASR_WHISPER_CPU;
     }
 
+    private static String normalizeLiveWhisperRoute(String value) {
+        return LIVE_WHISPER_POSTPROCESS_NATIVE.equals(value)
+                ? LIVE_WHISPER_POSTPROCESS_NATIVE : LIVE_WHISPER_PERSISTENT;
+    }
+
     private static String normalizeVad(String value) {
         return VAD_STREAMING_SILERO.equals(value) ? VAD_STREAMING_SILERO : VAD_CANDIDATE_SILERO;
     }
@@ -296,18 +320,27 @@ public final class TranscriptionPipelineSettings {
     public static final class Snapshot {
         public final String executionMode;
         public final String asrBackend;
+        public final String liveWhisperRoute;
         public final String vadBackend;
         public final String denoiseBackend;
         public final String speakerBackend;
 
         Snapshot(String asrBackend, String vadBackend, String denoiseBackend, String speakerBackend) {
-            this(MODE_SEGMENT_POSTPROCESS, asrBackend, vadBackend, denoiseBackend, speakerBackend);
+            this(MODE_SEGMENT_POSTPROCESS, asrBackend, LIVE_WHISPER_PERSISTENT,
+                    vadBackend, denoiseBackend, speakerBackend);
         }
 
         Snapshot(String executionMode, String asrBackend, String vadBackend,
                  String denoiseBackend, String speakerBackend) {
+            this(executionMode, asrBackend, LIVE_WHISPER_PERSISTENT,
+                    vadBackend, denoiseBackend, speakerBackend);
+        }
+
+        Snapshot(String executionMode, String asrBackend, String liveWhisperRoute, String vadBackend,
+                 String denoiseBackend, String speakerBackend) {
             this.executionMode = normalizeMode(executionMode);
             this.asrBackend = normalizeAsr(asrBackend);
+            this.liveWhisperRoute = normalizeLiveWhisperRoute(liveWhisperRoute);
             this.vadBackend = normalizeVad(vadBackend);
             this.denoiseBackend = normalizeDenoise(denoiseBackend);
             this.speakerBackend = normalizeSpeaker(speakerBackend);
@@ -321,7 +354,11 @@ public final class TranscriptionPipelineSettings {
             // 0.7.15 used exactly the legacy signature above. Keep it byte-for-byte for retained
             // postprocess mode so installing 0.7.16 does not invalidate/requeue old transcripts.
             if (MODE_SEGMENT_POSTPROCESS.equals(executionMode)) return legacy;
-            return "mode=" + executionMode + "+" + legacy;
+            // Preserve the exact 0.7.16-0.7.20 live signature for the existing persistent route.
+            if (LIVE_WHISPER_PERSISTENT.equals(liveWhisperRoute)) {
+                return "mode=" + executionMode + "+" + legacy;
+            }
+            return "mode=" + executionMode + "+liveWhisperRoute=" + liveWhisperRoute + "+" + legacy;
         }
 
         public JSONObject toJson() {
@@ -329,6 +366,7 @@ public final class TranscriptionPipelineSettings {
             try {
                 json.put("executionMode", executionMode);
                 json.put("asrBackend", asrBackend);
+                json.put("liveWhisperRoute", liveWhisperRoute);
                 json.put("vadBackend", vadBackend);
                 json.put("denoiseBackend", denoiseBackend);
                 json.put("speakerBackend", speakerBackend);

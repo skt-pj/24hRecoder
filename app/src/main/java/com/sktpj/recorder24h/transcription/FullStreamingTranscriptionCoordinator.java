@@ -245,6 +245,7 @@ public final class FullStreamingTranscriptionCoordinator {
                                     String modelId) {
         data.putString(prefix + "Mode", pipeline.executionMode);
         data.putString(prefix + "Asr", pipeline.asrBackend);
+        data.putString(prefix + "LiveWhisperRoute", pipeline.liveWhisperRoute);
         data.putString(prefix + "Vad", pipeline.vadBackend);
         data.putString(prefix + "Denoise", pipeline.denoiseBackend);
         data.putString(prefix + "Speaker", pipeline.speakerBackend);

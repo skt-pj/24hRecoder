@@ -461,7 +461,7 @@ public final class LocalWhisperEngine {
 
     private static native void nativeSetPostprocessCancellationGeneration(long generation);
 
-    private static native String nativeTranscribeDetailed(String modelPath, float[] pcm,
+    static native String nativeTranscribeDetailed(String modelPath, float[] pcm,
                                                            int[] chunkStartsMs, int[] chunkEndsMs,
                                                            String language, int threads, boolean useGpu,
                                                            long cancellationGeneration);
