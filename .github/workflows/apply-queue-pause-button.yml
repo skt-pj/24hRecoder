@@ -1,0 +1,32 @@
+name: Apply queue pause button patch
+
+on:
+  push:
+    branches:
+      - agent/pause-backlog-during-live-0.7.17
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare existing 0.7.17 bump for patch
+        run: |
+          sed -i 's/versionCode 1017/versionCode 1016/' app/build.gradle
+          sed -i "s/versionName '0.7.17'/versionName '0.7.16'/" app/build.gradle
+          sed -i '/While full live streaming is selected, the retained postprocess backlog stays queued but does not execute/d' app/build.gradle
+      - name: Apply explicit pause implementation
+        run: python .github/scripts/apply_queue_pause.py
+      - name: Commit app changes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app
+          git commit -m 'Add explicit transcription queue pause and resume'
+          git push origin HEAD:agent/pause-backlog-during-live-0.7.17
