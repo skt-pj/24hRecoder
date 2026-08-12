@@ -220,7 +220,16 @@ public final class StreamingTranscriptionService extends Service {
                         .put("inferenceMs", result.inferenceMs)
                         .put("queueDepth", pendingInference.get()));
             } catch (Throwable error) {
-                markAccumulatorFailed(accumulator, "PARTIAL_ASR_FAILED", error);
+                // Partial text is preview-only. Failure does not change backend and does not poison
+                // the authoritative final pass; the next final uses the same selected pipeline.
+                writeState("WAITING", "", accumulator.latestFinalText, accumulator, null);
+                log("FULL_STREAMING_PARTIAL_FAILED", details(
+                        "startPtsUs", globalStartUs,
+                        "endPtsUs", globalEndUs,
+                        "error", error.getClass().getSimpleName(),
+                        "message", safeMessage(error),
+                        "finalStillRequired", true,
+                        "automaticFallback", false));
             }
         });
     }
