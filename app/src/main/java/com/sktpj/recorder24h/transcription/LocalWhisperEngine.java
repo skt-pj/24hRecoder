@@ -70,7 +70,7 @@ public final class LocalWhisperEngine {
         VadDiagnostics vad = gate.available && !gate.ranges.isEmpty()
                 ? analyzeVad(context, prepared, gate)
                 : analyzeVad(context, prepared);
-        return transcribePrepared(context, prepared, modelId, vad, gate, false);
+        return transcribePrepared(context, prepared, modelId, vad, gate, false, segmentId);
     }
 
     static PreparedAudio prepareAudio(File audioFile) throws Exception {
@@ -207,13 +207,13 @@ public final class LocalWhisperEngine {
     static Response transcribePrepared(Context context, PreparedAudio prepared, String modelId) throws Exception {
         VadDiagnostics vad = analyzeVad(context, prepared);
         return transcribePrepared(context, prepared, modelId, vad,
-                RealtimeSpeechGateStore.Snapshot.missing(), false);
+                RealtimeSpeechGateStore.Snapshot.missing(), false, null);
     }
 
     static Response transcribePrepared(Context context, PreparedAudio prepared, String modelId,
                                        VadDiagnostics vad) throws Exception {
         return transcribePrepared(context, prepared, modelId, vad,
-                RealtimeSpeechGateStore.Snapshot.missing(), false);
+                RealtimeSpeechGateStore.Snapshot.missing(), false, null);
     }
 
     private static Response transcribePrepared(Context context,
@@ -221,7 +221,8 @@ public final class LocalWhisperEngine {
                                                String modelId,
                                                VadDiagnostics vad,
                                                RealtimeSpeechGateStore.Snapshot gate,
-                                               boolean skippedByActivityGate) throws Exception {
+                                               boolean skippedByActivityGate,
+                                               String segmentId) throws Exception {
         WhisperModelManager.ModelSpec spec = WhisperModelManager.modelSpec(modelId);
         if (spec == null) {
             throw new IllegalArgumentException("Unknown model: " + modelId);
@@ -243,8 +244,21 @@ public final class LocalWhisperEngine {
             throw new IllegalStateException("Whisper model is not ready: " + modelId);
         }
 
+        // Silero always sees the original 16 kHz signal. Only the already accepted speech chunks
+        // are optionally denoised, and the helper writes them back to the same sample indices.
+        // If DeepFilterNet is unavailable or a chunk cannot be processed, it returns the untouched
+        // source array so transcription still proceeds rather than failing the FIFO item.
+        DeepFilterNetSpeechDenoiser.Result denoise = DeepFilterNetSpeechDenoiser.denoise(
+                context,
+                segmentId,
+                prepared.frontEnd.samples,
+                chunks.startsMs,
+                chunks.endsMs,
+                prepared.frontEnd.snrProxyDb);
+        float[] whisperSamples = denoise.samples;
+
         long inferenceStarted = System.currentTimeMillis();
-        String raw = nativeTranscribeDetailed(model.getAbsolutePath(), prepared.frontEnd.samples,
+        String raw = nativeTranscribeDetailed(model.getAbsolutePath(), whisperSamples,
                 chunks.startsMs, chunks.endsMs, LANGUAGE, threads);
         long inferenceMs = System.currentTimeMillis() - inferenceStarted;
         if (raw == null) {
