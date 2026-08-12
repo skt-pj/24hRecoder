@@ -98,17 +98,14 @@ public final class TranscriptionPipelineSettings {
     private static void update(Context context, String mode, String asr, String vad,
                                String denoise, String speaker) {
         Context app = context.getApplicationContext();
-        Snapshot next;
-        boolean modeChanged;
         synchronized (LOCK) {
             Snapshot current = snapshot(app);
-            next = new Snapshot(
+            Snapshot next = new Snapshot(
                     mode == null ? current.executionMode : mode,
                     asr == null ? current.asrBackend : asr,
                     vad == null ? current.vadBackend : vad,
                     denoise == null ? current.denoiseBackend : denoise,
                     speaker == null ? current.speakerBackend : speaker);
-            modeChanged = !current.executionMode.equals(next.executionMode);
             writeSnapshotLocked(app, next);
             app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                     .putString(KEY_MODE, next.executionMode)
@@ -117,10 +114,6 @@ public final class TranscriptionPipelineSettings {
                     .putString(KEY_DENOISE, next.denoiseBackend)
                     .putString(KEY_SPEAKER, next.speakerBackend)
                     .apply();
-        }
-        // Do this after releasing LOCK because the scheduler snapshots the same settings file.
-        if (modeChanged) {
-            TranscriptionScheduler.onExecutionModeChanged(app);
         }
     }
 
@@ -245,7 +238,6 @@ public final class TranscriptionPipelineSettings {
             json.put("fullStreaming", true);
             json.put("settingsTransport", "atomic-json-cross-process");
             json.put("automaticFallback", false);
-            json.put("postprocessBacklogPaused", isLiveStreaming(snapshot(context)));
             json.put("selected", snapshot(context).toJson());
         } catch (Exception ignored) {
         }
@@ -326,6 +318,8 @@ public final class TranscriptionPipelineSettings {
                     + "+vad=" + vadBackend
                     + "+denoise=" + denoiseBackend
                     + "+speaker=" + speakerBackend;
+            // 0.7.15 used exactly the legacy signature above. Keep it byte-for-byte for retained
+            // postprocess mode so installing 0.7.16 does not invalidate/requeue old transcripts.
             if (MODE_SEGMENT_POSTPROCESS.equals(executionMode)) return legacy;
             return "mode=" + executionMode + "+" + legacy;
         }
