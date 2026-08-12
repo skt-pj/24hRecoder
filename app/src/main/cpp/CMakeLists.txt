@@ -71,7 +71,8 @@ FetchContent_MakeAvailable(whisper_cpp)
 
 if(TARGET ggml-vulkan)
     target_include_directories(ggml-vulkan BEFORE PRIVATE
-            ${vulkan_headers_source_SOURCE_DIR}/include)
+            ${vulkan_headers_source_SOURCE_DIR}/include
+            ${spirv_headers_source_SOURCE_DIR}/include)
 endif()
 
 add_library(whisper_jni SHARED whisper_jni.cpp)
