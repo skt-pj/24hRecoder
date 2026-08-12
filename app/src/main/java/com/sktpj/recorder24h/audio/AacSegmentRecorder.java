@@ -1,6 +1,8 @@
 package com.sktpj.recorder24h.audio;
 
 import android.content.Context;
+import android.media.AudioDeviceCallback;
+import android.media.AudioDeviceInfo;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioRecord;
@@ -10,12 +12,16 @@ import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.media.MediaMuxer;
 import android.media.MediaRecorder;
+import android.os.Handler;
+import android.os.Looper;
 
 import com.sktpj.recorder24h.storage.RecorderStateStore;
 import com.sktpj.recorder24h.storage.SegmentRepository;
 import com.sktpj.recorder24h.storage.StoragePolicy;
+import com.sktpj.recorder24h.transcription.RealtimeSpeechGateStore;
 import com.sktpj.recorder24h.util.AppLogger;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
@@ -43,8 +49,11 @@ public final class AacSegmentRecorder {
     private final Context context;
     private final Listener listener;
     private final AtomicBoolean stopRequested = new AtomicBoolean(false);
+    private final Object audioRouteLock = new Object();
 
     private AudioRecord audioRecord;
+    private AudioManager audioManager;
+    private AudioDeviceCallback audioDeviceCallback;
     private MediaCodec encoder;
     private MediaFormat encoderOutputFormat;
     private MediaMuxer muxer;
@@ -58,6 +67,7 @@ public final class AacSegmentRecorder {
     private long totalPcmFrames;
     private long lastHeartbeatMs;
     private volatile long lastAudioReadMs;
+    private volatile long lastAudioInputSettingsUpdatedAtMs = Long.MIN_VALUE;
     private AudioManager.AudioRecordingCallback recordingCallback;
 
     public AacSegmentRecorder(Context context, Listener listener) {
@@ -80,11 +90,17 @@ public final class AacSegmentRecorder {
         try {
             StoragePolicy.enforce(context);
             audioRecord = createAudioRecord();
+            audioManager = context.getSystemService(AudioManager.class);
+            registerAudioDeviceCallback();
+            applyAudioInputRoute("RECORDER_CREATED");
+
             encoder = createEncoder();
             registerRecordingCallback(audioRecord);
 
+            RealtimeSpeechGateStore.resetStream();
             encoder.start();
             audioRecord.startRecording();
+            recordCurrentRoutedInput("RECORDING_STARTED");
             AppLogger.event(context, "AUDIO_RECORD_STARTED", audioConfigJson(audioRecord));
 
             RecorderStateStore.write(context, "RECORDING", null, null);
@@ -240,9 +256,11 @@ public final class AacSegmentRecorder {
         }
 
         lastAudioReadMs = System.currentTimeMillis();
+        long ptsUs = pcmPresentationTimeUs();
+        RealtimeSpeechGateStore.observePcm16(pcm, read, ptsUs);
+
         inputBuffer.clear();
         inputBuffer.put(pcm, 0, read);
-        long ptsUs = pcmPresentationTimeUs();
         encoder.queueInputBuffer(inputIndex, 0, read, ptsUs, 0);
         totalPcmFrames += read / (2L * CHANNEL_COUNT);
     }
@@ -308,6 +326,7 @@ public final class AacSegmentRecorder {
             JSONObject d = new JSONObject();
             d.put("segmentId", currentSegmentId);
             d.put("file", currentPartFile.getName());
+            d.put("segmentBasePtsUs", currentSegmentBasePtsUs);
             AppLogger.event(context, "SEGMENT_STARTED", d);
         } catch (Exception ignored) {
         }
@@ -321,6 +340,9 @@ public final class AacSegmentRecorder {
         File part = currentPartFile;
         String segmentId = currentSegmentId;
         long startedAt = currentSegmentStartedAtMs;
+        long segmentBasePtsUs = currentSegmentBasePtsUs;
+        long segmentEndPtsUs = Math.max(segmentBasePtsUs,
+                Math.min(pcmPresentationTimeUs(), segmentBasePtsUs + SEGMENT_DURATION_US));
         long endedAt = System.currentTimeMillis();
         try {
             if (muxerStarted && wroteSamples) {
@@ -357,6 +379,17 @@ public final class AacSegmentRecorder {
             status = "CORRUPT";
         }
 
+        if ("READY".equals(status)) {
+            // Persist before publishing READY so a worker can immediately use the realtime ranges.
+            RealtimeSpeechGateStore.persistSegment(
+                    context,
+                    segmentId,
+                    segmentBasePtsUs,
+                    segmentEndPtsUs,
+                    startedAt,
+                    endedAt);
+        }
+
         SegmentRepository.append(context, segmentId, finalFile, startedAt, endedAt, status,
                 "READY".equals(status) ? null : "MUXER_OR_RENAME_FAILURE");
         try {
@@ -366,6 +399,9 @@ public final class AacSegmentRecorder {
             d.put("status", status);
             d.put("sizeBytes", finalFile.length());
             d.put("durationMs", Math.max(0L, endedAt - startedAt));
+            d.put("segmentBasePtsUs", segmentBasePtsUs);
+            d.put("segmentEndPtsUs", segmentEndPtsUs);
+            d.put("audioTimelineDurationMs", Math.max(0L, (segmentEndPtsUs - segmentBasePtsUs) / 1000L));
             AppLogger.event(context, "SEGMENT_FINALIZED", d);
         } catch (Exception ignored) {
         }
@@ -386,13 +422,16 @@ public final class AacSegmentRecorder {
                 int sessionId = record.getAudioSessionId();
                 for (AudioRecordingConfiguration config : configs) {
                     if (config.getClientAudioSessionId() == sessionId) {
+                        AudioDeviceInfo actual = config.getAudioDevice();
+                        AudioInputRouter.recordActualInput(context, actual, "RECORDING_CONFIGURATION");
                         try {
                             JSONObject d = new JSONObject();
                             d.put("sessionId", sessionId);
                             d.put("clientAudioSource", config.getClientAudioSource());
                             d.put("audioSource", config.getAudioSource());
                             d.put("silenced", config.isClientSilenced());
-                            d.put("deviceId", config.getAudioDevice() == null ? JSONObject.NULL : config.getAudioDevice().getId());
+                            d.put("deviceId", actual == null ? JSONObject.NULL : actual.getId());
+                            d.put("deviceLabel", actual == null ? JSONObject.NULL : AudioInputRouter.deviceLabel(actual));
                             RecorderStateStore.setCaptureSilenced(context, config.isClientSilenced());
                             AppLogger.event(context,
                                     config.isClientSilenced() ? "CAPTURE_SILENCED" : "CAPTURE_CONFIGURATION",
@@ -407,6 +446,73 @@ public final class AacSegmentRecorder {
         record.registerAudioRecordingCallback(executor, recordingCallback);
     }
 
+    private void registerAudioDeviceCallback() {
+        if (audioManager == null) return;
+        audioDeviceCallback = new AudioDeviceCallback() {
+            @Override
+            public void onAudioDevicesAdded(AudioDeviceInfo[] addedDevices) {
+                logDeviceChange("AUDIO_INPUT_DEVICE_ADDED", addedDevices);
+                applyAudioInputRoute("DEVICE_ADDED");
+            }
+
+            @Override
+            public void onAudioDevicesRemoved(AudioDeviceInfo[] removedDevices) {
+                logDeviceChange("AUDIO_INPUT_DEVICE_REMOVED", removedDevices);
+                applyAudioInputRoute("DEVICE_REMOVED");
+            }
+        };
+        audioManager.registerAudioDeviceCallback(
+                audioDeviceCallback,
+                new Handler(Looper.getMainLooper()));
+    }
+
+    private void applyAudioInputRoute(String trigger) {
+        AudioRecord record = audioRecord;
+        if (record == null) return;
+        synchronized (audioRouteLock) {
+            try {
+                AudioInputRouter.ApplyResult result = AudioInputRouter.applyPreferredInput(
+                        context, record, trigger);
+                lastAudioInputSettingsUpdatedAtMs = result.settingsUpdatedAtMs;
+            } catch (RuntimeException error) {
+                try {
+                    JSONObject d = errorJson(error);
+                    d.put("trigger", trigger);
+                    AppLogger.event(context, "AUDIO_INPUT_ROUTE_FAILED", d);
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
+    private void recordCurrentRoutedInput(String trigger) {
+        AudioRecord record = audioRecord;
+        if (record == null) return;
+        try {
+            AudioDeviceInfo routed = record.getRoutedDevice();
+            if (routed != null) AudioInputRouter.recordActualInput(context, routed, trigger);
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private void logDeviceChange(String event, AudioDeviceInfo[] devices) {
+        try {
+            JSONArray rows = new JSONArray();
+            if (devices != null) {
+                for (AudioDeviceInfo device : devices) {
+                    if (device == null || !device.isSource()) continue;
+                    rows.put(new JSONObject()
+                            .put("id", device.getId())
+                            .put("type", device.getType())
+                            .put("label", AudioInputRouter.deviceLabel(device))
+                            .put("bluetoothMic", AudioInputRouter.isBluetoothMic(device)));
+                }
+            }
+            AppLogger.event(context, event, new JSONObject().put("inputs", rows));
+        } catch (Exception ignored) {
+        }
+    }
+
     private void heartbeatIfNeeded() {
         long now = System.currentTimeMillis();
         if (now - lastHeartbeatMs < 5_000L) {
@@ -415,6 +521,14 @@ public final class AacSegmentRecorder {
         lastHeartbeatMs = now;
         RecorderStateStore.heartbeat(
                 context, "RECORDING", currentSegmentId, currentSegmentStartedAtMs, lastAudioReadMs);
+
+        AudioInputSettingsStore.Settings settings = AudioInputSettingsStore.read(context);
+        if (settings.updatedAtMs != lastAudioInputSettingsUpdatedAtMs) {
+            applyAudioInputRoute("SETTINGS_CHANGED");
+        } else {
+            recordCurrentRoutedInput("HEARTBEAT");
+        }
+
         try {
             JSONObject d = new JSONObject();
             d.put("segmentId", currentSegmentId == null ? JSONObject.NULL : currentSegmentId);
@@ -430,6 +544,12 @@ public final class AacSegmentRecorder {
         try {
             if (recordingCallback != null && audioRecord != null) {
                 audioRecord.unregisterAudioRecordingCallback(recordingCallback);
+            }
+        } catch (Exception ignored) {
+        }
+        try {
+            if (audioDeviceCallback != null && audioManager != null) {
+                audioManager.unregisterAudioDeviceCallback(audioDeviceCallback);
             }
         } catch (Exception ignored) {
         }
@@ -451,6 +571,8 @@ public final class AacSegmentRecorder {
         } catch (Exception ignored) {
         }
         audioRecord = null;
+        audioManager = null;
+        audioDeviceCallback = null;
         encoder = null;
     }
 
@@ -462,6 +584,9 @@ public final class AacSegmentRecorder {
             d.put("bitRateBps", BIT_RATE_BPS);
             d.put("audioSource", record.getAudioSource());
             d.put("sessionId", record.getAudioSessionId());
+            AudioDeviceInfo routed = record.getRoutedDevice();
+            d.put("routedDeviceId", routed == null ? JSONObject.NULL : routed.getId());
+            d.put("routedDeviceLabel", routed == null ? JSONObject.NULL : AudioInputRouter.deviceLabel(routed));
         } catch (Exception ignored) {
         }
         return d;

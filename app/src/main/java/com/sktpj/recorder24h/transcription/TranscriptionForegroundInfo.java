@@ -16,8 +16,10 @@ import com.sktpj.recorder24h.R;
 final class TranscriptionForegroundInfo {
     private static final String COMPARISON_CHANNEL = "model_comparison";
     private static final String DOWNLOAD_CHANNEL = "model_download";
+    private static final String QUEUE_CHANNEL = "transcription_fifo_queue";
     private static final int COMPARISON_NOTIFICATION_BASE = 7300;
     private static final int DOWNLOAD_NOTIFICATION_BASE = 7400;
+    private static final int QUEUE_NOTIFICATION_ID = 7501;
 
     private TranscriptionForegroundInfo() {
     }
@@ -52,6 +54,20 @@ final class TranscriptionForegroundInfo {
                 id,
                 notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+    }
+
+    static ForegroundInfo queue(Context context, String text) {
+        ensureChannel(context, QUEUE_CHANNEL, "文字起こしキュー", "録音日時の古い順にローカル文字起こしを処理します");
+        Notification notification = buildNotification(
+                context,
+                QUEUE_CHANNEL,
+                "24hRecoder 文字起こし",
+                text == null ? "文字起こしキューを処理しています" : text,
+                QUEUE_NOTIFICATION_ID);
+        return new ForegroundInfo(
+                QUEUE_NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING);
     }
 
     private static Notification buildNotification(Context context, String channelId,

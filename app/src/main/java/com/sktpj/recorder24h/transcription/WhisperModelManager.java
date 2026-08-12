@@ -1,6 +1,7 @@
 package com.sktpj.recorder24h.transcription;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 
 import androidx.work.BackoffPolicy;
 import androidx.work.Constraints;
@@ -27,11 +28,11 @@ public final class WhisperModelManager {
     public static final String MODEL_MEDIUM_Q5 = "medium-q5";
     public static final String MODEL_KOTOBA_V2_Q5 = "kotoba-v2-q5";
     public static final String MODEL_LARGE_V3_Q5 = "large-v3-q5";
-    public static final String MODEL_DEFAULT = MODEL_LARGE_V3_Q5;
 
-    // Canonical automatic transcription now prioritizes recognition quality and uses
-    // multilingual Whisper large-v3 Q5. Comparison remains separate and never overwrites the
-    // canonical transcript unless the normal/manual transcription path is invoked.
+    /** Initial/default choice for a fresh install or an unset/invalid normal-model preference. */
+    public static final String MODEL_DEFAULT = MODEL_MEDIUM_Q5;
+
+    // Legacy large-v3 constants are retained for compatibility with existing UI/diagnostics code.
     public static final String MODEL_ID = "whisper.cpp-v1.9.1/large-v3-q5_0+silero-v6.2.0";
     public static final String MODEL_FILE_NAME = "ggml-large-v3-q5_0.bin";
     public static final long ASR_EXPECTED_BYTES = 1_081_140_203L;
@@ -53,12 +54,14 @@ public final class WhisperModelManager {
     private static final String VAD_MODEL_URL =
             "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin";
     private static final String UNIQUE_DOWNLOAD = "download-whisper-local-models";
+    private static final String PREFS = "whisper_model_preferences";
+    private static final String PREF_SELECTED_NORMAL_MODEL = "selected_normal_model";
 
     private static final ModelSpec[] COMPARISON_MODELS = new ModelSpec[] {
             new ModelSpec(
                     MODEL_BASE,
                     "Whisper base",
-                    "多言語・比較用・旧標準",
+                    "多言語・軽量",
                     "ggml-base.bin",
                     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
                     147_951_465L,
@@ -78,7 +81,7 @@ public final class WhisperModelManager {
             new ModelSpec(
                     MODEL_MEDIUM_Q5,
                     "Whisper medium Q5",
-                    "多言語・medium量子化・精度優先候補",
+                    "多言語・medium量子化・標準",
                     "ggml-medium-q5_0.bin",
                     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin",
                     539_212_467L,
@@ -88,7 +91,7 @@ public final class WhisperModelManager {
             new ModelSpec(
                     MODEL_KOTOBA_V2_Q5,
                     "Kotoba-Whisper v2.0 Q5",
-                    "日本語特化・量子化・長音声デバッグ対象",
+                    "日本語特化・量子化",
                     "ggml-kotoba-whisper-v2.0-q5_0.bin",
                     "https://huggingface.co/kotoba-tech/kotoba-whisper-v2.0-ggml/resolve/main/ggml-kotoba-whisper-v2.0-q5_0.bin",
                     537_819_875L,
@@ -98,7 +101,7 @@ public final class WhisperModelManager {
             new ModelSpec(
                     MODEL_LARGE_V3_Q5,
                     "Whisper large-v3 Q5",
-                    "多言語・large-v3量子化・標準モデル",
+                    "多言語・large-v3量子化・精度優先",
                     "ggml-large-v3-q5_0.bin",
                     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin",
                     1_081_140_203L,
@@ -126,8 +129,37 @@ public final class WhisperModelManager {
         return null;
     }
 
+    public static String selectedModelId(Context context) {
+        Context app = context.getApplicationContext();
+        SharedPreferences prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        String stored = prefs.getString(PREF_SELECTED_NORMAL_MODEL, MODEL_DEFAULT);
+        return modelSpec(stored) == null ? MODEL_DEFAULT : stored;
+    }
+
+    public static ModelSpec selectedModelSpec(Context context) {
+        ModelSpec spec = modelSpec(selectedModelId(context));
+        return spec == null ? modelSpec(MODEL_DEFAULT) : spec;
+    }
+
+    public static boolean setSelectedModelId(Context context, String modelId) {
+        if (modelSpec(modelId) == null) {
+            return false;
+        }
+        context.getApplicationContext()
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(PREF_SELECTED_NORMAL_MODEL, modelId)
+                .apply();
+        return true;
+    }
+
+    public static long selectedExpectedBytes(Context context) {
+        ModelSpec spec = selectedModelSpec(context);
+        return (spec == null ? ASR_EXPECTED_BYTES : spec.expectedBytes) + VAD_EXPECTED_BYTES;
+    }
+
     public static File modelFile(Context context) {
-        return modelFile(context, MODEL_DEFAULT);
+        return modelFile(context, selectedModelId(context));
     }
 
     public static File modelFile(Context context, String modelId) {
@@ -143,7 +175,7 @@ public final class WhisperModelManager {
     }
 
     public static boolean isAsrReady(Context context) {
-        return isModelReady(context, MODEL_DEFAULT);
+        return isModelReady(context, selectedModelId(context));
     }
 
     public static boolean isModelReady(Context context, String modelId) {
@@ -191,7 +223,7 @@ public final class WhisperModelManager {
     }
 
     public static void enqueueDownload(Context context) {
-        enqueueModelDownload(context, MODEL_DEFAULT);
+        enqueueModelDownload(context, selectedModelId(context));
     }
 
     public static void enqueueModelDownload(Context context, String modelId) {
@@ -210,14 +242,16 @@ public final class WhisperModelManager {
                 .addTag("whisper-model-download")
                 .addTag("whisper-model-download:" + modelId)
                 .build();
-        String unique = MODEL_DEFAULT.equals(modelId) ? UNIQUE_DOWNLOAD : "download-whisper-model:" + modelId;
+        String unique = MODEL_DEFAULT.equals(modelId)
+                ? UNIQUE_DOWNLOAD : "download-whisper-model:" + modelId;
         WorkManager.getInstance(context.getApplicationContext()).enqueueUniqueWork(
                 unique, ExistingWorkPolicy.KEEP, request);
     }
 
     static File download(Context context) throws Exception {
-        File asr = downloadModel(context, MODEL_DEFAULT);
-        if (!isReady(context)) {
+        String modelId = selectedModelId(context);
+        File asr = downloadModel(context, modelId);
+        if (!isComparisonReady(context, modelId)) {
             throw new IOException("Local Whisper model set is incomplete");
         }
         return asr;
@@ -257,7 +291,7 @@ public final class WhisperModelManager {
         connection.setConnectTimeout(30_000);
         connection.setReadTimeout(30_000);
         connection.setInstanceFollowRedirects(true);
-        connection.setRequestProperty("User-Agent", "24hRecoder/0.4.8");
+        connection.setRequestProperty("User-Agent", "24hRecoder/0.6.8");
         connection.connect();
         int code = connection.getResponseCode();
         if (code < 200 || code >= 300) {
@@ -335,6 +369,7 @@ public final class WhisperModelManager {
         }
     }
 
+    /** Deletes every locally downloaded Whisper/VAD model. Kept for the existing reset action. */
     public static boolean deleteModel(Context context) {
         boolean ok = deleteWithPart(modelFile(context, MODEL_BASE));
         ok = deleteWithPart(modelFile(context, MODEL_SMALL)) && ok;
@@ -343,6 +378,11 @@ public final class WhisperModelManager {
         ok = deleteWithPart(modelFile(context, MODEL_LARGE_V3_Q5)) && ok;
         ok = deleteWithPart(vadModelFile(context)) && ok;
         return ok;
+    }
+
+    /** Deletes only the ASR model selected for normal transcription. The shared VAD is retained. */
+    public static boolean deleteSelectedModel(Context context) {
+        return deleteWithPart(modelFile(context, selectedModelId(context)));
     }
 
     public static boolean deleteComparisonModel(Context context, String modelId) {

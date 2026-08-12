@@ -36,8 +36,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -287,6 +289,9 @@ private fun RecorderApp(
     var records by remember { mutableStateOf<List<SegmentRecord>>(emptyList()) }
     var refresh by remember { mutableIntStateOf(0) }
     var dashboard by remember { mutableStateOf(readDashboard(context)) }
+    val historyListState = rememberLazyListState()
+    var historyQuery by remember { mutableStateOf("") }
+    var historyFilter by remember { mutableStateOf(HistoryFilter.ALL) }
 
     LaunchedEffect(Unit) {
         val hasQueuedTranscription = withContext(Dispatchers.IO) {
@@ -386,7 +391,7 @@ private fun RecorderApp(
                             onStop,
                             onOpenHistory = { section = AppSection.HISTORY; refresh++ }
                         )
-                        section == AppSection.QUEUE -> QueueScreen(
+                        section == AppSection.QUEUE -> UnifiedQueueScreen(
                             records = records,
                             onSelect = { selectedId = it.segmentId },
                             onRemove = { record ->
@@ -398,7 +403,15 @@ private fun RecorderApp(
                                 }
                             }
                         )
-                        section == AppSection.HISTORY -> HistoryScreen(records) { selectedId = it.segmentId }
+                        section == AppSection.HISTORY -> HistoryScreen(
+                            records = records,
+                            listState = historyListState,
+                            query = historyQuery,
+                            filter = historyFilter,
+                            onQueryChange = { historyQuery = it },
+                            onFilterChange = { historyFilter = it },
+                            onSelect = { selectedId = it.segmentId }
+                        )
                         section == AppSection.AI -> AiAnalysisScreen(
                             refreshToken = refresh,
                             onOpenSettings = { section = AppSection.SETTINGS }
@@ -434,7 +447,7 @@ private fun RecorderApp(
 
 private fun sectionTitle(section: AppSection) = when (section) {
     AppSection.HOME -> "24hRecoder"
-    AppSection.QUEUE -> "文字起こしキュー"
+    AppSection.QUEUE -> "キュー"
     AppSection.HISTORY -> "記録"
     AppSection.AI -> "AIノート"
     AppSection.SETTINGS -> "設定"
@@ -642,17 +655,20 @@ private fun Metric(label: String, value: String) {
 
 @Composable
 private fun TranscriptionCard(dashboard: DashboardSnapshot, onOpenHistory: () -> Unit) {
+    val context = LocalContext.current
+    val selectedModel = WhisperModelManager.selectedModelSpec(context)
+    val expectedBytes = WhisperModelManager.selectedExpectedBytes(context)
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("ローカル文字起こし", style = MaterialTheme.typography.titleLarge)
-            Text("${LocalWhisperEngine.ENGINE_ID} / Whisper large-v3 Q5")
+            Text("${LocalWhisperEngine.engineId(context)} / ${selectedModel?.label ?: WhisperModelManager.selectedModelId(context)}")
             StatusPill(
                 if (dashboard.modelReady) "モデル準備済み" else if (dashboard.modelBytes > 0L) "モデル取得中" else "モデル未準備",
                 if (dashboard.modelReady) StatusTone.SUCCESS else StatusTone.WAITING
             )
             if (!dashboard.modelReady && dashboard.modelBytes > 0L) {
                 LinearProgressIndicator(
-                    progress = { (dashboard.modelBytes.toFloat() / WhisperModelManager.EXPECTED_BYTES).coerceIn(0f, 1f) },
+                    progress = { (dashboard.modelBytes.toFloat() / expectedBytes.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -766,9 +782,15 @@ private fun formatQueueDateTime(record: SegmentRecord): String {
 }
 
 @Composable
-private fun HistoryScreen(records: List<SegmentRecord>, onSelect: (SegmentRecord) -> Unit) {
-    var query by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf(HistoryFilter.ALL) }
+private fun HistoryScreen(
+    records: List<SegmentRecord>,
+    listState: LazyListState,
+    query: String,
+    filter: HistoryFilter,
+    onQueryChange: (String) -> Unit,
+    onFilterChange: (HistoryFilter) -> Unit,
+    onSelect: (SegmentRecord) -> Unit
+) {
     val filtered = remember(records, query, filter) {
         records.filter { record ->
             val statusOk = when (filter) {
@@ -789,7 +811,7 @@ private fun HistoryScreen(records: List<SegmentRecord>, onSelect: (SegmentRecord
         Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedTextField(
                 value = query,
-                onValueChange = { query = it },
+                onValueChange = onQueryChange,
                 singleLine = true,
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 placeholder = { Text("文字起こし・segment IDを検索") },
@@ -797,7 +819,7 @@ private fun HistoryScreen(records: List<SegmentRecord>, onSelect: (SegmentRecord
             )
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 itemsIndexed(HistoryFilter.entries) { _, item ->
-                    FilterChip(selected = filter == item, onClick = { filter = item }, label = { Text(item.label) })
+                    FilterChip(selected = filter == item, onClick = { onFilterChange(item) }, label = { Text(item.label) })
                 }
             }
         }
@@ -805,7 +827,8 @@ private fun HistoryScreen(records: List<SegmentRecord>, onSelect: (SegmentRecord
             EmptyHistory(query, filter)
         } else {
             LazyColumn(
-                Modifier.fillMaxSize(),
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -940,7 +963,7 @@ private fun RecordDetailScreen(record: SegmentRecord) {
             }
         }
         item { TranscriptCard(record) }
-        item { ModelComparisonCard(record) }
+        item { TranscriptionProcessingCard(record) }
         item {
             Card {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -952,7 +975,6 @@ private fun RecordDetailScreen(record: SegmentRecord) {
                     InfoRow("ファイル", record.fileName ?: "-")
                     InfoRow("サイズ", SegmentHistoryRepository.formatBytes(record.fileSizeBytes))
                     InfoRow("文字起こし", record.transcriptModel?.ifBlank { "-" } ?: "-")
-                    if (record.transcribedAtMs > 0L) InfoRow("処理日時", formatDateTime(record.transcribedAtMs))
                     if (!record.reason.isNullOrBlank()) InfoRow("理由", record.reason)
                 }
             }
@@ -1188,11 +1210,11 @@ private fun isManualRetranscriptionState(record: SegmentRecord): Boolean {
 private fun transcriptionActivityMessage(record: SegmentRecord): String? {
     return when {
         record.status == "QUEUED" && record.reason.orEmpty().endsWith("SLOT_WAIT") ->
-            "Worker起動済み。現在はWhisper実行枠を待っています。他のWhisper処理またはモデル比較が実行枠を使用中です。"
+            "Worker起動済み。現在はWhisper実行枠を待っています。他のWhisper処理が実行枠を使用中です。"
         record.status == "QUEUED" && record.reason.orEmpty().endsWith("WORK_ENQUEUED") ->
             "WorkManager登録済み・Worker未開始です。明示制約はbattery-not-lowです。OSスケジューラ待ちとの区別は現時点では計測していません。"
         record.status == "TRANSCRIBING" ->
-            "Whisper large-v3 Q5の実行枠を取得済みです。端末内で文字起こし処理中です。"
+            "選択中のWhisperモデルの実行枠を取得済みです。端末内で文字起こし処理中です。"
         record.status == "RETRY_WAIT" ->
             "前回処理が失敗し、WorkManagerの再試行を待っています。"
         record.status == "READY" && record.audioAvailable ->
@@ -1255,43 +1277,7 @@ private fun SettingsScreen(
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        item {
-            Card {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Whisperモデル", style = MaterialTheme.typography.titleLarge)
-                    Text("large-v3 Q5 / 多言語 / デフォルト / ${formatMb(WhisperModelManager.EXPECTED_BYTES)}")
-                    StatusPill(
-                        if (dashboard.modelReady) "準備済み" else if (dashboard.modelBytes > 0L) "取得中" else "未準備",
-                        if (dashboard.modelReady) StatusTone.SUCCESS else StatusTone.WAITING
-                    )
-                    if (!dashboard.modelReady && dashboard.modelBytes > 0L) {
-                        LinearProgressIndicator(
-                            progress = { (dashboard.modelBytes.toFloat() / WhisperModelManager.EXPECTED_BYTES).coerceIn(0f, 1f) },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    if (!dashboard.modelReady) {
-                        Button(onClick = onDownloadModel, modifier = Modifier.fillMaxWidth()) { Text("Whisper large-v3 Q5モデルをダウンロード") }
-                    }
-                    OutlinedButton(onClick = onRetryTranscription, modifier = Modifier.fillMaxWidth()) {
-                        Icon(Icons.Filled.Refresh, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("未処理・旧方式の音声を再登録")
-                    }
-                    if (dashboard.modelBytes > 0L) {
-                        OutlinedButton(
-                            onClick = onDeleteModel,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                        ) {
-                            Icon(Icons.Filled.Delete, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Whisperモデルを削除")
-                        }
-                    }
-                }
-            }
-        }
+        item { WhisperModelSettingsCard() }
         item { AiSettingsCard() }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
