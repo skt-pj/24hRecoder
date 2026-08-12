@@ -3,12 +3,24 @@ package com.sktpj.recorder24h.transcription;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Build;
+import android.os.Process;
 import android.speech.SpeechRecognizer;
 
 import org.json.JSONObject;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+
 /**
- * Explicit transcription pipeline selection.
+ * Explicit transcription pipeline selection shared by main, :recorder and :streaming_asr.
+ *
+ * SharedPreferences alone is not used as the live source because Android does not provide a
+ * reliable multi-process cache-coherency contract for it. 0.7.15 preferences are migrated once
+ * into an atomic JSON file, then every process reads the file at the point it snapshots a segment.
  *
  * There is deliberately no automatic fallback between backends. A selected backend either runs
  * or reports an unavailable/failure state. The legacy post-segment CPU path remains selectable.
@@ -30,6 +42,8 @@ public final class TranscriptionPipelineSettings {
     public static final String SPEAKER_SHERPA_CPU = "sherpa-cpu";
     public static final String SPEAKER_OFF = "off";
 
+    private static final Object LOCK = new Object();
+    private static final String SETTINGS_FILE = "transcription_pipeline_settings.json";
     private static final String PREFS = "transcription_pipeline_settings";
     private static final String KEY_MODE = "execution_mode";
     private static final String KEY_ASR = "asr_backend";
@@ -41,8 +55,74 @@ public final class TranscriptionPipelineSettings {
     }
 
     public static Snapshot snapshot(Context context) {
-        SharedPreferences prefs = context.getApplicationContext()
-                .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        Context app = context.getApplicationContext();
+        synchronized (LOCK) {
+            File file = settingsFile(app);
+            if (!file.isFile()) {
+                Snapshot migrated = migrateLegacyPreferences(app);
+                writeSnapshotLocked(app, migrated);
+                return migrated;
+            }
+            try {
+                JSONObject row = new JSONObject(new String(
+                        Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
+                return snapshotFromJson(row);
+            } catch (Exception ignored) {
+                // A malformed durable settings file is not permission to invent a different
+                // backend. Recover the last legacy/default selection and rewrite a valid file.
+                Snapshot recovered = migrateLegacyPreferences(app);
+                writeSnapshotLocked(app, recovered);
+                return recovered;
+            }
+        }
+    }
+
+    public static void setExecutionMode(Context context, String value) {
+        update(context, normalizeMode(value), null, null, null, null);
+    }
+
+    public static void setAsr(Context context, String value) {
+        update(context, null, normalizeAsr(value), null, null, null);
+    }
+
+    public static void setVad(Context context, String value) {
+        update(context, null, null, normalizeVad(value), null, null);
+    }
+
+    public static void setDenoise(Context context, String value) {
+        update(context, null, null, null, normalizeDenoise(value), null);
+    }
+
+    public static void setSpeaker(Context context, String value) {
+        update(context, null, null, null, null, normalizeSpeaker(value));
+    }
+
+    private static void update(Context context, String mode, String asr, String vad,
+                               String denoise, String speaker) {
+        Context app = context.getApplicationContext();
+        synchronized (LOCK) {
+            Snapshot current = snapshot(app);
+            Snapshot next = new Snapshot(
+                    mode == null ? current.executionMode : mode,
+                    asr == null ? current.asrBackend : asr,
+                    vad == null ? current.vadBackend : vad,
+                    denoise == null ? current.denoiseBackend : denoise,
+                    speaker == null ? current.speakerBackend : speaker);
+            writeSnapshotLocked(app, next);
+            // Keep legacy preferences synchronized for downgrade/debug compatibility. They are no
+            // longer the source of truth for running processes.
+            app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                    .putString(KEY_MODE, next.executionMode)
+                    .putString(KEY_ASR, next.asrBackend)
+                    .putString(KEY_VAD, next.vadBackend)
+                    .putString(KEY_DENOISE, next.denoiseBackend)
+                    .putString(KEY_SPEAKER, next.speakerBackend)
+                    .apply();
+        }
+    }
+
+    private static Snapshot migrateLegacyPreferences(Context app) {
+        SharedPreferences prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         return new Snapshot(
                 normalizeMode(prefs.getString(KEY_MODE, MODE_SEGMENT_POSTPROCESS)),
                 normalizeAsr(prefs.getString(KEY_ASR, ASR_WHISPER_CPU)),
@@ -51,29 +131,48 @@ public final class TranscriptionPipelineSettings {
                 normalizeSpeaker(prefs.getString(KEY_SPEAKER, SPEAKER_SHERPA_CPU)));
     }
 
-    public static void setExecutionMode(Context context, String value) {
-        context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putString(KEY_MODE, normalizeMode(value)).apply();
+    private static Snapshot snapshotFromJson(JSONObject row) {
+        return new Snapshot(
+                normalizeMode(row.optString("executionMode", MODE_SEGMENT_POSTPROCESS)),
+                normalizeAsr(row.optString("asrBackend", ASR_WHISPER_CPU)),
+                normalizeVad(row.optString("vadBackend", VAD_CANDIDATE_SILERO)),
+                normalizeDenoise(row.optString("denoiseBackend", DENOISE_DEEPFILTER)),
+                normalizeSpeaker(row.optString("speakerBackend", SPEAKER_SHERPA_CPU)));
     }
 
-    public static void setAsr(Context context, String value) {
-        context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putString(KEY_ASR, normalizeAsr(value)).apply();
+    private static void writeSnapshotLocked(Context app, Snapshot snapshot) {
+        JSONObject row = snapshot.toJson();
+        try {
+            row.put("schemaVersion", 1);
+            row.put("updatedAtMs", System.currentTimeMillis());
+        } catch (Exception ignored) {
+        }
+        File target = settingsFile(app);
+        File parent = target.getParentFile();
+        if (parent != null && !parent.exists()) parent.mkdirs();
+        File temp = new File(parent, target.getName()
+                + ".tmp." + Process.myPid() + "." + Thread.currentThread().getId());
+        try (FileOutputStream out = new FileOutputStream(temp, false)) {
+            out.write(row.toString().getBytes(StandardCharsets.UTF_8));
+            out.flush();
+            out.getFD().sync();
+            try {
+                Files.move(temp.toPath(), target.toPath(),
+                        StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException unsupported) {
+                Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (Exception error) {
+            // A setting write must not silently continue with a different backend. Surface the
+            // persistence failure to the caller so the UI cannot claim a change that was not saved.
+            throw new IllegalStateException("TRANSCRIPTION_PIPELINE_SETTINGS_WRITE_FAILED", error);
+        } finally {
+            if (temp.exists()) temp.delete();
+        }
     }
 
-    public static void setVad(Context context, String value) {
-        context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putString(KEY_VAD, normalizeVad(value)).apply();
-    }
-
-    public static void setDenoise(Context context, String value) {
-        context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putString(KEY_DENOISE, normalizeDenoise(value)).apply();
-    }
-
-    public static void setSpeaker(Context context, String value) {
-        context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putString(KEY_SPEAKER, normalizeSpeaker(value)).apply();
+    private static File settingsFile(Context context) {
+        return new File(context.getFilesDir(), SETTINGS_FILE);
     }
 
     public static boolean isAsrRuntimeAvailable(Context context, String asr) {
@@ -141,6 +240,7 @@ public final class TranscriptionPipelineSettings {
             json.put("deepFilterNetPackaged", true);
             json.put("speakerSherpaCpu", true);
             json.put("fullStreaming", true);
+            json.put("settingsTransport", "atomic-json-cross-process");
             json.put("automaticFallback", false);
             json.put("selected", snapshot(context).toJson());
         } catch (Exception ignored) {
