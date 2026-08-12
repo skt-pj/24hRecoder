@@ -1,0 +1,27 @@
+name: Apply cancellation completion
+
+on:
+  push:
+    branches:
+      - agent/pause-backlog-during-live-0.7.17
+    paths:
+      - .github/workflows/apply-pause-completion.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/pause-backlog-during-live-0.7.17
+      - run: python .github/scripts/apply_pause_completion.py
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app
+          git diff --cached --quiet && exit 0
+          git commit -m "Complete active transcription cancellation coverage"
+          git push origin HEAD:agent/pause-backlog-during-live-0.7.17
