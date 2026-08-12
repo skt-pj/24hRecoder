@@ -7,6 +7,7 @@ import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.SamplerConfig
+import com.sktpj.recorder24h.util.AppLogger
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
@@ -23,6 +24,8 @@ import java.util.UUID
  * The transcript is split near natural conversation boundaries (largest timestamp gap near the
  * target chunk size), with overlap on both sides of a boundary. Each chunk produces evidence,
  * not a final summary. Overlap evidence is deduplicated before a final hour-level synthesis.
+ * Completed chunk evidence is checkpointed by source hash so a stopped worker can resume without
+ * repeating already-finished local inference.
  */
 object GemmaHourlyConversationAnalyzer {
     private const val DIRECT_TRANSCRIPT_CHAR_LIMIT = 1100
@@ -47,21 +50,52 @@ object GemmaHourlyConversationAnalyzer {
         source: AiAnalysisRepository.SourceWindow
     ): OpenAiLunaClient.Response = synchronized(lock) {
         check(Gemma4ModelManager.isReady(context)) { "Gemma 4 model is not ready" }
+        val analysisStartedAt = System.currentTimeMillis()
         val items = normalizeEntries(source.entries)
         check(items.isNotEmpty()) { "Gemma hourly source is empty" }
+        val fullTranscript = renderItems(items)
 
-        withEngine(context) { engine ->
-            val fullTranscript = renderItems(items)
+        trace(
+            context,
+            "GEMMA_HOURLY_ANALYSIS_PLAN",
+            JSONObject()
+                .put("sourceHash", source.sourceHash)
+                .put("sourceEntryCount", source.entries.size)
+                .put("normalizedItemCount", items.size)
+                .put("transcriptChars", fullTranscript.length)
+                .put("mode", if (fullTranscript.length <= DIRECT_TRANSCRIPT_CHAR_LIMIT) "direct_candidate" else "hierarchical")
+        )
+
+        withEngine(context, source.sourceHash) { engine ->
             val analysis = if (fullTranscript.length <= DIRECT_TRANSCRIPT_CHAR_LIMIT) {
                 try {
-                    runJsonPrompt(engine, buildDirectHourlyPrompt(fullTranscript), hourlyKeys)
+                    runJsonPrompt(
+                        context,
+                        engine,
+                        buildDirectHourlyPrompt(fullTranscript),
+                        hourlyKeys,
+                        "direct"
+                    )
                 } catch (error: Exception) {
                     if (!isInputTooLong(error)) throw error
-                    analyzeHierarchically(engine, items)
+                    trace(
+                        context,
+                        "GEMMA_HOURLY_DIRECT_TOO_LONG_FALLBACK",
+                        JSONObject().put("sourceHash", source.sourceHash)
+                    )
+                    analyzeHierarchically(context, engine, source, items)
                 }
             } else {
-                analyzeHierarchically(engine, items)
+                analyzeHierarchically(context, engine, source, items)
             }
+            GemmaHourlyCheckpointStore.clear(context, source.sourceHash)
+            trace(
+                context,
+                "GEMMA_HOURLY_ANALYSIS_COMPLETE",
+                JSONObject()
+                    .put("sourceHash", source.sourceHash)
+                    .put("elapsedMs", System.currentTimeMillis() - analysisStartedAt)
+            )
             OpenAiLunaClient.Response(
                 "local-${UUID.randomUUID()}",
                 analysis,
@@ -70,28 +104,122 @@ object GemmaHourlyConversationAnalyzer {
         }
     }
 
-    private fun analyzeHierarchically(engine: Engine, items: List<TranscriptItem>): JSONObject {
+    private fun analyzeHierarchically(
+        context: Context,
+        engine: Engine,
+        source: AiAnalysisRepository.SourceWindow,
+        items: List<TranscriptItem>
+    ): JSONObject {
         val chunks = splitConversation(items)
-        val extracted = chunks.mapIndexed { index, chunk ->
-            runJsonPrompt(
+        val cached = GemmaHourlyCheckpointStore.load(context, source.sourceHash, chunks.size)
+        trace(
+            context,
+            "GEMMA_HOURLY_CHUNK_PLAN",
+            JSONObject()
+                .put("sourceHash", source.sourceHash)
+                .put("chunkCount", chunks.size)
+                .put("resumableChunkCount", cached.size)
+        )
+
+        val extracted = mutableListOf<JSONObject>()
+        chunks.forEachIndexed { index, chunk ->
+            val cachedEvidence = cached[index]
+            if (cachedEvidence != null) {
+                extracted += JSONObject(cachedEvidence.toString())
+                trace(
+                    context,
+                    "GEMMA_HOURLY_CHUNK_RESUMED",
+                    evidenceDetails(source.sourceHash, index, chunks.size, cachedEvidence)
+                        .put("chunkChars", renderItems(chunk).length)
+                )
+                return@forEachIndexed
+            }
+
+            val transcript = renderItems(chunk)
+            val startedAt = System.currentTimeMillis()
+            trace(
+                context,
+                "GEMMA_HOURLY_CHUNK_STARTED",
+                JSONObject()
+                    .put("sourceHash", source.sourceHash)
+                    .put("chunkIndex", index + 1)
+                    .put("chunkCount", chunks.size)
+                    .put("chunkItemCount", chunk.size)
+                    .put("chunkChars", transcript.length)
+            )
+            val evidence = runJsonPrompt(
+                context,
                 engine,
-                buildEvidenceExtractionPrompt(index + 1, chunks.size, renderItems(chunk)),
-                evidenceKeys
+                buildEvidenceExtractionPrompt(index + 1, chunks.size, transcript),
+                evidenceKeys,
+                "extract_${index + 1}_of_${chunks.size}"
+            )
+            GemmaHourlyCheckpointStore.saveChunk(
+                context,
+                source.sourceHash,
+                chunks.size,
+                index,
+                evidence
+            )
+            extracted += evidence
+            trace(
+                context,
+                "GEMMA_HOURLY_CHUNK_COMPLETED",
+                evidenceDetails(source.sourceHash, index, chunks.size, evidence)
+                    .put("elapsedMs", System.currentTimeMillis() - startedAt)
             )
         }
 
         var evidence = mergeEvidence(extracted)
+        trace(
+            context,
+            "GEMMA_HOURLY_EVIDENCE_MERGED",
+            JSONObject()
+                .put("sourceHash", source.sourceHash)
+                .put("evidenceChars", evidence.toString().length)
+                .put("factCount", evidence.optJSONArray("facts")?.length() ?: 0)
+                .put("ongoingCount", evidence.optJSONArray("ongoing")?.length() ?: 0)
+        )
+
         var rounds = 0
         while (evidence.toString().length > FINAL_EVIDENCE_CHAR_BUDGET && rounds < MAX_REDUCTION_ROUNDS) {
             val batches = batchEvidence(evidence)
+            trace(
+                context,
+                "GEMMA_HOURLY_REDUCTION_ROUND_STARTED",
+                JSONObject()
+                    .put("sourceHash", source.sourceHash)
+                    .put("round", rounds + 1)
+                    .put("batchCount", batches.size)
+                    .put("inputChars", evidence.toString().length)
+            )
             val reduced = batches.mapIndexed { index, batch ->
-                runJsonPrompt(
+                val startedAt = System.currentTimeMillis()
+                val result = runJsonPrompt(
+                    context,
                     engine,
                     buildEvidenceReductionPrompt(index + 1, batches.size, batch.toString()),
-                    evidenceKeys
+                    evidenceKeys,
+                    "reduce_${rounds + 1}_${index + 1}_of_${batches.size}"
                 )
+                trace(
+                    context,
+                    "GEMMA_HOURLY_REDUCTION_BATCH_COMPLETED",
+                    evidenceDetails(source.sourceHash, index, batches.size, result)
+                        .put("round", rounds + 1)
+                        .put("elapsedMs", System.currentTimeMillis() - startedAt)
+                )
+                result
             }
             val next = mergeEvidence(reduced)
+            trace(
+                context,
+                "GEMMA_HOURLY_REDUCTION_ROUND_COMPLETED",
+                JSONObject()
+                    .put("sourceHash", source.sourceHash)
+                    .put("round", rounds + 1)
+                    .put("outputChars", next.toString().length)
+            )
             if (next.toString().length >= evidence.toString().length && rounds >= 1) {
                 evidence = capEvidenceForFinal(next)
                 break
@@ -103,22 +231,68 @@ object GemmaHourlyConversationAnalyzer {
             evidence = capEvidenceForFinal(evidence)
         }
 
-        return runJsonPrompt(engine, buildFinalHourlyPrompt(evidence.toString()), hourlyKeys)
+        val finalStartedAt = System.currentTimeMillis()
+        trace(
+            context,
+            "GEMMA_HOURLY_FINAL_STARTED",
+            JSONObject()
+                .put("sourceHash", source.sourceHash)
+                .put("evidenceChars", evidence.toString().length)
+                .put("factCount", evidence.optJSONArray("facts")?.length() ?: 0)
+        )
+        val result = runJsonPrompt(
+            context,
+            engine,
+            buildFinalHourlyPrompt(evidence.toString()),
+            hourlyKeys,
+            "final"
+        )
+        trace(
+            context,
+            "GEMMA_HOURLY_FINAL_COMPLETED",
+            JSONObject()
+                .put("sourceHash", source.sourceHash)
+                .put("elapsedMs", System.currentTimeMillis() - finalStartedAt)
+        )
+        return result
     }
 
-    private fun withEngine(context: Context, block: (Engine) -> OpenAiLunaClient.Response): OpenAiLunaClient.Response {
+    private fun withEngine(
+        context: Context,
+        sourceHash: String,
+        block: (Engine) -> OpenAiLunaClient.Response
+    ): OpenAiLunaClient.Response {
         val config = EngineConfig(
             modelPath = Gemma4ModelManager.modelFile(context).absolutePath,
             backend = Backend.GPU(),
             cacheDir = Gemma4ModelManager.cacheDir(context).absolutePath
         )
+        val startedAt = System.currentTimeMillis()
+        trace(
+            context,
+            "GEMMA_HOURLY_ENGINE_INITIALIZING",
+            JSONObject().put("sourceHash", sourceHash)
+        )
         Engine(config).use { engine ->
             engine.initialize()
+            trace(
+                context,
+                "GEMMA_HOURLY_ENGINE_READY",
+                JSONObject()
+                    .put("sourceHash", sourceHash)
+                    .put("elapsedMs", System.currentTimeMillis() - startedAt)
+            )
             return block(engine)
         }
     }
 
-    private fun runJsonPrompt(engine: Engine, prompt: String, requiredKeys: List<String>): JSONObject {
+    private fun runJsonPrompt(
+        context: Context,
+        engine: Engine,
+        prompt: String,
+        requiredKeys: List<String>,
+        stage: String
+    ): JSONObject {
         var lastError: Exception? = null
         repeat(2) { attempt ->
             val actualPrompt = if (attempt == 0) {
@@ -148,6 +322,15 @@ object GemmaHourlyConversationAnalyzer {
             } catch (error: Exception) {
                 if (isInputTooLong(error)) throw error
                 lastError = error
+                trace(
+                    context,
+                    "GEMMA_HOURLY_JSON_RETRY",
+                    JSONObject()
+                        .put("stage", stage)
+                        .put("attempt", attempt + 1)
+                        .put("error", error.javaClass.simpleName)
+                        .put("message", error.message?.take(300) ?: JSONObject.NULL)
+                )
             }
         }
         throw IllegalStateException("Gemma 4 could not produce valid JSON after retry", lastError)
@@ -385,6 +568,19 @@ object GemmaHourlyConversationAnalyzer {
             .put("ongoing", evidence.optJSONArray("ongoing") ?: JSONArray())
     }
 
+    private fun evidenceDetails(
+        sourceHash: String,
+        zeroBasedIndex: Int,
+        total: Int,
+        evidence: JSONObject
+    ): JSONObject = JSONObject()
+        .put("sourceHash", sourceHash)
+        .put("chunkIndex", zeroBasedIndex + 1)
+        .put("chunkCount", total)
+        .put("factCount", evidence.optJSONArray("facts")?.length() ?: 0)
+        .put("ongoingCount", evidence.optJSONArray("ongoing")?.length() ?: 0)
+        .put("evidenceChars", evidence.toString().length)
+
     private fun parseJsonObject(raw: String): JSONObject {
         val text = raw.trim()
         val start = text.indexOf('{')
@@ -412,6 +608,13 @@ object GemmaHourlyConversationAnalyzer {
             current = current.cause
         }
         return false
+    }
+
+    private fun trace(context: Context, event: String, details: JSONObject) {
+        try {
+            AppLogger.event(context, event, details)
+        } catch (_: Exception) {
+        }
     }
 
     private data class TranscriptItem(
