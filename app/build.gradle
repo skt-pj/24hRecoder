@@ -13,8 +13,8 @@ android {
         applicationId 'com.sktpj.recorder24h'
         minSdk 29
         targetSdk 36
-        versionCode 38
-        versionName '0.6.17'
+        versionCode 39
+        versionName '0.6.18'
         // Normal local transcription model is user-selectable in Settings.
         // Recording input verifies actual Bluetooth routing and falls back to the device mic if routing fails.
         // Record-list scroll/search/filter context survives a detail-screen round trip.
@@ -22,6 +22,7 @@ android {
         // Automatic and visible transcription now share one recorded-start FIFO dispatcher.
         // WorkManager wakes the FIFO but no longer runs one competing Whisper worker per segment.
         // Queue UI separates transcription work from AI summary work with tabs.
+        // Low-SNR speech chunks are denoised with AndroidDeepFilterNet before Whisper without changing the original timeline.
 
         ndk {
             abiFilters 'arm64-v8a'
@@ -72,6 +73,7 @@ kotlin {
 dependencies {
     implementation 'androidx.work:work-runtime:2.11.2'
     implementation 'com.github.k2-fsa:sherpa-onnx:1.13.4'
+    implementation 'io.github.kaleyravideo:android-deepfilternet:0.0.8'
 
     def composeBom = platform('androidx.compose:compose-bom:2026.06.00')
     implementation composeBom
