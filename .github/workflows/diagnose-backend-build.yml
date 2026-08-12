@@ -9,12 +9,31 @@ permissions:
 
 jobs:
   diagnose:
-    if: ${{ github.event.head_commit.message != 'Capture backend build log' }}
+    if: ${{ github.event.head_commit.message != 'Capture backend build log' && github.event.head_commit.message != 'Fix Android-compatible streaming VAD sidecar read' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/transcription-backends-0.7.15
+      - name: Apply known Android source compatibility fix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/sktpj/recorder24h/transcription/StreamingVadStore.java')
+          text = p.read_text()
+          old = 'JSONObject root = new JSONObject(java.nio.file.Files.readString(file.toPath()));'
+          new = 'JSONObject root = new JSONObject(new String(java.nio.file.Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));'
+          if old in text:
+              p.write_text(text.replace(old, new, 1))
+          PY
+          if ! git diff --quiet -- app/src/main/java/com/sktpj/recorder24h/transcription/StreamingVadStore.java; then
+            git config user.name "24hRecoder CI diagnostics"
+            git config user.email "actions@users.noreply.github.com"
+            git add app/src/main/java/com/sktpj/recorder24h/transcription/StreamingVadStore.java
+            git commit -m "Fix Android-compatible streaming VAD sidecar read"
+            git push origin HEAD:agent/transcription-backends-0.7.15
+            exit 0
+          fi
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
