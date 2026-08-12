@@ -18,6 +18,9 @@ import java.util.List;
  * Stateful Silero VAD path. During recording it feeds AudioRecord PCM into whisper.cpp's
  * no-reset streaming VAD and stores ranges on the original AudioRecord PTS timebase.
  *
+ * In full-streaming mode the same VAD pass also emits newly closed speech ranges to the dedicated
+ * live-ASR process. No second VAD or alternate VAD backend is introduced.
+ *
  * If a historical segment has no complete realtime sidecar, the same selected streaming
  * algorithm can be replayed offline. That is not a fallback to candidate VAD.
  */
@@ -48,6 +51,7 @@ public final class StreamingVadStore {
     }
 
     public static void resetStream(Context context) {
+        FullStreamingTranscriptionCoordinator.resetStream(context);
         synchronized (LOCK) {
             closeNativeLocked();
             activeMode = "";
@@ -63,45 +67,59 @@ public final class StreamingVadStore {
 
     public static void observePcm16(Context context, byte[] bytes, int length, long startPtsUs) {
         if (bytes == null || length < 2) return;
+        LiveObservation observation;
         synchronized (LOCK) {
             ensureConfiguredLocked(context, startPtsUs);
+            long currentEndUs = startPtsUs + (length / 2L) * 1_000_000L / SAMPLE_RATE;
             if (!TranscriptionPipelineSettings.VAD_STREAMING_SILERO.equals(activeMode) || !nativeReady) {
-                return;
-            }
-            if (streamBasePtsUs < 0L) streamBasePtsUs = startPtsUs;
-
-            int sampleCount = length / 2;
-            float[] samples = new float[sampleCount];
-            for (int i = 0; i < sampleCount; i++) {
-                int lo = bytes[i * 2] & 0xff;
-                int hi = bytes[i * 2 + 1];
-                short pcm = (short) ((hi << 8) | lo);
-                samples[i] = pcm / 32768.0f;
-            }
-
-            try {
-                String raw = nativeStreamingVadProcess(samples);
-                if (raw == null) throw new IllegalStateException("streaming VAD returned null");
-                JSONObject json = new JSONObject(raw);
-                int window = json.optInt("windowSamples", frameWindowSamples);
-                if (window > 0) frameWindowSamples = window;
-                JSONArray probabilities = json.optJSONArray("probabilities");
-                if (probabilities == null) return;
-                long frameUs = Math.max(1L, frameWindowSamples * 1_000_000L / SAMPLE_RATE);
-                for (int i = 0; i < probabilities.length(); i++) {
-                    long frameStartUs = streamBasePtsUs + processedFrameCount * frameUs;
-                    detector.accept(probabilities.optDouble(i, 0.0), frameStartUs, frameStartUs + frameUs);
-                    processedFrameCount++;
+                observation = new LiveObservation(false, -1L, currentEndUs, new long[0], new long[0]);
+            } else {
+                if (streamBasePtsUs < 0L) streamBasePtsUs = startPtsUs;
+                int closedBefore = detector.closedCount();
+                int sampleCount = length / 2;
+                float[] samples = new float[sampleCount];
+                for (int i = 0; i < sampleCount; i++) {
+                    int lo = bytes[i * 2] & 0xff;
+                    int hi = bytes[i * 2 + 1];
+                    short pcm = (short) ((hi << 8) | lo);
+                    samples[i] = pcm / 32768.0f;
                 }
-            } catch (Exception error) {
-                initError = error.getClass().getSimpleName() + ": " + safeMessage(error);
-                nativeReady = false;
-                closeNativeLocked();
-                log(context, "STREAMING_VAD_RUNTIME_FAILED", details(
-                        "error", error.getClass().getSimpleName(),
-                        "message", safeMessage(error)));
+
+                try {
+                    String raw = nativeStreamingVadProcess(samples);
+                    if (raw == null) throw new IllegalStateException("streaming VAD returned null");
+                    JSONObject json = new JSONObject(raw);
+                    int window = json.optInt("windowSamples", frameWindowSamples);
+                    if (window > 0) frameWindowSamples = window;
+                    JSONArray probabilities = json.optJSONArray("probabilities");
+                    if (probabilities != null) {
+                        long frameUs = Math.max(1L, frameWindowSamples * 1_000_000L / SAMPLE_RATE);
+                        for (int i = 0; i < probabilities.length(); i++) {
+                            long frameStartUs = streamBasePtsUs + processedFrameCount * frameUs;
+                            detector.accept(probabilities.optDouble(i, 0.0), frameStartUs, frameStartUs + frameUs);
+                            processedFrameCount++;
+                        }
+                    }
+                    List<RangeUs> newlyClosed = detector.closedSince(closedBefore);
+                    long[] starts = new long[newlyClosed.size()];
+                    long[] ends = new long[newlyClosed.size()];
+                    for (int i = 0; i < newlyClosed.size(); i++) {
+                        starts[i] = newlyClosed.get(i).startUs;
+                        ends[i] = newlyClosed.get(i).endUs;
+                    }
+                    observation = new LiveObservation(true, detector.activeStartUs(), currentEndUs, starts, ends);
+                } catch (Exception error) {
+                    initError = error.getClass().getSimpleName() + ": " + safeMessage(error);
+                    nativeReady = false;
+                    closeNativeLocked();
+                    log(context, "STREAMING_VAD_RUNTIME_FAILED", details(
+                            "error", error.getClass().getSimpleName(),
+                            "message", safeMessage(error)));
+                    observation = new LiveObservation(false, -1L, currentEndUs, new long[0], new long[0]);
+                }
             }
         }
+        FullStreamingTranscriptionCoordinator.observePcm(context, bytes, length, startPtsUs, observation);
     }
 
     public static void persistSegment(
@@ -152,7 +170,6 @@ public final class StreamingVadStore {
                 writeAtomic(sidecarFile(context, segmentId), root.toString());
                 log(context, "STREAMING_VAD_SEGMENT", new JSONObject(root.toString())
                         .put("segmentId", segmentId));
-
                 detector.pruneBefore(segmentBasePtsUs - SPEECH_PAD_US);
             } catch (Exception error) {
                 log(context, "STREAMING_VAD_SEGMENT_PERSIST_FAILED", details(
@@ -161,6 +178,9 @@ public final class StreamingVadStore {
                         "message", safeMessage(error)));
             }
         }
+        // This call is intentionally after sidecar persistence but before SegmentRepository READY.
+        FullStreamingTranscriptionCoordinator.onSegmentBoundary(
+                context, segmentId, segmentBasePtsUs, segmentEndPtsUs, startedAtMs, endedAtMs);
     }
 
     public static Snapshot read(Context context, String segmentId) {
@@ -227,7 +247,7 @@ public final class StreamingVadStore {
     }
 
     private static void ensureConfiguredLocked(Context context, long currentPtsUs) {
-        String selected = TranscriptionPipelineSettings.snapshot(context).vadBackend;
+        String selected = FullStreamingTranscriptionCoordinator.currentVadBackend(context);
         if (selected.equals(activeMode)) return;
 
         closeNativeLocked();
@@ -367,6 +387,20 @@ public final class StreamingVadStore {
             }
         }
 
+        int closedCount() {
+            return closed.size();
+        }
+
+        long activeStartUs() {
+            return activeStartUs;
+        }
+
+        List<RangeUs> closedSince(int index) {
+            if (index < 0) index = 0;
+            if (index >= closed.size()) return new ArrayList<>();
+            return new ArrayList<>(closed.subList(index, closed.size()));
+        }
+
         List<RangeUs> snapshotRanges(long currentEndUs) {
             List<RangeUs> result = new ArrayList<>(closed);
             if (activeStartUs >= 0L) {
@@ -402,6 +436,23 @@ public final class StreamingVadStore {
         RangeUs(long startUs, long endUs) {
             this.startUs = startUs;
             this.endUs = endUs;
+        }
+    }
+
+    public static final class LiveObservation {
+        public final boolean available;
+        public final long activeSpeechStartUs;
+        public final long currentEndUs;
+        public final long[] closedStartsUs;
+        public final long[] closedEndsUs;
+
+        LiveObservation(boolean available, long activeSpeechStartUs, long currentEndUs,
+                        long[] closedStartsUs, long[] closedEndsUs) {
+            this.available = available;
+            this.activeSpeechStartUs = activeSpeechStartUs;
+            this.currentEndUs = currentEndUs;
+            this.closedStartsUs = closedStartsUs == null ? new long[0] : closedStartsUs;
+            this.closedEndsUs = closedEndsUs == null ? new long[0] : closedEndsUs;
         }
     }
 

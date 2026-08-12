@@ -3,17 +3,32 @@ package com.sktpj.recorder24h.transcription;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Build;
+import android.os.Process;
 import android.speech.SpeechRecognizer;
 
 import org.json.JSONObject;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+
 /**
- * Explicit transcription pipeline selection.
+ * Explicit transcription pipeline selection shared by main, :recorder and :streaming_asr.
+ *
+ * SharedPreferences alone is not used as the live source because Android does not provide a
+ * reliable multi-process cache-coherency contract for it. 0.7.15 preferences are migrated once
+ * into an atomic JSON file, then every process reads the file at the point it snapshots a segment.
  *
  * There is deliberately no automatic fallback between backends. A selected backend either runs
- * or reports an unavailable/failure state. The legacy CPU path remains a normal selectable option.
+ * or reports an unavailable/failure state. The legacy post-segment CPU path remains selectable.
  */
 public final class TranscriptionPipelineSettings {
+    public static final String MODE_SEGMENT_POSTPROCESS = "segment-postprocess";
+    public static final String MODE_LIVE_STREAMING = "live-streaming";
+
     public static final String ASR_WHISPER_CPU = "whisper-cpu";
     public static final String ASR_WHISPER_VULKAN = "whisper-vulkan";
     public static final String ASR_ANDROID_ON_DEVICE = "android-on-device";
@@ -27,7 +42,10 @@ public final class TranscriptionPipelineSettings {
     public static final String SPEAKER_SHERPA_CPU = "sherpa-cpu";
     public static final String SPEAKER_OFF = "off";
 
+    private static final Object LOCK = new Object();
+    private static final String SETTINGS_FILE = "transcription_pipeline_settings.json";
     private static final String PREFS = "transcription_pipeline_settings";
+    private static final String KEY_MODE = "execution_mode";
     private static final String KEY_ASR = "asr_backend";
     private static final String KEY_VAD = "vad_backend";
     private static final String KEY_DENOISE = "denoise_backend";
@@ -37,33 +55,120 @@ public final class TranscriptionPipelineSettings {
     }
 
     public static Snapshot snapshot(Context context) {
-        SharedPreferences prefs = context.getApplicationContext()
-                .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        Context app = context.getApplicationContext();
+        synchronized (LOCK) {
+            File file = settingsFile(app);
+            if (!file.isFile()) {
+                Snapshot migrated = migrateLegacyPreferences(app);
+                writeSnapshotLocked(app, migrated);
+                return migrated;
+            }
+            try {
+                JSONObject row = new JSONObject(new String(
+                        Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
+                return snapshotFromJson(row);
+            } catch (Exception ignored) {
+                Snapshot recovered = migrateLegacyPreferences(app);
+                writeSnapshotLocked(app, recovered);
+                return recovered;
+            }
+        }
+    }
+
+    public static void setExecutionMode(Context context, String value) {
+        update(context, normalizeMode(value), null, null, null, null);
+    }
+
+    public static void setAsr(Context context, String value) {
+        update(context, null, normalizeAsr(value), null, null, null);
+    }
+
+    public static void setVad(Context context, String value) {
+        update(context, null, null, normalizeVad(value), null, null);
+    }
+
+    public static void setDenoise(Context context, String value) {
+        update(context, null, null, null, normalizeDenoise(value), null);
+    }
+
+    public static void setSpeaker(Context context, String value) {
+        update(context, null, null, null, null, normalizeSpeaker(value));
+    }
+
+    private static void update(Context context, String mode, String asr, String vad,
+                               String denoise, String speaker) {
+        Context app = context.getApplicationContext();
+        synchronized (LOCK) {
+            Snapshot current = snapshot(app);
+            Snapshot next = new Snapshot(
+                    mode == null ? current.executionMode : mode,
+                    asr == null ? current.asrBackend : asr,
+                    vad == null ? current.vadBackend : vad,
+                    denoise == null ? current.denoiseBackend : denoise,
+                    speaker == null ? current.speakerBackend : speaker);
+            writeSnapshotLocked(app, next);
+            app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                    .putString(KEY_MODE, next.executionMode)
+                    .putString(KEY_ASR, next.asrBackend)
+                    .putString(KEY_VAD, next.vadBackend)
+                    .putString(KEY_DENOISE, next.denoiseBackend)
+                    .putString(KEY_SPEAKER, next.speakerBackend)
+                    .apply();
+        }
+    }
+
+    private static Snapshot migrateLegacyPreferences(Context app) {
+        SharedPreferences prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         return new Snapshot(
+                normalizeMode(prefs.getString(KEY_MODE, MODE_SEGMENT_POSTPROCESS)),
                 normalizeAsr(prefs.getString(KEY_ASR, ASR_WHISPER_CPU)),
                 normalizeVad(prefs.getString(KEY_VAD, VAD_CANDIDATE_SILERO)),
                 normalizeDenoise(prefs.getString(KEY_DENOISE, DENOISE_DEEPFILTER)),
                 normalizeSpeaker(prefs.getString(KEY_SPEAKER, SPEAKER_SHERPA_CPU)));
     }
 
-    public static void setAsr(Context context, String value) {
-        context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putString(KEY_ASR, normalizeAsr(value)).apply();
+    private static Snapshot snapshotFromJson(JSONObject row) {
+        return new Snapshot(
+                normalizeMode(row.optString("executionMode", MODE_SEGMENT_POSTPROCESS)),
+                normalizeAsr(row.optString("asrBackend", ASR_WHISPER_CPU)),
+                normalizeVad(row.optString("vadBackend", VAD_CANDIDATE_SILERO)),
+                normalizeDenoise(row.optString("denoiseBackend", DENOISE_DEEPFILTER)),
+                normalizeSpeaker(row.optString("speakerBackend", SPEAKER_SHERPA_CPU)));
     }
 
-    public static void setVad(Context context, String value) {
-        context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putString(KEY_VAD, normalizeVad(value)).apply();
+    private static void writeSnapshotLocked(Context app, Snapshot snapshot) {
+        JSONObject row = snapshot.toJson();
+        try {
+            row.put("schemaVersion", 1);
+            row.put("updatedAtMs", System.currentTimeMillis());
+        } catch (Exception ignored) {
+        }
+        File target = settingsFile(app);
+        File parent = target.getParentFile();
+        if (parent != null && !parent.exists()) parent.mkdirs();
+        File temp = new File(parent, target.getName()
+                + ".tmp." + Process.myPid() + "." + Thread.currentThread().getId());
+        try {
+            try (FileOutputStream out = new FileOutputStream(temp, false)) {
+                out.write(row.toString().getBytes(StandardCharsets.UTF_8));
+                out.flush();
+                out.getFD().sync();
+            }
+            try {
+                Files.move(temp.toPath(), target.toPath(),
+                        StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException unsupported) {
+                Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (Exception error) {
+            throw new IllegalStateException("TRANSCRIPTION_PIPELINE_SETTINGS_WRITE_FAILED", error);
+        } finally {
+            if (temp.exists()) temp.delete();
+        }
     }
 
-    public static void setDenoise(Context context, String value) {
-        context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putString(KEY_DENOISE, normalizeDenoise(value)).apply();
-    }
-
-    public static void setSpeaker(Context context, String value) {
-        context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putString(KEY_SPEAKER, normalizeSpeaker(value)).apply();
+    private static File settingsFile(Context context) {
+        return new File(context.getFilesDir(), SETTINGS_FILE);
     }
 
     public static boolean isAsrRuntimeAvailable(Context context, String asr) {
@@ -84,16 +189,21 @@ public final class TranscriptionPipelineSettings {
         return snapshot != null && !ASR_ANDROID_ON_DEVICE.equals(snapshot.asrBackend);
     }
 
+    public static boolean isLiveStreaming(Snapshot snapshot) {
+        return snapshot != null && MODE_LIVE_STREAMING.equals(snapshot.executionMode);
+    }
+
     public static boolean isSelectedPipelineReady(Context context, String whisperModelId) {
         Snapshot pipeline = snapshot(context);
-        if (!isAsrRuntimeAvailable(context, pipeline.asrBackend)) return false;
-        if (!WhisperModelManager.isVadReady(context)) return false;
-        return !requiresWhisperModel(pipeline)
-                || WhisperModelManager.isModelReady(context, whisperModelId);
+        return unavailableReason(context, pipeline, whisperModelId) == null;
     }
 
     public static String unavailableReason(Context context, Snapshot pipeline, String whisperModelId) {
         if (pipeline == null) return "PIPELINE_SETTINGS_MISSING";
+        if (MODE_LIVE_STREAMING.equals(pipeline.executionMode)
+                && !VAD_STREAMING_SILERO.equals(pipeline.vadBackend)) {
+            return "LIVE_STREAMING_REQUIRES_STREAMING_SILERO";
+        }
         if (!isAsrRuntimeAvailable(context, pipeline.asrBackend)) {
             if (ASR_WHISPER_VULKAN.equals(pipeline.asrBackend)) return "VULKAN_BACKEND_UNAVAILABLE";
             if (ASR_ANDROID_ON_DEVICE.equals(pipeline.asrBackend)) return "ANDROID_ON_DEVICE_ASR_UNAVAILABLE";
@@ -109,9 +219,7 @@ public final class TranscriptionPipelineSettings {
 
     public static void requireRunnable(Context context, Snapshot pipeline, String whisperModelId) {
         String reason = unavailableReason(context, pipeline, whisperModelId);
-        if (reason != null) {
-            throw new IllegalStateException(reason);
-        }
+        if (reason != null) throw new IllegalStateException(reason);
     }
 
     public static JSONObject capabilities(Context context) {
@@ -122,18 +230,23 @@ public final class TranscriptionPipelineSettings {
             json.put("sdkInt", Build.VERSION.SDK_INT);
             json.put("cpuCores", Runtime.getRuntime().availableProcessors());
             json.put("whisperCpu", true);
-            json.put("whisperVulkan",
-                    isAsrRuntimeAvailable(context, ASR_WHISPER_VULKAN));
-            json.put("androidOnDeviceAsr",
-                    isAsrRuntimeAvailable(context, ASR_ANDROID_ON_DEVICE));
+            json.put("whisperVulkan", isAsrRuntimeAvailable(context, ASR_WHISPER_VULKAN));
+            json.put("androidOnDeviceAsr", isAsrRuntimeAvailable(context, ASR_ANDROID_ON_DEVICE));
             json.put("sileroModelReady", WhisperModelManager.isVadReady(context));
             json.put("deepFilterNetPackaged", true);
             json.put("speakerSherpaCpu", true);
+            json.put("fullStreaming", true);
+            json.put("settingsTransport", "atomic-json-cross-process");
             json.put("automaticFallback", false);
             json.put("selected", snapshot(context).toJson());
         } catch (Exception ignored) {
         }
         return json;
+    }
+
+    public static String modeLabel(String value) {
+        return MODE_LIVE_STREAMING.equals(normalizeMode(value))
+                ? "完全ストリーミング" : "5分終了後に処理";
     }
 
     public static String asrLabel(String value) {
@@ -159,6 +272,10 @@ public final class TranscriptionPipelineSettings {
                 ? "話者判定なし" : "sherpa-onnx CPU";
     }
 
+    private static String normalizeMode(String value) {
+        return MODE_LIVE_STREAMING.equals(value) ? MODE_LIVE_STREAMING : MODE_SEGMENT_POSTPROCESS;
+    }
+
     private static String normalizeAsr(String value) {
         if (ASR_WHISPER_VULKAN.equals(value) || ASR_ANDROID_ON_DEVICE.equals(value)) return value;
         return ASR_WHISPER_CPU;
@@ -177,28 +294,40 @@ public final class TranscriptionPipelineSettings {
     }
 
     public static final class Snapshot {
+        public final String executionMode;
         public final String asrBackend;
         public final String vadBackend;
         public final String denoiseBackend;
         public final String speakerBackend;
 
         Snapshot(String asrBackend, String vadBackend, String denoiseBackend, String speakerBackend) {
-            this.asrBackend = asrBackend;
-            this.vadBackend = vadBackend;
-            this.denoiseBackend = denoiseBackend;
-            this.speakerBackend = speakerBackend;
+            this(MODE_SEGMENT_POSTPROCESS, asrBackend, vadBackend, denoiseBackend, speakerBackend);
+        }
+
+        Snapshot(String executionMode, String asrBackend, String vadBackend,
+                 String denoiseBackend, String speakerBackend) {
+            this.executionMode = normalizeMode(executionMode);
+            this.asrBackend = normalizeAsr(asrBackend);
+            this.vadBackend = normalizeVad(vadBackend);
+            this.denoiseBackend = normalizeDenoise(denoiseBackend);
+            this.speakerBackend = normalizeSpeaker(speakerBackend);
         }
 
         public String signature() {
-            return "asr=" + asrBackend
+            String legacy = "asr=" + asrBackend
                     + "+vad=" + vadBackend
                     + "+denoise=" + denoiseBackend
                     + "+speaker=" + speakerBackend;
+            // 0.7.15 used exactly the legacy signature above. Keep it byte-for-byte for retained
+            // postprocess mode so installing 0.7.16 does not invalidate/requeue old transcripts.
+            if (MODE_SEGMENT_POSTPROCESS.equals(executionMode)) return legacy;
+            return "mode=" + executionMode + "+" + legacy;
         }
 
         public JSONObject toJson() {
             JSONObject json = new JSONObject();
             try {
+                json.put("executionMode", executionMode);
                 json.put("asrBackend", asrBackend);
                 json.put("vadBackend", vadBackend);
                 json.put("denoiseBackend", denoiseBackend);
