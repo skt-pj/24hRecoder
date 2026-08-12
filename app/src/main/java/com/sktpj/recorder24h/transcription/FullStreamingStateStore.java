@@ -12,11 +12,16 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.List;
 
 /** Durable ownership and live-display state for full-streaming transcription. */
 public final class FullStreamingStateStore {
     private static final Object LOCK = new Object();
     private static final String DIR = "metadata/full-streaming";
+    private static final String RECENT_FILE = "recent.json";
+    private static final long RECENT_RETENTION_MS = 24L * 60L * 60L * 1000L;
+    private static final int RECENT_MAX_ENTRIES = 1000;
 
     private FullStreamingStateStore() {
     }
@@ -98,6 +103,105 @@ public final class FullStreamingStateStore {
         }
     }
 
+    /** Durable rolling final utterances for the Record > Realtime view. */
+    public static void appendRecentFinal(Context context,
+                                         long startAtMs, long endAtMs,
+                                         long startPtsUs, long endPtsUs,
+                                         String text, String backend,
+                                         JSONArray segments) {
+        if (text == null || text.trim().isEmpty()) return;
+        synchronized (LOCK) {
+            try {
+                long now = System.currentTimeMillis();
+                long cutoff = now - RECENT_RETENTION_MS;
+                JSONObject root = readRecentRoot(context);
+                JSONArray old = root.optJSONArray("entries");
+                if (old == null) old = new JSONArray();
+                JSONArray kept = new JSONArray();
+                int earliestIndex = Math.max(0, old.length() - (RECENT_MAX_ENTRIES - 1));
+                for (int i = earliestIndex; i < old.length(); i++) {
+                    JSONObject row = old.optJSONObject(i);
+                    if (row == null) continue;
+                    long rowEnd = row.optLong("endAtMs", row.optLong("createdAtMs", 0L));
+                    if (rowEnd >= cutoff) kept.put(row);
+                }
+                JSONObject entry = new JSONObject();
+                entry.put("id", now + "-" + startPtsUs + "-" + endPtsUs);
+                entry.put("startAtMs", Math.max(0L, startAtMs));
+                entry.put("endAtMs", Math.max(startAtMs, endAtMs));
+                entry.put("startPtsUs", startPtsUs);
+                entry.put("endPtsUs", endPtsUs);
+                entry.put("text", text.trim());
+                entry.put("backend", backend == null ? JSONObject.NULL : backend);
+                String speaker = firstSpeaker(segments);
+                entry.put("speaker", speaker == null ? JSONObject.NULL : speaker);
+                entry.put("segments", segments == null ? new JSONArray() : new JSONArray(segments.toString()));
+                entry.put("createdAtMs", now);
+                kept.put(entry);
+                root.put("schemaVersion", 1);
+                root.put("retentionMs", RECENT_RETENTION_MS);
+                root.put("updatedAtMs", now);
+                root.put("entries", kept);
+                writeAtomic(recentFile(context), root.toString());
+            } catch (Exception ignored) {
+                // Live display persistence must never fail the authoritative transcription.
+            }
+        }
+    }
+
+    public static List<RecentFinal> readRecentFinals(Context context) {
+        List<RecentFinal> out = new ArrayList<>();
+        synchronized (LOCK) {
+            try {
+                JSONObject root = readRecentRoot(context);
+                JSONArray rows = root.optJSONArray("entries");
+                if (rows == null) return out;
+                long cutoff = System.currentTimeMillis() - RECENT_RETENTION_MS;
+                int start = Math.max(0, rows.length() - RECENT_MAX_ENTRIES);
+                for (int i = start; i < rows.length(); i++) {
+                    JSONObject row = rows.optJSONObject(i);
+                    if (row == null) continue;
+                    long endAtMs = row.optLong("endAtMs", 0L);
+                    if (endAtMs > 0L && endAtMs < cutoff) continue;
+                    out.add(new RecentFinal(
+                            row.optString("id", "live-" + i),
+                            row.optLong("startAtMs", 0L),
+                            endAtMs,
+                            row.optLong("startPtsUs", -1L),
+                            row.optLong("endPtsUs", -1L),
+                            row.optString("text", ""),
+                            row.isNull("speaker") ? null : row.optString("speaker", null),
+                            row.isNull("backend") ? null : row.optString("backend", null)));
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return out;
+    }
+
+    private static JSONObject readRecentRoot(Context context) {
+        File file = recentFile(context);
+        if (!file.isFile()) return new JSONObject();
+        try {
+            return new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
+        } catch (Exception ignored) {
+            return new JSONObject();
+        }
+    }
+
+    private static String firstSpeaker(JSONArray segments) {
+        if (segments == null) return null;
+        for (int i = 0; i < segments.length(); i++) {
+            JSONObject row = segments.optJSONObject(i);
+            if (row == null) continue;
+            String speaker = row.optString("speaker", "").trim();
+            if (!speaker.isEmpty()) return speaker;
+            speaker = row.optString("speakerId", "").trim();
+            if (!speaker.isEmpty()) return speaker;
+        }
+        return null;
+    }
+
     private static void updateOwnershipState(Context context, String segmentId, String state,
                                              String engineId, String error) {
         if (segmentId == null || segmentId.isEmpty()) return;
@@ -136,6 +240,10 @@ public final class FullStreamingStateStore {
         return new File(dir(context), "current.json");
     }
 
+    private static File recentFile(Context context) {
+        return new File(dir(context), RECENT_FILE);
+    }
+
     private static File dir(Context context) {
         File dir = new File(context.getFilesDir(), DIR);
         if (!dir.exists()) dir.mkdirs();
@@ -165,6 +273,30 @@ public final class FullStreamingStateStore {
             } finally {
                 if (temp.exists()) temp.delete();
             }
+        }
+    }
+
+    public static final class RecentFinal {
+        public final String id;
+        public final long startAtMs;
+        public final long endAtMs;
+        public final long startPtsUs;
+        public final long endPtsUs;
+        public final String text;
+        public final String speaker;
+        public final String backend;
+
+        RecentFinal(String id, long startAtMs, long endAtMs,
+                    long startPtsUs, long endPtsUs, String text,
+                    String speaker, String backend) {
+            this.id = id;
+            this.startAtMs = startAtMs;
+            this.endAtMs = endAtMs;
+            this.startPtsUs = startPtsUs;
+            this.endPtsUs = endPtsUs;
+            this.text = text;
+            this.speaker = speaker;
+            this.backend = backend;
         }
     }
 

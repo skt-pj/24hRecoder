@@ -106,6 +106,7 @@ import com.sktpj.recorder24h.storage.RecorderHealth
 import com.sktpj.recorder24h.storage.RecorderStateStore
 import com.sktpj.recorder24h.storage.RecordingIntentStore
 import com.sktpj.recorder24h.storage.StoragePolicy
+import com.sktpj.recorder24h.transcription.FullStreamingStateStore
 import com.sktpj.recorder24h.transcription.LocalWhisperEngine
 import com.sktpj.recorder24h.transcription.TranscriptionRepository
 import com.sktpj.recorder24h.transcription.TranscriptionResetManager
@@ -229,6 +230,10 @@ private enum class HistoryFilter(val label: String) {
     ALL("すべて"), TRANSCRIBED("文字起こし済み"), AUDIO("音声あり"), ATTENTION("要確認")
 }
 
+private enum class HistoryViewMode(val label: String) {
+    HISTORY("履歴"), REALTIME("リアルタイム")
+}
+
 private data class DashboardSnapshot(
     val state: String,
     val heartbeatMs: Long,
@@ -293,6 +298,9 @@ private fun RecorderApp(
     val historyListState = rememberLazyListState()
     var historyQuery by remember { mutableStateOf("") }
     var historyFilter by remember { mutableStateOf(HistoryFilter.ALL) }
+    var historyViewMode by remember { mutableStateOf(HistoryViewMode.HISTORY) }
+    var liveState by remember { mutableStateOf<FullStreamingStateStore.LiveState?>(null) }
+    var liveFinals by remember { mutableStateOf<List<FullStreamingStateStore.RecentFinal>>(emptyList()) }
 
     LaunchedEffect(Unit) {
         val hasQueuedTranscription = withContext(Dispatchers.IO) {
@@ -314,6 +322,19 @@ private fun RecorderApp(
                 records = withContext(Dispatchers.IO) { SegmentHistoryRepository.load(context) }
                 delay(if (selectedId != null || section == AppSection.QUEUE) 1_000L else 5_000L)
             } while (section == AppSection.HISTORY || section == AppSection.QUEUE)
+        }
+    }
+    LaunchedEffect(section, historyViewMode, refresh) {
+        if (section == AppSection.HISTORY && historyViewMode == HistoryViewMode.REALTIME) {
+            do {
+                val snapshot = withContext(Dispatchers.IO) {
+                    FullStreamingStateStore.readLiveState(context) to
+                        FullStreamingStateStore.readRecentFinals(context)
+                }
+                liveState = snapshot.first
+                liveFinals = snapshot.second
+                delay(500L)
+            } while (section == AppSection.HISTORY && historyViewMode == HistoryViewMode.REALTIME)
         }
     }
 
@@ -404,11 +425,15 @@ private fun RecorderApp(
                                 }
                             }
                         )
-                        section == AppSection.HISTORY -> HistoryScreen(
+                        section == AppSection.HISTORY -> HistorySection(
                             records = records,
                             listState = historyListState,
                             query = historyQuery,
                             filter = historyFilter,
+                            viewMode = historyViewMode,
+                            liveState = liveState,
+                            liveFinals = liveFinals,
+                            onViewModeChange = { historyViewMode = it },
                             onQueryChange = { historyQuery = it },
                             onFilterChange = { historyFilter = it },
                             onSelect = { selectedId = it.segmentId }
@@ -781,6 +806,149 @@ private fun formatQueueDateTime(record: SegmentRecord): String {
     } else {
         "$day $start"
     }
+}
+
+@Composable
+private fun HistorySection(
+    records: List<SegmentRecord>,
+    listState: LazyListState,
+    query: String,
+    filter: HistoryFilter,
+    viewMode: HistoryViewMode,
+    liveState: FullStreamingStateStore.LiveState?,
+    liveFinals: List<FullStreamingStateStore.RecentFinal>,
+    onViewModeChange: (HistoryViewMode) -> Unit,
+    onQueryChange: (String) -> Unit,
+    onFilterChange: (HistoryFilter) -> Unit,
+    onSelect: (SegmentRecord) -> Unit
+) {
+    Column(Modifier.fillMaxSize()) {
+        LazyRow(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            itemsIndexed(HistoryViewMode.entries) { _, mode ->
+                FilterChip(
+                    selected = viewMode == mode,
+                    onClick = { onViewModeChange(mode) },
+                    label = { Text(mode.label) }
+                )
+            }
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            if (viewMode == HistoryViewMode.HISTORY) {
+                HistoryScreen(records, listState, query, filter, onQueryChange, onFilterChange, onSelect)
+            } else {
+                LiveHistoryScreen(liveState, liveFinals)
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiveHistoryScreen(
+    liveState: FullStreamingStateStore.LiveState?,
+    finals: List<FullStreamingStateStore.RecentFinal>
+) {
+    val context = LocalContext.current
+    val listState = rememberLazyListState()
+    val pipeline = TranscriptionPipelineSettings.snapshot(context)
+    val state = liveState?.state ?: "OFF"
+    val partial = liveState?.partialText.orEmpty()
+    val backendId = liveState?.backend ?: pipeline.asrBackend
+    val backendLabel = TranscriptionPipelineSettings.asrLabel(backendId)
+    val vadLabel = TranscriptionPipelineSettings.vadLabel(pipeline.vadBackend)
+    val stateLabel = when (state) {
+        "LIVE_PARTIAL" -> "認識中"
+        "FINAL" -> "確定"
+        "WAITING" -> "待機中"
+        "ERROR" -> "エラー"
+        else -> "停止"
+    }
+    val stateTone = when (state) {
+        "LIVE_PARTIAL", "FINAL" -> StatusTone.SUCCESS
+        "WAITING" -> StatusTone.WAITING
+        "ERROR" -> StatusTone.ERROR
+        else -> StatusTone.NEUTRAL
+    }
+
+    LaunchedEffect(finals.size, liveState?.updatedAtMs) {
+        if (finals.isNotEmpty()) {
+            listState.scrollToItem(finals.lastIndex)
+        }
+    }
+
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("ライブ文字起こし", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                    StatusPill(stateLabel, stateTone)
+                }
+                Text("$backendLabel / $vadLabel", style = MaterialTheme.typography.bodyMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text("推論キュー ${liveState?.queueDepth ?: 0}", style = MaterialTheme.typography.labelMedium)
+                    if ((liveState?.updatedAtMs ?: 0L) > 0L) {
+                        Text("更新 ${formatLiveTime(liveState!!.updatedAtMs)}", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+                if (!liveState?.error.isNullOrBlank()) {
+                    Text(liveState!!.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                if (state == "OFF" && !TranscriptionPipelineSettings.isLiveStreaming(pipeline)) {
+                    Text("設定で「完全ストリーミング」を選ぶと、この画面に会話がリアルタイム表示されます。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+
+        if (finals.isEmpty() && partial.isBlank()) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text("まだ確定したライブ会話はありません", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(bottom = 8.dp)
+            ) {
+                itemsIndexed(finals, key = { _, item -> item.id }) { _, item ->
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(formatLiveTime(item.startAtMs), style = MaterialTheme.typography.labelLarge)
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    item.speaker?.takeIf { it.isNotBlank() } ?: "確定",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(item.text, style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                }
+                if (partial.isNotBlank()) {
+                    item(key = "live-partial") {
+                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
+                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Text("認識中（暫定）", style = MaterialTheme.typography.labelLarge)
+                                Text(partial, style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun formatLiveTime(value: Long): String {
+    if (value <= 0L) return "--:--:--"
+    return SimpleDateFormat("M/d HH:mm:ss", Locale.JAPAN).format(Date(value))
 }
 
 @Composable

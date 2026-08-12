@@ -243,11 +243,18 @@ public final class StreamingTranscriptionService extends Service {
         float[] samples = pcmBuffer.sliceFloat(startUs, endUs);
         if (samples.length == 0) return;
         lastScheduledFinalEndUs = endUs;
+        final long queuedAtMs = System.currentTimeMillis();
         submit("final", () -> {
             if (accumulator.failed) return;
             try {
                 Recognition result = recognize(samples, accumulator, false);
                 accumulator.addFinal(result, startUs, endUs);
+                long speechDurationMs = Math.max(0L, (endUs - startUs) / 1000L);
+                long endAtMs = queuedAtMs;
+                long startAtMs = Math.max(0L, endAtMs - speechDurationMs);
+                FullStreamingStateStore.appendRecentFinal(
+                        this, startAtMs, endAtMs, startUs, endUs,
+                        result.text, accumulator.config.asrBackend, result.segments);
                 writeState("FINAL", "", accumulator.latestFinalText, accumulator, null);
                 log("FULL_STREAMING_FINAL", new JSONObject()
                         .put("startPtsUs", startUs)

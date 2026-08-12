@@ -13,8 +13,8 @@ android {
         applicationId 'com.sktpj.recorder24h'
         minSdk 29
         targetSdk 36
-        versionCode 1018
-        versionName '0.7.18'
+        versionCode 1019
+        versionName '0.7.19'
         // Normal local transcription model is user-selectable in Settings.
         // AI analysis can switch between OpenAI GPT-5.6 Luna and local Gemma 4 E2B.
         // Dense Gemma hourly input is split near conversation gaps with overlap, then synthesized from deduplicated evidence.
@@ -32,6 +32,7 @@ android {
         // Transcription execution is explicitly selectable between retained five-minute postprocess and full live streaming.
         // Full streaming runs ASR in a dedicated process so heavy inference cannot block the AudioRecord loop.
         // The persisted transcription backlog has explicit pause/resume; pause aborts current postprocess inference.
+        // Record history exposes a live view backed by durable rolling full-streaming final utterances.
 
         ndk {
             abiFilters 'arm64-v8a'
