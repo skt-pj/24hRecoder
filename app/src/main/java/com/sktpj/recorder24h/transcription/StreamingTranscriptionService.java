@@ -122,7 +122,7 @@ public final class StreamingTranscriptionService extends Service {
         }
 
         if (latestActiveSpeechStartUs >= 0L) {
-            long speechStart = Math.max(current.basePtsUs,
+            long speechStart = Math.max(current.basePtsUs(),
                     Math.max(latestActiveSpeechStartUs, lastScheduledFinalEndUs));
             if (currentEndUs - speechStart >= MIN_PARTIAL_SPEECH_US
                     && currentEndUs - lastPartialRequestedEndUs >= PARTIAL_INTERVAL_US) {
@@ -138,16 +138,22 @@ public final class StreamingTranscriptionService extends Service {
 
     private void handleBoundary(Bundle data) {
         SegmentAccumulator old = current;
-        long endPtsUs = data.getLong("segmentEndPtsUs", old == null ? 0L : old.basePtsUs);
+        long endPtsUs = data.getLong("segmentEndPtsUs", old == null ? 0L : old.basePtsUs());
+        long actualBasePtsUs = data.getLong("segmentBasePtsUs", old == null ? 0L : old.basePtsUs());
         PipelineConfig nextConfig = PipelineConfig.fromBundle(data, "next");
 
         if (old != null && old.config.isLive()) {
+            // Reset messages use the previous raw end PTS as the provisional next base. Correct it
+            // to the recorder's actual AAC-segment base before anything is persisted. If final
+            // utterances already completed, their relative timestamps are shifted by the same
+            // delta; queued final tasks read the corrected base when they append their result.
+            old.correctBase(actualBasePtsUs);
             old.segmentId = data.getString("segmentId");
             old.startedAtMs = data.getLong("startedAtMs", 0L);
             old.endedAtMs = data.getLong("endedAtMs", 0L);
             old.endPtsUs = endPtsUs;
             if (latestActiveSpeechStartUs >= 0L) {
-                long start = Math.max(old.basePtsUs,
+                long start = Math.max(old.basePtsUs(),
                         Math.max(latestActiveSpeechStartUs, lastScheduledFinalEndUs));
                 if (endPtsUs > start) scheduleFinal(start, endPtsUs, old);
             }
@@ -170,9 +176,11 @@ public final class StreamingTranscriptionService extends Service {
                     old == null ? "" : old.accumulatedText.toString(),
                     old == null ? null : old.segments, pendingInference.get(), null);
         }
-        log("FULL_STREAMING_SERVICE_BOUNDARY", new JSONObject()
-                .put("segmentId", data.getString("segmentId"))
-                .put("nextPipeline", nextConfig.toJson()));
+        log("FULL_STREAMING_SERVICE_BOUNDARY", details(
+                "segmentId", data.getString("segmentId"),
+                "actualSegmentBasePtsUs", actualBasePtsUs,
+                "segmentEndPtsUs", endPtsUs,
+                "nextPipeline", nextConfig.toJson()));
     }
 
     private void enqueueConfigure(SegmentAccumulator accumulator) {
@@ -219,7 +227,7 @@ public final class StreamingTranscriptionService extends Service {
 
     private void scheduleFinal(long requestedStartUs, long requestedEndUs, SegmentAccumulator accumulator) {
         if (accumulator == null || accumulator.failed) return;
-        long startUs = Math.max(accumulator.basePtsUs,
+        long startUs = Math.max(accumulator.basePtsUs(),
                 Math.max(requestedStartUs, lastScheduledFinalEndUs));
         long endUs = Math.max(startUs, requestedEndUs);
         if (endUs <= startUs) return;
@@ -300,10 +308,10 @@ public final class StreamingTranscriptionService extends Service {
                         accumulator.startedAtMs, System.currentTimeMillis(),
                         "FAILED", "FULL_STREAMING_ASR_FAILED:" + reason);
             }
-            log("FULL_STREAMING_SEGMENT_FAILED", new JSONObject()
-                    .put("segmentId", accumulator.segmentId)
-                    .put("reason", reason)
-                    .put("automaticFallback", false));
+            log("FULL_STREAMING_SEGMENT_FAILED", details(
+                    "segmentId", accumulator.segmentId,
+                    "reason", reason,
+                    "automaticFallback", false));
             return;
         }
 
@@ -404,6 +412,17 @@ public final class StreamingTranscriptionService extends Service {
         }
     }
 
+    private JSONObject details(Object... values) {
+        JSONObject json = new JSONObject();
+        for (int i = 0; i + 1 < values.length; i += 2) {
+            try {
+                json.put(String.valueOf(values[i]), values[i + 1]);
+            } catch (Exception ignored) {
+            }
+        }
+        return json;
+    }
+
     private void log(String event, JSONObject details) {
         try {
             JSONObject row = details == null ? new JSONObject() : details;
@@ -472,7 +491,7 @@ public final class StreamingTranscriptionService extends Service {
     }
 
     private static final class SegmentAccumulator {
-        final long basePtsUs;
+        private long basePtsUs;
         final PipelineConfig config;
         final StringBuilder accumulatedText = new StringBuilder();
         final JSONArray segments = new JSONArray();
@@ -489,7 +508,34 @@ public final class StreamingTranscriptionService extends Service {
             this.config = config;
         }
 
-        void addFinal(Recognition result, long globalStartUs, long globalEndUs) throws Exception {
+        synchronized long basePtsUs() {
+            return basePtsUs;
+        }
+
+        synchronized void correctBase(long actualBasePtsUs) {
+            long previousBase = basePtsUs;
+            if (actualBasePtsUs == previousBase) return;
+            long deltaMs = (actualBasePtsUs - previousBase) / 1000L;
+            if (deltaMs != 0L) {
+                for (int i = 0; i < segments.length(); i++) {
+                    JSONObject row = segments.optJSONObject(i);
+                    if (row == null) continue;
+                    long oldStart = row.optLong("startMs", 0L);
+                    long oldEnd = row.optLong("endMs", oldStart);
+                    long newStart = Math.max(0L, oldStart - deltaMs);
+                    long newEnd = Math.max(newStart, oldEnd - deltaMs);
+                    try {
+                        row.put("startMs", newStart);
+                        row.put("endMs", newEnd);
+                        row.put("durationMs", Math.max(0L, newEnd - newStart));
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+            basePtsUs = actualBasePtsUs;
+        }
+
+        synchronized void addFinal(Recognition result, long globalStartUs, long globalEndUs) throws Exception {
             latestFinalText = result.text;
             if (!result.text.isEmpty()) {
                 if (accumulatedText.length() > 0) accumulatedText.append(' ');
