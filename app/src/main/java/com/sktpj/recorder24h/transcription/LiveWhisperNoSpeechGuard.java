@@ -9,13 +9,10 @@ import org.json.JSONObject;
 
 /** Conservative guard against Whisper hallucinations on silent/near-silent live utterances. */
 final class LiveWhisperNoSpeechGuard {
-    // Match the existing realtime activity gate's minimum activity floor. If both values are below
-    // these limits, the captured PCM is not considered meaningful acoustic activity.
-    private static final double MIN_ACTIVITY_RMS = 0.0012;
-    private static final double MIN_ACTIVITY_PEAK = 0.0045;
-
-    // A second, slightly wider low-signal band is only used together with Whisper's own
-    // no-speech probability. This avoids rejecting ordinary quiet speech from energy alone.
+    // Do not reject a Silero-confirmed utterance from energy alone after denoising. DeepFilterNet
+    // can legitimately lower absolute amplitude even when the utterance contains speech. Only
+    // exact digital silence is skipped before Whisper; low-signal suppression remains available
+    // after ASR together with Whisper's own no-speech probability.
     private static final double LOW_SIGNAL_RMS = 0.0025;
     private static final double LOW_SIGNAL_PEAK = 0.0100;
     private static final double NO_SPEECH_THRESHOLD = 0.60;
@@ -37,8 +34,8 @@ final class LiveWhisperNoSpeechGuard {
     }
 
     static boolean shouldSkipBeforeAsr(Context context, String route, InputStats input) {
-        if (input.rms <= MIN_ACTIVITY_RMS && input.peak <= MIN_ACTIVITY_PEAK) {
-            logSuppressed(context, route, "pre-asr-low-signal", input,
+        if (input.rms == 0.0 && input.peak == 0.0) {
+            logSuppressed(context, route, "pre-asr-digital-silence", input,
                     0, -1.0, -1.0, 0);
             return true;
         }
