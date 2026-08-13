@@ -191,6 +191,7 @@ object SegmentHistoryRepository {
                 val sourceText = row.optString("text", "")
                 val edits = TranscriptEditRepository.load(context, segmentId)
                 val chunks = mutableListOf<TranscriptChunk>()
+                var hadTimedSegments = false
                 row.optJSONArray("segments")?.let { segments ->
                     for (index in 0 until segments.length()) {
                         val segment = segments.optJSONObject(index) ?: continue
@@ -198,6 +199,7 @@ object SegmentHistoryRepository {
                         val startMs = segment.optLong("startMs", -1L)
                         val endMs = segment.optLong("endMs", -1L)
                         if (chunkSourceText.isNotBlank() && startMs >= 0L && endMs >= startMs) {
+                            hadTimedSegments = true
                             val autoSpeaker = segment.optString("autoSpeaker", SpeakerIdentifier.UNKNOWN)
                             val autoScore = if (segment.isNull("autoSpeakerScore")) {
                                 null
@@ -206,10 +208,12 @@ object SegmentHistoryRepository {
                             }
                             val editKey = TranscriptEditRepository.chunkKey(startMs, endMs, chunkSourceText)
                             val edit = edits[editKey]
+                            val effectiveText = edit?.text ?: chunkSourceText
+                            if (effectiveText.isBlank()) continue
                             chunks += TranscriptChunk(
                                 startMs = startMs,
                                 endMs = endMs,
-                                text = edit?.text ?: chunkSourceText,
+                                text = effectiveText,
                                 sourceText = chunkSourceText,
                                 speaker = edit?.speaker?.takeIf { it.isNotBlank() } ?: speakerLabel(autoSpeaker),
                                 autoSpeaker = autoSpeaker,
@@ -221,11 +225,11 @@ object SegmentHistoryRepository {
                     }
                 }
                 builder.transcriptChunks = chunks
-                if (chunks.isNotEmpty()) {
+                if (hadTimedSegments) {
                     builder.transcriptText = chunks.joinToString(" ") { it.text }.trim()
                     builder.transcriptSpeaker = null
                     builder.transcriptEditKey = null
-                    builder.transcriptManuallyEdited = chunks.any { it.manuallyEdited }
+                    builder.transcriptManuallyEdited = edits.isNotEmpty()
                 } else {
                     val editKey = TranscriptEditRepository.wholeKey(sourceText)
                     val edit = edits[editKey]
