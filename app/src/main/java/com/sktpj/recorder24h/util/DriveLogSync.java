@@ -17,13 +17,17 @@ import androidx.work.PeriodicWorkRequest;
 import androidx.work.WorkInfo;
 import androidx.work.WorkManager;
 
+import com.sktpj.recorder24h.ai.AiQueueStore;
 import com.sktpj.recorder24h.ai.OpenAiKeyStore;
 import com.sktpj.recorder24h.storage.RecorderStateStore;
 import com.sktpj.recorder24h.storage.RecordingIntentStore;
 import com.sktpj.recorder24h.storage.StoragePolicy;
+import com.sktpj.recorder24h.transcription.LiveTranscriptionSettings;
 import com.sktpj.recorder24h.transcription.TranscriptionRepository;
 import com.sktpj.recorder24h.transcription.TranscriptionScheduler;
 import com.sktpj.recorder24h.transcription.WhisperModelManager;
+import com.sktpj.recorder24h.ui.SegmentHistoryRepository;
+import com.sktpj.recorder24h.ui.SegmentRecord;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -163,6 +167,10 @@ public final class DriveLogSync {
         uploadBytes(resolver, treeUri, "24hRecoder_diagnostics.json",
                 "application/json", diagnostics);
 
+        byte[] inventory = buildSegmentInventory(app).toString(2).getBytes(StandardCharsets.UTF_8);
+        uploadBytes(resolver, treeUri, "24hRecoder_segment_inventory.json",
+                "application/json", inventory);
+
         long now = System.currentTimeMillis();
         DriveLogTarget.recordSuccess(app, now);
         try {
@@ -206,17 +214,42 @@ public final class DriveLogSync {
         transcription.put("modelReady", WhisperModelManager.isReady(context));
         transcription.put("asrReady", WhisperModelManager.isAsrReady(context));
         transcription.put("vadReady", WhisperModelManager.isVadReady(context));
-        transcription.put("pendingAudioCount", TranscriptionScheduler.pendingAudioCount(context));
+        int automaticCandidates = TranscriptionScheduler.pendingAudioCount(context);
+        List<SegmentRecord> segmentRecords = SegmentHistoryRepository.load(context);
+        int audioWithoutTranscript = 0;
+        int activeQueue = 0;
+        int needsAttention = 0;
+        int corrupt = 0;
+        for (SegmentRecord record : segmentRecords) {
+            if (record.getAudioAvailable() && !record.getHasTranscript()
+                    && record.getFileName() != null && record.getFileName().endsWith(".m4a")) {
+                audioWithoutTranscript++;
+            }
+            if (!"NONE".equals(record.getQueueState())) activeQueue++;
+            if (record.getNeedsAttention()) needsAttention++;
+            if ("CORRUPT".equals(record.getStatus())) corrupt++;
+        }
+        transcription.put("pendingAudioCount", automaticCandidates);
+        transcription.put("pendingAudioCountMeaning", "automatic-transcription-candidates");
+        transcription.put("automaticProcessingCandidateCount", automaticCandidates);
+        transcription.put("activeQueueCount", activeQueue);
+        transcription.put("audioWithoutTranscriptCount", audioWithoutTranscript);
+        transcription.put("needsAttentionCount", needsAttention);
+        transcription.put("corruptCount", corrupt);
+        transcription.put("historySegmentCount", segmentRecords.size());
         transcription.put("queuePaused", TranscriptionScheduler.isQueuePaused(context));
         transcription.put("transcriptCount", TranscriptionRepository.count(context));
         File audioDir = StoragePolicy.getAudioDir(context);
         transcription.put("audioFileCount", countFiles(audioDir, ".m4a"));
         transcription.put("audioBytes", sumFiles(audioDir, ".m4a"));
+        transcription.put("audioBytesMeaning", "all-retained-normal-m4a-bytes");
+        transcription.put("segmentInventoryFile", "24hRecoder_segment_inventory.json");
         root.put("transcription", transcription);
 
         JSONObject ai = new JSONObject();
         ai.put("apiKeyConfigured", OpenAiKeyStore.hasKey(context));
         ai.put("analysisFiles", latestAnalysisFiles(context, 20));
+        ai.put("queue", aiQueueSnapshot(context));
         root.put("ai", ai);
 
         JSONObject work = new JSONObject();
@@ -232,6 +265,91 @@ public final class DriveLogSync {
         files.put("logsBytes", directoryBytes(new File(context.getFilesDir(), "logs")));
         root.put("localFiles", files);
         return root;
+    }
+
+    private static JSONObject buildSegmentInventory(Context context) throws Exception {
+        JSONObject root = new JSONObject();
+        long now = System.currentTimeMillis();
+        root.put("schemaVersion", 1);
+        root.put("generatedAtMs", now);
+        root.put("generatedAtUtc", isoUtc(now));
+        root.put("fiveMinuteFinalEnabled", LiveTranscriptionSettings.isFiveMinuteFinalEnabled(context));
+        root.put("queuePaused", TranscriptionScheduler.isQueuePaused(context));
+
+        JSONArray rows = new JSONArray();
+        int retainedAudio = 0;
+        int transcriptAvailable = 0;
+        int audioWithoutTranscript = 0;
+        int activeQueue = 0;
+        int needsAttention = 0;
+        int corrupt = 0;
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            JSONObject row = new JSONObject();
+            row.put("segmentId", record.getSegmentId());
+            row.put("fileName", record.getFileName() == null ? JSONObject.NULL : record.getFileName());
+            row.put("fileSizeBytes", record.getFileSizeBytes());
+            row.put("startedAtMs", record.getStartedAtMs());
+            row.put("endedAtMs", record.getEndedAtMs());
+            row.put("status", record.getStatus());
+            row.put("reason", record.getReason() == null ? JSONObject.NULL : record.getReason());
+            row.put("stateChangedAtMs", record.getStateChangedAtMs());
+            row.put("audioAvailable", record.getAudioAvailable());
+            row.put("transcriptAvailable", record.getHasTranscript());
+            row.put("transcriptModel", record.getTranscriptModel() == null ? JSONObject.NULL : record.getTranscriptModel());
+            row.put("transcribedAtMs", record.getTranscribedAtMs());
+            row.put("liveOwned", record.getLiveOwned());
+            row.put("fiveMinuteFinalEnabled", record.getFiveMinuteFinalEnabled());
+            row.put("liveModelId", record.getLiveModelId() == null ? JSONObject.NULL : record.getLiveModelId());
+            row.put("queueState", record.getQueueState());
+            row.put("dataState", record.getDataState());
+            row.put("needsAttention", record.getNeedsAttention());
+            rows.put(row);
+
+            if (record.getAudioAvailable() && record.getFileName() != null
+                    && record.getFileName().endsWith(".m4a")) retainedAudio++;
+            if (record.getHasTranscript()) transcriptAvailable++;
+            if (record.getAudioAvailable() && !record.getHasTranscript()
+                    && record.getFileName() != null && record.getFileName().endsWith(".m4a")) {
+                audioWithoutTranscript++;
+            }
+            if (!"NONE".equals(record.getQueueState())) activeQueue++;
+            if (record.getNeedsAttention()) needsAttention++;
+            if ("CORRUPT".equals(record.getStatus())) corrupt++;
+        }
+        JSONObject counts = new JSONObject();
+        counts.put("historySegmentCount", rows.length());
+        counts.put("retainedAudioCount", retainedAudio);
+        counts.put("transcriptAvailableCount", transcriptAvailable);
+        counts.put("audioWithoutTranscriptCount", audioWithoutTranscript);
+        counts.put("activeQueueCount", activeQueue);
+        counts.put("needsAttentionCount", needsAttention);
+        counts.put("corruptCount", corrupt);
+        counts.put("automaticProcessingCandidateCount", TranscriptionScheduler.pendingAudioCount(context));
+        root.put("counts", counts);
+        root.put("segments", rows);
+        root.put("aiQueue", aiQueueSnapshot(context));
+        return root;
+    }
+
+    private static JSONArray aiQueueSnapshot(Context context) {
+        JSONArray rows = new JSONArray();
+        try {
+            for (AiQueueStore.Entry entry : AiQueueStore.load(context)) {
+                JSONObject row = new JSONObject();
+                row.put("id", entry.id);
+                row.put("kind", entry.kind);
+                row.put("periodStartMs", entry.periodStartMs);
+                row.put("periodEndMs", entry.periodEndMs);
+                row.put("requestType", entry.requestType);
+                row.put("state", entry.state);
+                row.put("attempt", entry.attempt);
+                row.put("priority", entry.priority);
+                row.put("updatedAtMs", entry.updatedAtMs);
+                rows.put(row);
+            }
+        } catch (Exception ignored) {
+        }
+        return rows;
     }
 
     private static JSONArray workInfos(Context context, String tag) {

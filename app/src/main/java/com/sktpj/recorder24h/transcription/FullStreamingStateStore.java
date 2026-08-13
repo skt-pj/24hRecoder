@@ -63,6 +63,38 @@ public final class FullStreamingStateStore {
         return row.optBoolean("owned", false);
     }
 
+    /** Read-only durable ownership result for diagnostics and state reconciliation. */
+    public static OwnershipState readOwnershipState(Context context, String segmentId) {
+        if (segmentId == null || segmentId.isEmpty()) return OwnershipState.empty();
+        JSONObject row = readOwnership(context, segmentId);
+        return new OwnershipState(
+                row.optBoolean("owned", false),
+                row.optString("state", ""),
+                row.isNull("engineId") ? null : row.optString("engineId", null),
+                row.isNull("error") ? null : row.optString("error", null),
+                row.optLong("updatedAtMs", 0L));
+    }
+
+    public static final class OwnershipState {
+        public final boolean owned;
+        public final String state;
+        public final String engineId;
+        public final String error;
+        public final long updatedAtMs;
+
+        OwnershipState(boolean owned, String state, String engineId, String error, long updatedAtMs) {
+            this.owned = owned;
+            this.state = state == null ? "" : state;
+            this.engineId = engineId;
+            this.error = error;
+            this.updatedAtMs = updatedAtMs;
+        }
+
+        static OwnershipState empty() {
+            return new OwnershipState(false, "", null, null, 0L);
+        }
+    }
+
     public static void writeLiveState(Context context, String state, String backend,
                                       String partialText, String latestFinalText,
                                       String accumulatedText, JSONArray accumulatedSegments,

@@ -37,6 +37,7 @@ public final class TranscriptionScheduler {
     private static final String KEY_SINGLE_RUNNER_MIGRATED = "single_runner_migrated_v1";
     private static final String KEY_QUEUE_PAUSED = "queue_paused";
     private static final ExecutorService RECOVERY_EXECUTOR = Executors.newSingleThreadExecutor();
+    private static final long LIVE_ORPHAN_STALE_MS = 30L * 60L * 1000L;
 
     private TranscriptionScheduler() {
     }
@@ -315,10 +316,13 @@ public final class TranscriptionScheduler {
                     recovered++;
                 }
 
+                int liveOrphansReconciled = reconcileStaleLiveOrphans(app);
+
                 JSONObject details = new JSONObject();
                 details.put("legacyWorkCancelled", migrated);
                 details.put("recoveredTranscribingCount", recovered);
                 details.put("disabledLiveFinalCount", disabledLiveFinals);
+                details.put("liveOrphansReconciled", liveOrphansReconciled);
                 details.put("queuePaused", isQueuePaused(app));
                 AppLogger.event(app, "TRANSCRIPTION_SINGLE_RUNNER_RECOVERY_COMPLETED", details);
             } catch (Exception error) {
@@ -335,6 +339,52 @@ public final class TranscriptionScheduler {
         });
     }
 
+    private static int reconcileStaleLiveOrphans(Context context) {
+        long now = System.currentTimeMillis();
+        int reconciled = 0;
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (!record.getLiveOwned() || !record.getAudioAvailable() || record.getHasTranscript()) continue;
+            String status = record.getStatus();
+            if ("QUEUED".equals(status) || "RETRY_WAIT".equals(status) || "TRANSCRIBING".equals(status)) continue;
+            FullStreamingStateStore.OwnershipState ownership =
+                    FullStreamingStateStore.readOwnershipState(context, record.getSegmentId());
+            boolean durableFailure = ownership.owned && "FAILED".equals(ownership.state);
+            long ageBase = Math.max(record.getEndedAtMs(), record.getStateChangedAtMs());
+            boolean staleOwned = ownership.owned && "OWNED".equals(ownership.state)
+                    && ageBase > 0L && now - ageBase >= LIVE_ORPHAN_STALE_MS;
+            if (!durableFailure && !staleOwned) continue;
+
+            String audioPath = record.getAudioPath();
+            File audioFile = audioPath == null || audioPath.isEmpty() ? null : new File(audioPath);
+            String reason = durableFailure
+                    ? (ownership.error == null || ownership.error.isEmpty()
+                        ? "FULL_STREAMING_ASR_FAILED"
+                        : "FULL_STREAMING_ASR_FAILED:" + ownership.error)
+                    : "LIVE_CANONICAL_TRANSCRIPT_MISSING";
+            if (!"FAILED".equals(status) || !reason.equals(record.getReason())) {
+                SegmentRepository.appendWithoutNotify(
+                        context,
+                        record.getSegmentId(),
+                        audioFile,
+                        audioFile != null && audioFile.isFile() ? audioFile.lastModified() : 0L,
+                        now,
+                        "FAILED",
+                        reason);
+                reconciled++;
+            }
+        }
+        if (reconciled > 0) {
+            try {
+                JSONObject details = new JSONObject();
+                details.put("count", reconciled);
+                details.put("staleThresholdMs", LIVE_ORPHAN_STALE_MS);
+                AppLogger.event(context, "TRANSCRIPTION_LIVE_ORPHANS_RECONCILED", details);
+            } catch (Exception ignored) {
+            }
+        }
+        return reconciled;
+    }
+
     static boolean isAutomaticLiveFinalDisabled(Context context, SegmentRecord record) {
         if (record == null || record.getSegmentId() == null) return false;
         String reason = record.getReason();
@@ -349,14 +399,28 @@ public final class TranscriptionScheduler {
         String audioPath = record.getAudioPath();
         File audioFile = audioPath == null || audioPath.isEmpty() ? null : new File(audioPath);
         boolean hasTranscript = TranscriptionRepository.exists(context, record.getSegmentId());
+        FullStreamingStateStore.OwnershipState ownership =
+                FullStreamingStateStore.readOwnershipState(context, record.getSegmentId());
+        String status;
+        String storedReason = reason;
+        if (hasTranscript) {
+            status = "TRANSCRIBED";
+        } else if (ownership.owned && "FAILED".equals(ownership.state)) {
+            status = "FAILED";
+            storedReason = ownership.error == null || ownership.error.isEmpty()
+                    ? "FULL_STREAMING_ASR_FAILED"
+                    : "FULL_STREAMING_ASR_FAILED:" + ownership.error;
+        } else {
+            status = "READY";
+        }
         SegmentRepository.appendWithoutNotify(
                 context,
                 record.getSegmentId(),
                 audioFile,
                 audioFile != null && audioFile.isFile() ? audioFile.lastModified() : 0L,
                 System.currentTimeMillis(),
-                hasTranscript ? "TRANSCRIBED" : "READY",
-                reason);
+                status,
+                storedReason);
     }
 
     private static boolean hasQueuedWork(Context context) {

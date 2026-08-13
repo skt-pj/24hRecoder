@@ -55,8 +55,26 @@ data class SegmentRecord(
     val durationMs: Long
         get() = if (startedAtMs > 0L && endedAtMs >= startedAtMs) endedAtMs - startedAtMs else 0L
 
+    val queueState: String
+        get() = when (status) {
+            "QUEUED", "RETRY_WAIT", "TRANSCRIBING" -> status
+            else -> "NONE"
+        }
+
+    val dataState: String
+        get() = when {
+            status == "CORRUPT" -> "CORRUPT"
+            hasTranscript && audioAvailable -> "AUDIO_AND_TRANSCRIPT"
+            hasTranscript -> "TRANSCRIPT_ONLY"
+            audioAvailable && queueState != "NONE" -> "AUDIO_PROCESSING"
+            audioAvailable && liveOwned && !fiveMinuteFinalEnabled -> "LIVE_AUDIO_NO_TRANSCRIPT"
+            audioAvailable -> "AUDIO_ONLY"
+            else -> "METADATA_ONLY"
+        }
+
     val needsAttention: Boolean
-        get() = status == "FAILED" || status == "CORRUPT" || status == "RETRY_WAIT"
+        get() = status == "FAILED" || status == "CORRUPT" || status == "RETRY_WAIT" ||
+            (audioAvailable && !hasTranscript && queueState == "NONE")
 }
 
 object SegmentHistoryRepository {

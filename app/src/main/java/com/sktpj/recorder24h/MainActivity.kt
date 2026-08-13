@@ -248,12 +248,17 @@ private data class DashboardSnapshot(
     val lastSegmentDurationMs: Long,
     val captureSilenced: Boolean,
     val health: RecorderHealth.Snapshot,
-    val audioBytes: Long,
+    val retainedAudioBytes: Long,
+    val retainedAudioCount: Int,
+    val audioWithoutTranscriptCount: Int,
+    val automaticProcessingCount: Int,
+    val activeQueueCount: Int,
+    val needsAttentionCount: Int,
+    val corruptCount: Int,
     val appBytes: Long,
     val deviceFreeBytes: Long,
     val modelReady: Boolean,
     val modelBytes: Long,
-    val pendingAudio: Int,
     val transcriptCount: Int
 )
 
@@ -641,14 +646,24 @@ private fun StorageCard(dashboard: DashboardSnapshot) {
     Card {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("ストレージ", style = MaterialTheme.typography.titleLarge)
-            Meter("未処理音声", "${formatMb(dashboard.audioBytes)} / 600 MB", dashboard.audioBytes.toFloat() / StoragePolicy.AUDIO_LIMIT_BYTES)
+            Meter("保持音声", "${formatMb(dashboard.retainedAudioBytes)} / 600 MB", dashboard.retainedAudioBytes.toFloat() / StoragePolicy.AUDIO_LIMIT_BYTES)
             Meter("作業データ", "${formatMb(dashboard.appBytes)} / 1 GB", dashboard.appBytes.toFloat() / StoragePolicy.LOGICAL_APP_LIMIT_BYTES)
             HorizontalDivider()
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Metric("未処理", "${dashboard.pendingAudio}件")
-                Metric("文字起こし", "${dashboard.transcriptCount}件")
+                Metric("保持音声", "${dashboard.retainedAudioCount}件")
+                Metric("確定文字起こし", "${dashboard.transcriptCount}件")
                 Metric("端末空き", formatStorage(dashboard.deviceFreeBytes))
             }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Metric("音声のみ", "${dashboard.audioWithoutTranscriptCount}件")
+                Metric("実キュー", "${dashboard.activeQueueCount}件")
+                Metric("要確認", "${dashboard.needsAttentionCount}件")
+            }
+            Text(
+                "自動処理対象: ${dashboard.automaticProcessingCount}件 / 破損: ${dashboard.corruptCount}件",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Text(
                 "Whisperモデルは1GBの作業データ制限には含めません。",
                 style = MaterialTheme.typography.bodySmall,
@@ -1475,6 +1490,16 @@ private fun readDashboard(context: Context): DashboardSnapshot {
     val state: JSONObject = RecorderStateStore.read(context)
     val recordingRequested = RecordingIntentStore.isRequested(context)
     val health = RecorderHealth.evaluate(state, recordingRequested, System.currentTimeMillis())
+    val records = SegmentHistoryRepository.load(context)
+    val retainedAudioCount = records.count { it.audioAvailable && it.fileName?.endsWith(".m4a") == true }
+    val audioWithoutTranscriptCount = records.count {
+        it.audioAvailable && it.fileName?.endsWith(".m4a") == true && !it.hasTranscript
+    }
+    val activeQueueCount = records.count {
+        it.status == "QUEUED" || it.status == "RETRY_WAIT" || it.status == "TRANSCRIBING"
+    }
+    val needsAttentionCount = records.count { it.needsAttention }
+    val corruptCount = records.count { it.status == "CORRUPT" }
     return DashboardSnapshot(
         state = state.optString("state", "STOPPED"),
         heartbeatMs = state.optLong("heartbeatMs", 0L),
@@ -1488,7 +1513,13 @@ private fun readDashboard(context: Context): DashboardSnapshot {
         lastSegmentDurationMs = state.optLong("lastSegmentDurationMs", 0L),
         captureSilenced = state.optBoolean("captureSilenced", false),
         health = health,
-        audioBytes = StoragePolicy.audioBytes(context),
+        retainedAudioBytes = StoragePolicy.audioBytes(context),
+        retainedAudioCount = retainedAudioCount,
+        audioWithoutTranscriptCount = audioWithoutTranscriptCount,
+        automaticProcessingCount = TranscriptionScheduler.pendingAudioCount(context),
+        activeQueueCount = activeQueueCount,
+        needsAttentionCount = needsAttentionCount,
+        corruptCount = corruptCount,
         appBytes = StoragePolicy.appDataBytes(context),
         deviceFreeBytes = context.filesDir.usableSpace,
         modelReady = run {
@@ -1504,7 +1535,6 @@ private fun readDashboard(context: Context): DashboardSnapshot {
             WhisperModelManager.downloadedBytesForModel(context, modelId) +
                 WhisperModelManager.vadModelFile(context).let { if (it.isFile) it.length() else 0L }
         },
-        pendingAudio = TranscriptionScheduler.pendingAudioCount(context),
         transcriptCount = TranscriptionRepository.count(context)
     )
 }
