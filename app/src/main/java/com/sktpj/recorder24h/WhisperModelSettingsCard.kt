@@ -219,7 +219,7 @@ fun WhisperModelSettingsCard() {
                             val count = TranscriptionScheduler.enqueueExisting(context)
                             Toast.makeText(
                                 context,
-                                "${count}件の未処理・別モデル音声を確認しました",
+                                "自動処理対象・別モデル音声を${count}件再登録しました",
                                 Toast.LENGTH_SHORT
                             ).show()
                         }
@@ -228,7 +228,7 @@ fun WhisperModelSettingsCard() {
                 ) {
                     Icon(Icons.Filled.Refresh, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("未処理・別モデルの音声を再登録")
+                    Text("自動処理対象・別モデル音声を再登録")
                 }
 
                 if (asrBytes > 0L) {

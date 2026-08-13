@@ -460,7 +460,7 @@ private fun RecorderApp(
                                     Toast.makeText(context, "先にWhisperモデルを準備してください", Toast.LENGTH_SHORT).show()
                                 } else {
                                     val count = TranscriptionScheduler.enqueueExisting(context)
-                                    Toast.makeText(context, "${count}件の未処理音声を確認しました", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "自動処理対象を${count}件再確認しました", Toast.LENGTH_SHORT).show()
                                 }
                             },
                             onDeleteModel = {
