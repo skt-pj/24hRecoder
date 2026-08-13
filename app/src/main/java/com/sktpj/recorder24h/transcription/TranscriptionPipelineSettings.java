@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Process;
 import android.speech.SpeechRecognizer;
+import android.system.Os;
 
 import org.json.JSONObject;
 
@@ -54,6 +55,8 @@ public final class TranscriptionPipelineSettings {
     private static final String KEY_VAD = "vad_backend";
     private static final String KEY_DENOISE = "denoise_backend";
     private static final String KEY_SPEAKER = "speaker_backend";
+    private static final String VULKAN_STABILITY_PROFILE =
+            "android-mali-safe-coopmat-off-graph-optimize-off";
 
     private TranscriptionPipelineSettings() {
     }
@@ -232,6 +235,17 @@ public final class TranscriptionPipelineSettings {
     public static void requireRunnable(Context context, Snapshot pipeline, String whisperModelId) {
         String reason = unavailableReason(context, pipeline, whisperModelId);
         if (reason != null) throw new IllegalStateException(reason);
+        configureVulkanStability(pipeline);
+    }
+
+    private static void configureVulkanStability(Snapshot pipeline) {
+        if (pipeline == null || !ASR_WHISPER_VULKAN.equals(pipeline.asrBackend)) return;
+        try {
+            Os.setenv("GGML_VK_DISABLE_COOPMAT", "1", true);
+            Os.setenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE", "1", true);
+        } catch (Exception error) {
+            throw new IllegalStateException("VULKAN_STABILITY_PROFILE_APPLY_FAILED", error);
+        }
     }
 
     public static JSONObject capabilities(Context context) {
@@ -243,6 +257,7 @@ public final class TranscriptionPipelineSettings {
             json.put("cpuCores", Runtime.getRuntime().availableProcessors());
             json.put("whisperCpu", true);
             json.put("whisperVulkan", isAsrRuntimeAvailable(context, ASR_WHISPER_VULKAN));
+            json.put("vulkanStabilityProfile", VULKAN_STABILITY_PROFILE);
             json.put("androidOnDeviceAsr", isAsrRuntimeAvailable(context, ASR_ANDROID_ON_DEVICE));
             json.put("sileroModelReady", WhisperModelManager.isVadReady(context));
             json.put("deepFilterNetPackaged", true);
