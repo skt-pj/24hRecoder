@@ -1,5 +1,6 @@
 package com.sktpj.recorder24h.transcription;
 
+import android.app.Application;
 import android.content.Context;
 
 import androidx.work.Worker;
@@ -36,6 +37,20 @@ public final class TranscriptionWorker extends Worker {
     @Override
     public Result doWork() {
         Context context = getApplicationContext();
+        String requiredProcess = context.getPackageName() + ":postprocess_asr";
+        String currentProcess = Application.getProcessName();
+        if (!requiredProcess.equals(currentProcess)) {
+            try {
+                AppLogger.event(context, "MAIN_PROCESS_TRANSCRIPTION_BLOCKED", new JSONObject()
+                        .put("currentProcess", currentProcess == null ? JSONObject.NULL : currentProcess)
+                        .put("requiredProcess", requiredProcess)
+                        .put("runAttemptCount", getRunAttemptCount())
+                        .put("migration", "postprocess-isolation-v2")
+                        .put("whisperInvoked", false));
+            } catch (Exception ignored) {
+            }
+            return Result.success();
+        }
         if (TranscriptionScheduler.isQueuePaused(context)) {
             AppLogger.event(context, "TRANSCRIPTION_DRAIN_WORKER_SKIPPED_QUEUE_PAUSED");
             return Result.success();
