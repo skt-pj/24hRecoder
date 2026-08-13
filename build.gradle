@@ -366,8 +366,8 @@ subprojects { subproject ->
         subproject.extensions.configure(com.android.build.api.variant.AndroidComponentsExtension) { androidComponents ->
             androidComponents.onVariants(androidComponents.selector().withBuildType('debug')) { variant ->
                 variant.outputs.each { output ->
-                    output.versionCode.set(1032)
-                    output.versionName.set('0.7.32-debug')
+                    output.versionCode.set(1033)
+                    output.versionName.set('0.7.33-debug')
                 }
             }
         }
