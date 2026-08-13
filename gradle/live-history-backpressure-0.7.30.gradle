@@ -1,0 +1,701 @@
+import java.nio.charset.StandardCharsets
+
+def replaceOnce = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+def replaceBetween = { String source, String startMarker, String endMarker, String replacement, String label ->
+    int start = source.indexOf(startMarker)
+    if (start < 0) throw new GradleException("${label}: start marker missing")
+    int end = source.indexOf(endMarker, start)
+    if (end < 0) throw new GradleException("${label}: end marker missing")
+    source.substring(0, start) + replacement + source.substring(end)
+}
+
+def readUtf8 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8 = { File file, String text -> file.setText(text, 'UTF-8') }
+
+def mainFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+def main = readUtf8(mainFile)
+
+if (!main.contains('private fun CurrentConversationCard(finalText: String, partialText: String)')) {
+    main = replaceOnce(
+        main,
+        '''    LaunchedEffect(section, historyViewMode, refresh) {
+        if (section == AppSection.HISTORY && historyViewMode == HistoryViewMode.REALTIME) {
+            do {
+                val snapshot = withContext(Dispatchers.IO) {
+                    FullStreamingStateStore.readLiveState(context) to
+                        FullStreamingStateStore.readRecentFinals(context)
+                }
+                liveState = snapshot.first
+                liveFinals = snapshot.second
+                delay(500L)
+            } while (section == AppSection.HISTORY && historyViewMode == HistoryViewMode.REALTIME)
+        }
+    }
+''',
+        '''    LaunchedEffect(section, refresh) {
+        if (section == AppSection.HISTORY) {
+            do {
+                val snapshot = withContext(Dispatchers.IO) {
+                    FullStreamingStateStore.readLiveState(context) to
+                        FullStreamingStateStore.readRecentFinals(context)
+                }
+                liveState = snapshot.first
+                liveFinals = snapshot.second
+                delay(500L)
+            } while (section == AppSection.HISTORY)
+        }
+    }
+''',
+        'live state polling'
+    )
+    main = replaceOnce(
+        main,
+        '                        selected != null -> RecordDetailScreen(selected)\n',
+        '                        selected != null -> RecordDetailScreen(selected, liveFinals)\n',
+        'record detail live finals'
+    )
+    main = replaceOnce(
+        main,
+        '                HistoryScreen(records, listState, query, filter, onQueryChange, onFilterChange, onSelect)\n',
+        '                HistoryScreen(records, listState, query, filter, liveState, liveFinals, onQueryChange, onFilterChange, onSelect)\n',
+        'history live arguments'
+    )
+
+    def newHistory = '''@Composable
+private fun HistoryScreen(
+    records: List<SegmentRecord>,
+    listState: LazyListState,
+    query: String,
+    filter: HistoryFilter,
+    liveState: FullStreamingStateStore.LiveState?,
+    liveFinals: List<FullStreamingStateStore.RecentFinal>,
+    onQueryChange: (String) -> Unit,
+    onFilterChange: (HistoryFilter) -> Unit,
+    onSelect: (SegmentRecord) -> Unit
+) {
+    val provisionalBySegment = remember(records, liveFinals) {
+        records.associate { record ->
+            record.segmentId to provisionalConversationText(record, liveFinals)
+        }
+    }
+    val filtered = remember(records, query, filter, provisionalBySegment) {
+        records.filter { record ->
+            val statusOk = when (filter) {
+                HistoryFilter.ALL -> true
+                HistoryFilter.TRANSCRIBED -> record.hasTranscript
+                HistoryFilter.AUDIO -> record.audioAvailable
+                HistoryFilter.ATTENTION -> record.needsAttention
+            }
+            val provisional = provisionalBySegment[record.segmentId].orEmpty()
+            val queryOk = query.isBlank() ||
+                record.segmentId.contains(query, true) ||
+                record.fileName?.contains(query, true) == true ||
+                record.transcriptText?.contains(query, true) == true ||
+                provisional.contains(query, true)
+            statusOk && queryOk
+        }
+    }
+
+    val latestKnownEndMs = remember(records) {
+        records.maxOfOrNull { it.endedAtMs } ?: 0L
+    }
+    val currentLiveFinals = remember(liveFinals, latestKnownEndMs) {
+        liveFinals.filter { item ->
+            latestKnownEndMs <= 0L || item.endAtMs > latestKnownEndMs + 2_500L
+        }
+    }
+    val currentFinalText = remember(currentLiveFinals) {
+        liveConversationText(currentLiveFinals)
+    }
+    val currentPartial = liveState?.partialText.orEmpty().trim()
+    val currentSearchText = remember(currentFinalText, currentPartial) {
+        listOf(currentFinalText, currentPartial)
+            .filter { it.isNotBlank() }
+            .joinToString("\\n")
+    }
+    val showCurrentLive = filter == HistoryFilter.ALL &&
+        currentSearchText.isNotBlank() &&
+        (query.isBlank() || currentSearchText.contains(query, true))
+
+    Column(Modifier.fillMaxSize()) {
+        Column(
+            Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                singleLine = true,
+                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                placeholder = { Text("会話内容を検索") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                itemsIndexed(HistoryFilter.entries) { _, item ->
+                    FilterChip(
+                        selected = filter == item,
+                        onClick = { onFilterChange(item) },
+                        label = { Text(item.label) }
+                    )
+                }
+            }
+        }
+
+        if (filtered.isEmpty() && !showCurrentLive) {
+            EmptyHistory(query, filter)
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (showCurrentLive) {
+                    item(key = "history-current-live") {
+                        CurrentConversationCard(currentFinalText, currentPartial)
+                    }
+                }
+                itemsIndexed(filtered, key = { _, item -> item.segmentId }) { index, record ->
+                    val day = formatDay(record.sortTimeMs)
+                    val previous = if (index == 0) null else formatDay(filtered[index - 1].sortTimeMs)
+                    if (day != previous) {
+                        Text(
+                            day,
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(top = if (index == 0) 0.dp else 10.dp)
+                        )
+                    }
+                    SegmentCard(
+                        record = record,
+                        provisionalText = provisionalBySegment[record.segmentId].orEmpty(),
+                        onClick = { onSelect(record) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun provisionalFinalsForRecord(
+    record: SegmentRecord,
+    liveFinals: List<FullStreamingStateStore.RecentFinal>
+): List<FullStreamingStateStore.RecentFinal> {
+    if (record.hasTranscript || !record.liveOwned || record.startedAtMs <= 0L) {
+        return emptyList()
+    }
+    val endMs = if (record.endedAtMs > record.startedAtMs) {
+        record.endedAtMs
+    } else {
+        record.startedAtMs + 5L * 60L * 1000L
+    }
+    val startWithTolerance = record.startedAtMs - 2_500L
+    val endWithTolerance = endMs + 2_500L
+    return liveFinals.filter { item ->
+        item.endAtMs >= startWithTolerance && item.startAtMs <= endWithTolerance
+    }
+}
+
+private fun provisionalConversationText(
+    record: SegmentRecord,
+    liveFinals: List<FullStreamingStateStore.RecentFinal>
+): String = liveConversationText(provisionalFinalsForRecord(record, liveFinals))
+
+private fun liveConversationText(
+    finals: List<FullStreamingStateStore.RecentFinal>
+): String = finals
+    .filter { it.text.isNotBlank() }
+    .joinToString("\\n") { item ->
+        val speaker = item.speaker?.trim().orEmpty()
+        if (speaker.isNotBlank() && speaker != "判定不能") {
+            "$speaker: ${item.text}"
+        } else {
+            item.text
+        }
+    }
+    .trim()
+
+@Composable
+private fun CurrentConversationCard(finalText: String, partialText: String) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer
+        )
+    ) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "現在の会話",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    "暫定",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+            if (finalText.isNotBlank()) {
+                Text(finalText, style = MaterialTheme.typography.bodyLarge)
+            }
+            if (partialText.isNotBlank()) {
+                Text(
+                    partialText,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+        }
+    }
+}
+
+'''
+    main = replaceBetween(
+        main,
+        '@Composable\nprivate fun HistoryScreen(',
+        '@Composable\nprivate fun EmptyHistory(',
+        newHistory,
+        'history screen'
+    )
+
+    main = replaceOnce(
+        main,
+        '                "録音セグメントが確定すると、時刻・音声状態・文字起こし結果が表示されます。",\n',
+        '                "会話が記録されると、ここに時刻と内容が表示されます。",\n',
+        'empty history copy'
+    )
+
+    def newSegmentCard = '''@Composable
+private fun SegmentCard(
+    record: SegmentRecord,
+    provisionalText: String,
+    onClick: () -> Unit
+) {
+    val isProvisional = !record.hasTranscript && provisionalText.isNotBlank()
+    val conversation = when {
+        record.hasTranscript && !record.transcriptText.isNullOrBlank() -> record.transcriptText!!
+        record.hasTranscript -> "会話は検出されませんでした"
+        isProvisional -> provisionalText
+        record.needsAttention -> "会話内容を確認できませんでした"
+        record.audioAvailable || record.liveOwned -> "会話内容を確定中です"
+        else -> "会話内容はまだありません"
+    }
+
+    Card(
+        onClick = onClick,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    formatTimeRange(record),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                if (isProvisional) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                        shape = CircleShape
+                    ) {
+                        Text(
+                            "暫定",
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+            }
+            Text(
+                conversation,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyLarge
+            )
+        }
+    }
+}
+
+'''
+    main = replaceBetween(
+        main,
+        '@Composable\nprivate fun SegmentCard(',
+        'private enum class StatusTone',
+        newSegmentCard,
+        'segment card'
+    )
+
+    def newDetail = '''@Composable
+private fun RecordDetailScreen(
+    record: SegmentRecord,
+    liveFinals: List<FullStreamingStateStore.RecentFinal>
+) {
+    val provisionalFinals = remember(record.segmentId, record.hasTranscript, liveFinals) {
+        provisionalFinalsForRecord(record, liveFinals)
+    }
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            ) {
+                Column(
+                    Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                formatTimeRange(record),
+                                style = MaterialTheme.typography.headlineMedium
+                            )
+                            Text(
+                                formatDay(record.sortTimeMs),
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
+                            )
+                        }
+                        StatusPill(recordStatusLabel(record), recordTone(record))
+                    }
+                    Text(
+                        "segment ${record.segmentId}",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            }
+        }
+        item {
+            if (record.audioAvailable && record.audioPath != null) {
+                AudioPlaybackCard(record)
+            } else {
+                Card {
+                    Column(
+                        Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("録音データ", style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            if (record.hasTranscript) {
+                                "文字起こし結果を永続保存したため、元のM4A音声は削除済みです。"
+                            } else {
+                                "現在参照できる音声ファイルはありません。"
+                            },
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            if (!record.hasTranscript && provisionalFinals.isNotEmpty()) {
+                ProvisionalRecordConversationCard(provisionalFinals)
+            } else {
+                TranscriptCard(record)
+            }
+        }
+        item { TranscriptionProcessingCard(record) }
+        item {
+            Card {
+                Column(
+                    Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text("詳細", style = MaterialTheme.typography.titleLarge)
+                    InfoRow("状態", recordStatusLabel(record))
+                    InfoRow("開始", formatDateTime(record.startedAtMs))
+                    InfoRow("終了", formatDateTime(record.endedAtMs))
+                    InfoRow(
+                        "長さ",
+                        if (record.durationMs > 0L) formatDuration(record.durationMs) else "-"
+                    )
+                    InfoRow("ファイル", record.fileName ?: "-")
+                    InfoRow("サイズ", SegmentHistoryRepository.formatBytes(record.fileSizeBytes))
+                    InfoRow("文字起こし", record.transcriptModel?.ifBlank { "-" } ?: "-")
+                    if (!record.reason.isNullOrBlank()) {
+                        InfoRow("理由", record.reason)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProvisionalRecordConversationCard(
+    finals: List<FullStreamingStateStore.RecentFinal>
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer
+        )
+    ) {
+        Column(
+            Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text("会話ログ（暫定）", style = MaterialTheme.typography.titleLarge)
+            finals.forEach { item ->
+                val time = if (item.startAtMs > 0L) {
+                    SimpleDateFormat("HH:mm:ss", Locale.JAPAN).format(Date(item.startAtMs))
+                } else {
+                    "--:--:--"
+                }
+                val speaker = item.speaker?.takeIf { it.isNotBlank() && it != "判定不能" }
+                Text(
+                    if (speaker == null) time else "$time  $speaker",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+                Text(item.text, style = MaterialTheme.typography.bodyLarge)
+            }
+            Text(
+                "5分確定後はVADを通した確定結果に置き換わります。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onTertiaryContainer
+            )
+        }
+    }
+}
+
+'''
+    main = replaceBetween(
+        main,
+        '@Composable\nprivate fun RecordDetailScreen(',
+        '@Composable\nprivate fun AudioPlaybackCard(',
+        newDetail,
+        'record detail'
+    )
+
+    writeUtf8(mainFile, main)
+}
+
+def streamFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/StreamingTranscriptionService.java')
+def stream = readUtf8(streamFile)
+
+if (!stream.contains('FULL_STREAMING_FINAL_COALESCED')) {
+    stream = replaceOnce(
+        stream,
+        '''    private long latestActiveSpeechStartUs = -1L;
+    private long lastPartialRequestedEndUs;
+    private long lastScheduledFinalEndUs;
+''',
+        '''    private long latestActiveSpeechStartUs = -1L;
+    private long lastPartialRequestedEndUs;
+    private long lastScheduledFinalEndUs;
+    private final Object finalBatchLock = new Object();
+    private FinalBatch mergeableFinalBatch;
+
+    private static final int LIVE_SAMPLE_RATE_HZ = 16_000;
+    private static final long MAX_FINAL_COALESCE_GAP_US = 15_000_000L;
+    private static final long MAX_FINAL_BATCH_TIMELINE_US = 30_000_000L;
+
+    private static final class FinalBatch {
+        final SegmentAccumulator accumulator;
+        final long startUs;
+        long endUs;
+        long queuedAtMs;
+        float[] samples;
+        int utteranceCount = 1;
+        boolean started;
+
+        FinalBatch(SegmentAccumulator accumulator, long startUs, long endUs,
+                   long queuedAtMs, float[] samples) {
+            this.accumulator = accumulator;
+            this.startUs = startUs;
+            this.endUs = endUs;
+            this.queuedAtMs = queuedAtMs;
+            this.samples = samples;
+        }
+
+        boolean canMerge(long nextStartUs, long nextEndUs) {
+            long gapUs = Math.max(0L, nextStartUs - endUs);
+            return !started
+                    && gapUs <= MAX_FINAL_COALESCE_GAP_US
+                    && nextEndUs - startUs <= MAX_FINAL_BATCH_TIMELINE_US;
+        }
+
+        void merge(long nextStartUs, long nextEndUs, long nextQueuedAtMs,
+                   float[] nextSamples) {
+            long gapUs = Math.max(0L, nextStartUs - endUs);
+            int gapSamples = (int) Math.min(
+                    Integer.MAX_VALUE,
+                    gapUs * LIVE_SAMPLE_RATE_HZ / 1_000_000L);
+            int newSize = Math.addExact(
+                    Math.addExact(samples.length, gapSamples),
+                    nextSamples.length);
+            float[] merged = Arrays.copyOf(samples, newSize);
+            System.arraycopy(
+                    nextSamples,
+                    0,
+                    merged,
+                    samples.length + gapSamples,
+                    nextSamples.length);
+            samples = merged;
+            endUs = Math.max(endUs, nextEndUs);
+            queuedAtMs = Math.max(queuedAtMs, nextQueuedAtMs);
+            utteranceCount++;
+        }
+    }
+''',
+        'streaming batch fields'
+    )
+
+    stream = replaceOnce(
+        stream,
+        '''                } else {
+                    logBackpressure("partial-skipped", currentEndUs);
+                }
+''',
+        '''                } else {
+                    // Advance the partial clock even when skipped so one backlog does not emit
+                    // a backpressure log on every PCM message.
+                    lastPartialRequestedEndUs = currentEndUs;
+                    logBackpressure("partial-skipped", currentEndUs);
+                }
+''',
+        'partial backpressure throttle'
+    )
+
+    def newScheduleFinal = '''    private void scheduleFinal(
+            long requestedStartUs,
+            long requestedEndUs,
+            SegmentAccumulator accumulator) {
+        if (accumulator == null || accumulator.failed) return;
+        long startUs = Math.max(
+                accumulator.basePtsUs(),
+                Math.max(requestedStartUs, lastScheduledFinalEndUs));
+        long endUs = Math.max(startUs, requestedEndUs);
+        if (endUs <= startUs) return;
+
+        float[] samples = pcmBuffer.sliceFloat(startUs, endUs);
+        if (samples.length == 0) return;
+
+        lastScheduledFinalEndUs = endUs;
+        long queuedAtMs = System.currentTimeMillis();
+        FinalBatch batchToSubmit = null;
+        FinalBatch mergedBatch = null;
+
+        synchronized (finalBatchLock) {
+            FinalBatch candidate = mergeableFinalBatch;
+            if (candidate != null
+                    && candidate.accumulator == accumulator
+                    && candidate.canMerge(startUs, endUs)) {
+                candidate.merge(startUs, endUs, queuedAtMs, samples);
+                mergedBatch = candidate;
+            } else {
+                batchToSubmit = new FinalBatch(
+                        accumulator, startUs, endUs, queuedAtMs, samples);
+                mergeableFinalBatch = batchToSubmit;
+            }
+        }
+
+        if (mergedBatch != null) {
+            try {
+                log("FULL_STREAMING_FINAL_COALESCED", new JSONObject()
+                        .put("startPtsUs", mergedBatch.startUs)
+                        .put("endPtsUs", mergedBatch.endUs)
+                        .put("utteranceCount", mergedBatch.utteranceCount)
+                        .put(
+                                "audioDurationMs",
+                                mergedBatch.samples.length * 1000L / LIVE_SAMPLE_RATE_HZ)
+                        .put(
+                                "timelineDurationMs",
+                                Math.max(0L, mergedBatch.endUs - mergedBatch.startUs) / 1000L)
+                        .put("queueDepth", pendingInference.get())
+                        .put("finalDropped", false));
+            } catch (Exception ignored) {
+            }
+            return;
+        }
+
+        final FinalBatch submittedBatch = batchToSubmit;
+        if (submittedBatch == null) return;
+        submit("final", () -> runFinalBatch(submittedBatch));
+        if (pendingInference.get() > BACKPRESSURE_WARN_DEPTH) {
+            logBackpressure("final-batch-queued", endUs);
+        }
+    }
+
+    private void runFinalBatch(FinalBatch batch) {
+        synchronized (finalBatchLock) {
+            batch.started = true;
+            if (mergeableFinalBatch == batch) {
+                mergeableFinalBatch = null;
+            }
+        }
+
+        SegmentAccumulator accumulator = batch.accumulator;
+        if (accumulator.failed) return;
+        try {
+            Recognition result = recognize(batch.samples, accumulator, false);
+            accumulator.addFinal(result, batch.startUs, batch.endUs);
+            long speechDurationMs = Math.max(
+                    0L, (batch.endUs - batch.startUs) / 1000L);
+            long endAtMs = batch.queuedAtMs;
+            long startAtMs = Math.max(0L, endAtMs - speechDurationMs);
+            FullStreamingStateStore.appendRecentFinal(
+                    this,
+                    startAtMs,
+                    endAtMs,
+                    batch.startUs,
+                    batch.endUs,
+                    result.text,
+                    accumulator.config.asrBackend,
+                    result.segments);
+            writeState("FINAL", "", accumulator.latestFinalText, accumulator, null);
+            log("FULL_STREAMING_FINAL", new JSONObject()
+                    .put("startPtsUs", batch.startUs)
+                    .put("endPtsUs", batch.endUs)
+                    .put("textChars", result.text.length())
+                    .put("inferenceMs", result.inferenceMs)
+                    .put("liveWhisperRoute", accumulator.config.liveWhisperRoute)
+                    .put("utteranceCount", batch.utteranceCount)
+                    .put(
+                            "batchAudioDurationMs",
+                            batch.samples.length * 1000L / LIVE_SAMPLE_RATE_HZ)
+                    .put("queueDepth", pendingInference.get()));
+        } catch (Throwable error) {
+            markAccumulatorFailed(accumulator, "FINAL_ASR_FAILED", error);
+        }
+    }
+
+'''
+    stream = replaceBetween(
+        stream,
+        '    private void scheduleFinal(',
+        '    private Recognition recognize(',
+        newScheduleFinal,
+        'streaming final batching'
+    )
+
+    writeUtf8(streamFile, stream)
+}
+
+if (!mainFile.text.contains('private fun CurrentConversationCard(finalText: String, partialText: String)')) {
+    throw new GradleException('0.7.30 history patch was not applied')
+}
+if (!streamFile.text.contains('FULL_STREAMING_FINAL_COALESCED')) {
+    throw new GradleException('0.7.30 streaming patch was not applied')
+}
