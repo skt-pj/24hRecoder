@@ -91,6 +91,36 @@ public final class TranscriptionScheduler {
         }
     }
 
+    /** Immediately remove automatic five-minute final work owned by the live pipeline. */
+    public static int disableAutomaticLiveFinals(Context context) {
+        Context app = context.getApplicationContext();
+        int removed = 0;
+        boolean runningRemoved = false;
+        for (SegmentRecord record : SegmentHistoryRepository.load(app)) {
+            if (!isAutomaticLiveFinalDisabled(app, record)) continue;
+            String status = record.getStatus();
+            if (!("QUEUED".equals(status) || "RETRY_WAIT".equals(status)
+                    || "TRANSCRIBING".equals(status))) {
+                continue;
+            }
+            if ("TRANSCRIBING".equals(status)) runningRemoved = true;
+            LiveSegmentPolicyStore.setFiveMinuteFinalEnabled(app, record.getSegmentId(), false);
+            settleAutomaticLiveFinalDisabled(app, record, "FIVE_MINUTE_FINAL_DISABLED_BY_USER");
+            removed++;
+        }
+        long cancellationGeneration = runningRemoved ? TranscriptionCancellation.cancelCurrent() : -1L;
+        try {
+            JSONObject details = new JSONObject();
+            details.put("removedCount", removed);
+            details.put("runningCancelled", runningRemoved);
+            details.put("cancellationGeneration", cancellationGeneration);
+            AppLogger.event(app, "LIVE_FIVE_MINUTE_FINAL_DISABLED_IMMEDIATELY", details);
+        } catch (Exception ignored) {
+        }
+        ensureDrainScheduled(app);
+        return removed;
+    }
+
     public static void enqueue(Context context, String segmentId, File file) {
         enqueueInternal(context, segmentId, file, false);
     }
@@ -253,8 +283,19 @@ public final class TranscriptionScheduler {
                 }
 
                 int recovered = 0;
+                int disabledLiveFinals = 0;
                 List<SegmentRecord> records = SegmentHistoryRepository.load(app);
                 for (SegmentRecord record : records) {
+                    if (isAutomaticLiveFinalDisabled(app, record)
+                            && ("QUEUED".equals(record.getStatus())
+                                || "RETRY_WAIT".equals(record.getStatus())
+                                || "TRANSCRIBING".equals(record.getStatus()))) {
+                        LiveSegmentPolicyStore.setFiveMinuteFinalEnabled(app, record.getSegmentId(), false);
+                        settleAutomaticLiveFinalDisabled(app, record,
+                                "FIVE_MINUTE_FINAL_DISABLED_RECOVERY");
+                        disabledLiveFinals++;
+                        continue;
+                    }
                     if (!"TRANSCRIBING".equals(record.getStatus()) || !record.getAudioAvailable()) {
                         continue;
                     }
@@ -277,6 +318,7 @@ public final class TranscriptionScheduler {
                 JSONObject details = new JSONObject();
                 details.put("legacyWorkCancelled", migrated);
                 details.put("recoveredTranscribingCount", recovered);
+                details.put("disabledLiveFinalCount", disabledLiveFinals);
                 details.put("queuePaused", isQueuePaused(app));
                 AppLogger.event(app, "TRANSCRIPTION_SINGLE_RUNNER_RECOVERY_COMPLETED", details);
             } catch (Exception error) {
@@ -293,10 +335,35 @@ public final class TranscriptionScheduler {
         });
     }
 
+    static boolean isAutomaticLiveFinalDisabled(Context context, SegmentRecord record) {
+        if (record == null || record.getSegmentId() == null) return false;
+        String reason = record.getReason();
+        if (reason != null && reason.startsWith("MANUAL_")) return false;
+        if (!FullStreamingStateStore.isOwned(context, record.getSegmentId())) return false;
+        return !LiveSegmentPolicyStore.isFiveMinuteFinalEnabled(context, record.getSegmentId())
+                || !LiveTranscriptionSettings.isFiveMinuteFinalEnabled(context);
+    }
+
+    static void settleAutomaticLiveFinalDisabled(Context context, SegmentRecord record, String reason) {
+        if (record == null) return;
+        String audioPath = record.getAudioPath();
+        File audioFile = audioPath == null || audioPath.isEmpty() ? null : new File(audioPath);
+        boolean hasTranscript = TranscriptionRepository.exists(context, record.getSegmentId());
+        SegmentRepository.appendWithoutNotify(
+                context,
+                record.getSegmentId(),
+                audioFile,
+                audioFile != null && audioFile.isFile() ? audioFile.lastModified() : 0L,
+                System.currentTimeMillis(),
+                hasTranscript ? "TRANSCRIBED" : "READY",
+                reason);
+    }
+
     private static boolean hasQueuedWork(Context context) {
         for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
             if (("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus()))
-                    && record.getAudioAvailable()) {
+                    && record.getAudioAvailable()
+                    && !isAutomaticLiveFinalDisabled(context, record)) {
                 return true;
             }
         }

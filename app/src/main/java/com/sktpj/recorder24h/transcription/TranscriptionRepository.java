@@ -41,7 +41,8 @@ public final class TranscriptionRepository {
         // disabled the five-minute final pass for that frozen segment. If finalization is ON, the
         // normal/final model is intentionally independent from the live model and must run.
         if (FullStreamingStateStore.isOwned(context, segmentId)
-                && !LiveSegmentPolicyStore.isFiveMinuteFinalEnabled(context, segmentId)) {
+                && (!LiveSegmentPolicyStore.isFiveMinuteFinalEnabled(context, segmentId)
+                    || !LiveTranscriptionSettings.isFiveMinuteFinalEnabled(context))) {
             return true;
         }
         File file = fileFor(context, segmentId);

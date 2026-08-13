@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import com.sktpj.recorder24h.transcription.FullStreamingStateStore
 import com.sktpj.recorder24h.transcription.LiveTranscriptionSettings
 import com.sktpj.recorder24h.transcription.TranscriptionPipelineSettings
+import com.sktpj.recorder24h.transcription.TranscriptionScheduler
 import com.sktpj.recorder24h.util.AppLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -141,6 +142,7 @@ fun TranscriptionBackendSettingsCard() {
                     ) {
                         val before = fiveMinuteFinalEnabled.toString()
                         LiveTranscriptionSettings.setFiveMinuteFinalEnabled(context, false)
+                        TranscriptionScheduler.disableAutomaticLiveFinals(context)
                         refresh(); logChange("fiveMinuteFinalEnabled", before, fiveMinuteFinalEnabled.toString())
                     }
                 }
@@ -148,7 +150,7 @@ fun TranscriptionBackendSettingsCard() {
                     if (fiveMinuteFinalEnabled)
                         "ON: ライブ表示とは別に、5分音声を通常/確定モデルで再処理して履歴の確定結果にします。"
                     else
-                        "OFF: 5分後の通常モデル再処理は行わず、ライブで確定した発話を5分履歴へ保存します。",
+                        "OFF: 押した時点から5分後の通常モデル再処理を止め、待機中のライブ所有5分確定も外します。ライブで確定した発話だけを5分履歴へ保存します。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -326,7 +328,7 @@ fun TranscriptionBackendSettingsCard() {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                "完全ストリーミングでは録音中PCMを専用ASRプロセスへ渡します。ライブモデルと5分確定モデルは独立し、5分後の通常モデル確定はON/OFFできます。5分音声保存は常に継続し、録音中の設定変更は次の5分セグメント境界から反映されます。",
+                "完全ストリーミングでは録音中PCMを専用ASRプロセスへ渡します。ライブモデルと5分確定モデルは独立します。5分確定ON/OFFは即時反映し、ライブモデル・backend変更は次の5分セグメント境界から反映します。5分音声保存自体は常に継続します。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

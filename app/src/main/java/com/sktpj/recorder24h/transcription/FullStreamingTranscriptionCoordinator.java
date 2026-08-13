@@ -161,7 +161,10 @@ public final class FullStreamingTranscriptionCoordinator {
                     ? TranscriptionPipelineSettings.snapshot(appContext) : activePipeline;
             String oldModelId = activeModelId == null
                     ? LiveTranscriptionSettings.selectedLiveModelId(appContext) : activeModelId;
-            boolean oldFiveMinuteFinalEnabled = activeFiveMinuteFinalEnabled;
+            // Unlike the live model/backend, the user-facing final-pass toggle is immediate.
+            // The current segment obeys the latest setting when it closes.
+            boolean oldFiveMinuteFinalEnabled =
+                    LiveTranscriptionSettings.isFiveMinuteFinalEnabled(appContext);
             boolean oldLive = TranscriptionPipelineSettings.isLiveStreaming(oldPipeline);
             boolean oldFailed = currentFailed;
 

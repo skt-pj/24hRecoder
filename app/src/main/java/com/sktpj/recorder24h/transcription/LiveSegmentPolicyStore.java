@@ -66,6 +66,12 @@ public final class LiveSegmentPolicyStore {
         return policy != null && policy.fiveMinuteFinalEnabled;
     }
 
+    public static void setFiveMinuteFinalEnabled(Context context, String segmentId, boolean enabled) {
+        Policy policy = read(context, segmentId);
+        if (policy == null) return;
+        mark(context, segmentId, policy.liveModelId, enabled, policy.startedAtMs, policy.endedAtMs);
+    }
+
     private static File dir(Context context) {
         File dir = new File(context.getFilesDir(), DIR);
         if (!dir.exists()) dir.mkdirs();

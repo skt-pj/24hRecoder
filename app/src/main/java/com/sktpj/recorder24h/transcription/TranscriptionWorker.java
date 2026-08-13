@@ -70,6 +70,14 @@ public final class TranscriptionWorker extends Worker {
         boolean forceRetranscribe = record.getReason() != null && record.getReason().startsWith("MANUAL_");
         int generation = TranscriptionResetManager.currentGeneration(context);
 
+        if (TranscriptionScheduler.isAutomaticLiveFinalDisabled(context, record)) {
+            TranscriptionScheduler.settleAutomaticLiveFinalDisabled(
+                    context, record, "FIVE_MINUTE_FINAL_DISABLED_BEFORE_START");
+            log(context, "TRANSCRIPTION_LIVE_FINAL_SKIPPED_DISABLED", segmentId, audioFile,
+                    null, forceRetranscribe, 1, null);
+            return;
+        }
+
         if (audioFile == null || !audioFile.isFile()) {
             boolean hasTranscript = TranscriptionRepository.exists(context, segmentId);
             SegmentRepository.appendWithoutNotify(context, segmentId, audioFile, 0L,
@@ -104,10 +112,13 @@ public final class TranscriptionWorker extends Worker {
 
             if (!forceRetranscribe &&
                     TranscriptionRepository.isCurrentEngine(context, segmentId, selectedEngineId)) {
+                boolean hasTranscript = TranscriptionRepository.exists(context, segmentId);
                 SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
-                        audioFile.lastModified(), System.currentTimeMillis(), "TRANSCRIBED", null);
+                        audioFile.lastModified(), System.currentTimeMillis(),
+                        hasTranscript ? "TRANSCRIBED" : "READY",
+                        hasTranscript ? null : "FIVE_MINUTE_FINAL_DISABLED");
                 log(context, "TRANSCRIPT_CURRENT_ENGINE_AFTER_QUEUE", segmentId, audioFile,
-                        null, false, attempt, null);
+                        hasTranscript ? null : "FIVE_MINUTE_FINAL_DISABLED", false, attempt, null);
                 return;
             }
             String pipelineReason = TranscriptionPipelineSettings.unavailableReason(
@@ -261,11 +272,22 @@ public final class TranscriptionWorker extends Worker {
                 return;
             } catch (Exception error) {
                 if (TranscriptionCancellation.isCancellation(error)) {
-                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
-                            audioFile.lastModified(), System.currentTimeMillis(), "QUEUED",
-                            "USER_PAUSED_RUNNING_TRANSCRIPTION");
-                    log(context, "TRANSCRIPTION_RUNNING_ITEM_CANCELLED_BY_USER", segmentId, audioFile,
-                            TranscriptionCancellation.CANCELLED, forceRetranscribe, attempt, null);
+                    if (!forceRetranscribe
+                            && FullStreamingStateStore.isOwned(context, segmentId)
+                            && !LiveTranscriptionSettings.isFiveMinuteFinalEnabled(context)) {
+                        LiveSegmentPolicyStore.setFiveMinuteFinalEnabled(context, segmentId, false);
+                        TranscriptionScheduler.settleAutomaticLiveFinalDisabled(
+                                context, record, "FIVE_MINUTE_FINAL_DISABLED_DURING_INFERENCE");
+                        log(context, "TRANSCRIPTION_RUNNING_LIVE_FINAL_CANCELLED",
+                                segmentId, audioFile, TranscriptionCancellation.CANCELLED,
+                                false, attempt, null);
+                    } else {
+                        SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                                audioFile.lastModified(), System.currentTimeMillis(), "QUEUED",
+                                "USER_PAUSED_RUNNING_TRANSCRIPTION");
+                        log(context, "TRANSCRIPTION_RUNNING_ITEM_CANCELLED_BY_USER", segmentId, audioFile,
+                                TranscriptionCancellation.CANCELLED, forceRetranscribe, attempt, null);
+                    }
                     return;
                 }
                 boolean retry = attempt < MAX_ATTEMPTS;
