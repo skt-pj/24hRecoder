@@ -4,6 +4,8 @@ plugins {
     id 'org.jetbrains.kotlin.plugin.compose'
 }
 
+apply from: rootProject.file('gradle/live-history-backpressure-0.7.30.gradle')
+
 android {
     namespace 'com.sktpj.recorder24h'
     compileSdk 36
