@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.sktpj.recorder24h.transcription.LiveTranscriptionSettings
 import com.sktpj.recorder24h.transcription.TranscriptionScheduler
 import com.sktpj.recorder24h.transcription.TranscriptionPipelineSettings
 import com.sktpj.recorder24h.transcription.WhisperModelManager
@@ -46,11 +47,13 @@ fun WhisperModelSettingsCard() {
     val context = LocalContext.current
     val specs = remember { WhisperModelManager.comparisonModels().toList() }
     var selectedId by remember { mutableStateOf(WhisperModelManager.selectedModelId(context)) }
+    var liveSelectedId by remember { mutableStateOf(LiveTranscriptionSettings.selectedLiveModelId(context)) }
     var refreshTick by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
         while (true) {
             selectedId = WhisperModelManager.selectedModelId(context)
+            liveSelectedId = LiveTranscriptionSettings.selectedLiveModelId(context)
             refreshTick++
             delay(1_000L)
         }
@@ -59,6 +62,10 @@ fun WhisperModelSettingsCard() {
     val refreshKey = refreshTick
     val selected = specs.firstOrNull { it.id == selectedId }
         ?: WhisperModelManager.selectedModelSpec(context)
+    val liveSelected = specs.firstOrNull { it.id == liveSelectedId }
+        ?: WhisperModelManager.modelSpec(liveSelectedId)
+    val liveReady = refreshKey >= 0 && WhisperModelManager.isComparisonReady(context, liveSelectedId)
+    val liveAsrBytes = WhisperModelManager.downloadedBytesForModel(context, liveSelectedId)
     val ready = refreshKey >= 0 && WhisperModelManager.isComparisonReady(context, selectedId)
     val asrBytes = WhisperModelManager.downloadedBytesForModel(context, selectedId)
     val vadBytes = WhisperModelManager.vadModelFile(context).let { if (it.isFile) it.length() else 0L }
@@ -67,11 +74,69 @@ fun WhisperModelSettingsCard() {
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         TranscriptionBackendSettingsCard()
+
         Card {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("通常文字起こしモデル", style = MaterialTheme.typography.titleLarge)
+                Text("ライブ文字起こしモデル", style = MaterialTheme.typography.titleLarge)
                 Text(
-                    "自動文字起こしと「この音声を再文字起こし」で使うWhisperモデルを選択します。モデル比較の選択とは別です。",
+                    "リアルタイムの発話ごとの認識に使うWhisperモデルです。5分後の確定・通常文字起こしモデルとは独立して選択します。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(specs, key = { "live-${it.id}" }) { spec ->
+                        FilterChip(
+                            selected = liveSelectedId == spec.id,
+                            onClick = {
+                                val before = LiveTranscriptionSettings.selectedLiveModelId(context)
+                                LiveTranscriptionSettings.setLiveModelId(context, spec.id)
+                                liveSelectedId = spec.id
+                                refreshTick++
+                                logLiveSelection(context, before, spec.id)
+                                Toast.makeText(context, "ライブを${spec.label}に変更しました", Toast.LENGTH_SHORT).show()
+                            },
+                            label = { Text(spec.label) }
+                        )
+                    }
+                }
+                liveSelected?.let { spec ->
+                    Text(spec.label, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "${spec.description} • ${formatModelBytes(spec.expectedBytes)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    if (liveReady) "ライブモデル: 準備済み" else if (liveAsrBytes > 0L) "ライブモデル: 取得中 / 未完了" else "ライブモデル: 未取得",
+                    color = if (liveReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.SemiBold
+                )
+                if (!liveReady) {
+                    Button(
+                        onClick = {
+                            WhisperModelManager.enqueueModelDownload(context, liveSelectedId)
+                            Toast.makeText(
+                                context,
+                                "${liveSelected?.label ?: "ライブモデル"}のダウンロードを開始します",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            refreshTick++
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("ライブモデルをダウンロード") }
+                }
+                Text(
+                    "録音中のモデル変更は次の5分セグメント境界からライブ処理へ反映します。モデルを分けても自動フォールバックは行いません。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Card {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("5分後の確定・通常文字起こしモデル", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "5分後の確定文字起こし、自動文字起こしと「この音声を再文字起こし」で使うモデルです。ライブモデル・モデル比較とは別です。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
@@ -205,7 +270,21 @@ fun WhisperModelSettingsCard() {
     }
 }
 
+private fun logLiveSelection(context: android.content.Context, before: String, after: String) {
+    try {
+        val details = JSONObject()
+        details.put("previousLiveModelId", before)
+        details.put("selectedLiveModelId", after)
+        details.put("selectedLiveModelLabel", WhisperModelManager.modelSpec(after)?.label ?: JSONObject.NULL)
+        details.put("selectedLiveModelReady", WhisperModelManager.isComparisonReady(context, after))
+        details.put("fiveMinuteFinalEnabled", LiveTranscriptionSettings.isFiveMinuteFinalEnabled(context))
+        AppLogger.event(context, "UI_WHISPER_LIVE_MODEL_SELECTED", details)
+    } catch (_: Exception) {
+    }
+}
+
 private fun logSelection(context: android.content.Context, before: String, after: String) {
+    // kept below; live selection has a separate event so diagnostics can distinguish it.
     try {
         val details = JSONObject()
         details.put("previousModelId", before)

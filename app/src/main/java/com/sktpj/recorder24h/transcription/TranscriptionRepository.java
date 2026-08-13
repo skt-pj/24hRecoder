@@ -37,10 +37,11 @@ public final class TranscriptionRepository {
     }
 
     public static boolean isCurrentEngine(Context context, String segmentId, String engineId) {
-        // A full-streaming-owned segment must never be silently re-routed into the normal
-        // post-segment queue, including after a live-ASR failure. Explicit force-retranscription
-        // bypasses this check at the scheduler/runner layer and remains available to the user.
-        if (FullStreamingStateStore.isOwned(context, segmentId)) {
+        // A live-owned segment bypasses the normal queue only when the user explicitly
+        // disabled the five-minute final pass for that frozen segment. If finalization is ON, the
+        // normal/final model is intentionally independent from the live model and must run.
+        if (FullStreamingStateStore.isOwned(context, segmentId)
+                && !LiveSegmentPolicyStore.isFiveMinuteFinalEnabled(context, segmentId)) {
             return true;
         }
         File file = fileFor(context, segmentId);
@@ -103,6 +104,10 @@ public final class TranscriptionRepository {
         // authoritative transcript is durable, bind those rolling live rows to canonical chunk
         // edit keys and apply pending text/speaker/delete operations.
         applyPendingLiveEdits(context, segmentId);
+        if (FullStreamingStateStore.isOwned(context, segmentId)
+                && LiveSegmentPolicyStore.isFiveMinuteFinalEnabled(context, segmentId)) {
+            FullStreamingStateStore.markFinal(context, segmentId, model);
+        }
 
         // AI inference is never run here. This only wakes semantic AI queue items whose target
         // period overlaps the transcript that just became durable.

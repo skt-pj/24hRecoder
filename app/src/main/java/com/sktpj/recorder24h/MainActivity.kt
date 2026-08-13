@@ -107,6 +107,7 @@ import com.sktpj.recorder24h.storage.RecorderStateStore
 import com.sktpj.recorder24h.storage.RecordingIntentStore
 import com.sktpj.recorder24h.storage.StoragePolicy
 import com.sktpj.recorder24h.transcription.FullStreamingStateStore
+import com.sktpj.recorder24h.transcription.LiveTranscriptionSettings
 import com.sktpj.recorder24h.transcription.LocalWhisperEngine
 import com.sktpj.recorder24h.transcription.TranscriptionRepository
 import com.sktpj.recorder24h.transcription.TranscriptionResetManager
@@ -858,6 +859,8 @@ private fun LiveHistoryScreen(
     val backendId = liveState?.backend ?: pipeline.asrBackend
     val backendLabel = TranscriptionPipelineSettings.asrLabel(backendId)
     val vadLabel = TranscriptionPipelineSettings.vadLabel(pipeline.vadBackend)
+    val liveModelId = LiveTranscriptionSettings.selectedLiveModelId(context)
+    val liveModelLabel = WhisperModelManager.modelSpec(liveModelId)?.label ?: liveModelId
     val stateLabel = when (state) {
         "LIVE_PARTIAL" -> "認識中"
         "FINAL" -> "確定"
@@ -888,7 +891,7 @@ private fun LiveHistoryScreen(
                     Text("ライブ文字起こし", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                     StatusPill(stateLabel, stateTone)
                 }
-                Text("$backendLabel / $vadLabel", style = MaterialTheme.typography.bodyMedium)
+                Text("$backendLabel / $vadLabel / $liveModelLabel", style = MaterialTheme.typography.bodyMedium)
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     Text("推論キュー ${liveState?.queueDepth ?: 0}", style = MaterialTheme.typography.labelMedium)
                     if ((liveState?.updatedAtMs ?: 0L) > 0L) {
@@ -1037,6 +1040,9 @@ private fun SegmentCard(record: SegmentRecord, onClick: () -> Unit) {
                 when {
                     record.hasTranscript && !record.transcriptText.isNullOrBlank() -> record.transcriptText!!
                     record.hasTranscript -> "文字起こし結果は空です（無音区間の可能性があります）"
+                    record.liveOwned && record.fiveMinuteFinalEnabled && record.status == "TRANSCRIBING" -> "ライブ表示とは別に、5分音声を確定モデルで処理中です"
+                    record.liveOwned && record.fiveMinuteFinalEnabled && record.status in setOf("QUEUED", "RETRY_WAIT", "READY") -> "ライブ発話はリアルタイム表示済みです。5分後の確定処理を待っています"
+                    record.liveOwned && !record.fiveMinuteFinalEnabled -> "ライブ発話を5分記録へ確定しています"
                     record.status == "TRANSCRIBING" -> "端末内で文字起こし中です"
                     record.audioAvailable -> "音声は保存済みです。文字起こしを待っています"
                     else -> "文字起こし結果はまだありません"
@@ -1125,7 +1131,7 @@ private fun RecordDetailScreen(record: SegmentRecord) {
             Card {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("詳細", style = MaterialTheme.typography.titleLarge)
-                    InfoRow("状態", record.status)
+                    InfoRow("状態", recordStatusLabel(record))
                     InfoRow("開始", formatDateTime(record.startedAtMs))
                     InfoRow("終了", formatDateTime(record.endedAtMs))
                     InfoRow("長さ", if (record.durationMs > 0L) formatDuration(record.durationMs) else "-")
@@ -1485,14 +1491,39 @@ private fun readDashboard(context: Context): DashboardSnapshot {
         audioBytes = StoragePolicy.audioBytes(context),
         appBytes = StoragePolicy.appDataBytes(context),
         deviceFreeBytes = context.filesDir.usableSpace,
-        modelReady = TranscriptionPipelineSettings.isSelectedPipelineReady(context, WhisperModelManager.selectedModelId(context)),
-        modelBytes = WhisperModelManager.downloadedBytes(context),
+        modelReady = run {
+            val pipeline = TranscriptionPipelineSettings.snapshot(context)
+            val modelId = if (TranscriptionPipelineSettings.isLiveStreaming(pipeline))
+                LiveTranscriptionSettings.selectedLiveModelId(context) else WhisperModelManager.selectedModelId(context)
+            TranscriptionPipelineSettings.unavailableReason(context, pipeline, modelId) == null
+        },
+        modelBytes = run {
+            val pipeline = TranscriptionPipelineSettings.snapshot(context)
+            val modelId = if (TranscriptionPipelineSettings.isLiveStreaming(pipeline))
+                LiveTranscriptionSettings.selectedLiveModelId(context) else WhisperModelManager.selectedModelId(context)
+            WhisperModelManager.downloadedBytesForModel(context, modelId) +
+                WhisperModelManager.vadModelFile(context).let { if (it.isFile) it.length() else 0L }
+        },
         pendingAudio = TranscriptionScheduler.pendingAudioCount(context),
         transcriptCount = TranscriptionRepository.count(context)
     )
 }
 
 private fun recordStatusLabel(record: SegmentRecord): String {
+    if (record.liveOwned) {
+        return when {
+            record.hasTranscript && record.fiveMinuteFinalEnabled -> "5分確定済み"
+            record.hasTranscript -> "ライブ確定済み"
+            record.fiveMinuteFinalEnabled && record.status == "TRANSCRIBING" -> "5分確定処理中"
+            record.fiveMinuteFinalEnabled && record.status == "RETRY_WAIT" -> "5分確定再試行待ち"
+            record.fiveMinuteFinalEnabled && record.status == "QUEUED" -> "5分確定待ち"
+            record.fiveMinuteFinalEnabled && record.status == "READY" -> "5分確定登録中"
+            record.status == "FAILED" && record.fiveMinuteFinalEnabled -> "5分確定失敗"
+            record.status == "FAILED" -> "ライブ失敗"
+            record.status == "READY" -> "ライブ確定処理中"
+            else -> "ライブ処理中"
+        }
+    }
     return when (record.status) {
         "QUEUED" -> "キュー待ち"
         "TRANSCRIBING" -> "文字起こし中"

@@ -2,6 +2,8 @@ package com.sktpj.recorder24h.ui
 
 import android.content.Context
 import com.sktpj.recorder24h.storage.StoragePolicy
+import com.sktpj.recorder24h.transcription.FullStreamingStateStore
+import com.sktpj.recorder24h.transcription.LiveSegmentPolicyStore
 import com.sktpj.recorder24h.transcription.SpeakerIdentifier
 import com.sktpj.recorder24h.transcription.TranscriptEditRepository
 import com.sktpj.recorder24h.transcription.TranscriptionRepository
@@ -42,7 +44,10 @@ data class SegmentRecord(
     val transcriptEditKey: String?,
     val transcriptManuallyEdited: Boolean,
     val transcriptModel: String?,
-    val transcribedAtMs: Long
+    val transcribedAtMs: Long,
+    val liveOwned: Boolean,
+    val fiveMinuteFinalEnabled: Boolean,
+    val liveModelId: String?
 ) {
     val hasTranscript: Boolean
         get() = transcriptText != null
@@ -87,6 +92,8 @@ object SegmentHistoryRepository {
             val audio = builder.audioFile?.takeIf { it.isFile }
             val started = builder.recordedStartMs.takeIf { it > 0L } ?: builder.fallbackStartMs
             val ended = builder.recordedEndMs
+            val liveOwned = FullStreamingStateStore.isOwned(context, builder.segmentId)
+            val livePolicy = if (liveOwned) LiveSegmentPolicyStore.read(context, builder.segmentId) else null
             val sortTime = if (started > 0L) {
                 started
             } else {
@@ -116,7 +123,10 @@ object SegmentHistoryRepository {
                 transcriptEditKey = builder.transcriptEditKey,
                 transcriptManuallyEdited = builder.transcriptManuallyEdited,
                 transcriptModel = builder.transcriptModel,
-                transcribedAtMs = builder.transcribedAtMs
+                transcribedAtMs = builder.transcribedAtMs,
+                liveOwned = liveOwned,
+                fiveMinuteFinalEnabled = livePolicy?.fiveMinuteFinalEnabled ?: false,
+                liveModelId = livePolicy?.liveModelId
             )
         }.sortedByDescending { it.sortTimeMs }
     }

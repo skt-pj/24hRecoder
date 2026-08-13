@@ -35,6 +35,7 @@ public final class FullStreamingTranscriptionCoordinator {
     private static Context appContext;
     private static TranscriptionPipelineSettings.Snapshot activePipeline;
     private static String activeModelId;
+    private static boolean activeFiveMinuteFinalEnabled;
     private static Messenger remote;
     private static boolean binding;
     private static boolean bound;
@@ -87,7 +88,8 @@ public final class FullStreamingTranscriptionCoordinator {
         synchronized (LOCK) {
             appContext = context.getApplicationContext();
             activePipeline = TranscriptionPipelineSettings.snapshot(appContext);
-            activeModelId = WhisperModelManager.selectedModelId(appContext);
+            activeModelId = LiveTranscriptionSettings.selectedLiveModelId(appContext);
+            activeFiveMinuteFinalEnabled = LiveTranscriptionSettings.isFiveMinuteFinalEnabled(appContext);
             currentFailed = false;
             currentFailure = null;
             pending.clear();
@@ -113,7 +115,8 @@ public final class FullStreamingTranscriptionCoordinator {
             if (activePipeline == null) {
                 appContext = context.getApplicationContext();
                 activePipeline = TranscriptionPipelineSettings.snapshot(appContext);
-                activeModelId = WhisperModelManager.selectedModelId(appContext);
+                activeModelId = LiveTranscriptionSettings.selectedLiveModelId(appContext);
+                activeFiveMinuteFinalEnabled = LiveTranscriptionSettings.isFiveMinuteFinalEnabled(appContext);
             }
             return activePipeline.vadBackend;
         }
@@ -157,12 +160,14 @@ public final class FullStreamingTranscriptionCoordinator {
             TranscriptionPipelineSettings.Snapshot oldPipeline = activePipeline == null
                     ? TranscriptionPipelineSettings.snapshot(appContext) : activePipeline;
             String oldModelId = activeModelId == null
-                    ? WhisperModelManager.selectedModelId(appContext) : activeModelId;
+                    ? LiveTranscriptionSettings.selectedLiveModelId(appContext) : activeModelId;
+            boolean oldFiveMinuteFinalEnabled = activeFiveMinuteFinalEnabled;
             boolean oldLive = TranscriptionPipelineSettings.isLiveStreaming(oldPipeline);
             boolean oldFailed = currentFailed;
 
             TranscriptionPipelineSettings.Snapshot nextPipeline = TranscriptionPipelineSettings.snapshot(appContext);
-            String nextModelId = WhisperModelManager.selectedModelId(appContext);
+            String nextModelId = LiveTranscriptionSettings.selectedLiveModelId(appContext);
+            boolean nextFiveMinuteFinalEnabled = LiveTranscriptionSettings.isFiveMinuteFinalEnabled(appContext);
             boolean nextLive = TranscriptionPipelineSettings.isLiveStreaming(nextPipeline);
             String nextReason = nextLive
                     ? TranscriptionPipelineSettings.unavailableReason(appContext, nextPipeline, nextModelId)
@@ -171,12 +176,17 @@ public final class FullStreamingTranscriptionCoordinator {
             if (oldLive) {
                 FullStreamingStateStore.markOwned(appContext, segmentId, oldPipeline, oldModelId,
                         startedAtMs, endedAtMs);
+                LiveSegmentPolicyStore.mark(appContext, segmentId, oldModelId,
+                        oldFiveMinuteFinalEnabled, startedAtMs, endedAtMs);
                 if (oldFailed) {
                     String reason = currentFailure == null ? "FULL_STREAMING_RUNTIME_FAILED" : currentFailure;
                     FullStreamingStateStore.markFailed(appContext, segmentId,
                             LocalWhisperEngine.engineId(appContext, oldModelId, oldPipeline), reason);
-                    markFailedWhenPublished(appContext, segmentId, reason);
-                    // A failed segment does not poison the next segment forever. Starting the next
+                    if (!oldFiveMinuteFinalEnabled) {
+                        markFailedWhenPublished(appContext, segmentId, reason);
+                    }
+                    // A failed live preview does not block the explicitly enabled five-minute
+                    // final pass. A failed segment does not poison the next live segment forever. Starting the next
                     // selected live pipeline is an explicit new session, not a backend fallback.
                     if (nextLive && nextReason == null) {
                         ensureBoundLocked();
@@ -191,6 +201,7 @@ public final class FullStreamingTranscriptionCoordinator {
                     data.putLong("segmentEndPtsUs", segmentEndPtsUs);
                     data.putLong("startedAtMs", startedAtMs);
                     data.putLong("endedAtMs", endedAtMs);
+                    data.putBoolean("fiveMinuteFinalEnabled", oldFiveMinuteFinalEnabled);
                     putPipeline(data, "old", oldPipeline, oldModelId);
                     putPipeline(data, "next", nextPipeline, nextModelId);
                     boundary.setData(data);
@@ -203,6 +214,7 @@ public final class FullStreamingTranscriptionCoordinator {
 
             activePipeline = nextPipeline;
             activeModelId = nextModelId;
+            activeFiveMinuteFinalEnabled = nextFiveMinuteFinalEnabled;
             currentFailed = false;
             currentFailure = null;
             if (nextLive && nextReason != null) {
@@ -214,6 +226,10 @@ public final class FullStreamingTranscriptionCoordinator {
                         .put("oldPipeline", oldPipeline.toJson())
                         .put("nextPipeline", nextPipeline.toJson())
                         .put("oldFailed", oldFailed)
+                        .put("oldLiveModelId", oldModelId)
+                        .put("oldFiveMinuteFinalEnabled", oldFiveMinuteFinalEnabled)
+                        .put("nextLiveModelId", nextModelId)
+                        .put("nextFiveMinuteFinalEnabled", nextFiveMinuteFinalEnabled)
                         .put("nextRunnable", nextReason == null)
                         .put("automaticFallback", false);
                 AppLogger.event(appContext, "FULL_STREAMING_SEGMENT_BOUNDARY", details);

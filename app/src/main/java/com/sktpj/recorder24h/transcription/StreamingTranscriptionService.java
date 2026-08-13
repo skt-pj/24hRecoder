@@ -164,7 +164,15 @@ public final class StreamingTranscriptionService extends Service {
                         Math.max(latestActiveSpeechStartUs, lastScheduledFinalEndUs));
                 if (endPtsUs > start) scheduleFinal(start, endPtsUs, old);
             }
-            submit("segment-finalize", () -> finalizeSegment(old));
+            if (data.getBoolean("fiveMinuteFinalEnabled", false)) {
+                log("FULL_STREAMING_SEGMENT_HANDOFF_TO_POSTPROCESS", details(
+                        "segmentId", old.segmentId,
+                        "liveModelId", old.config.modelId,
+                        "fiveMinuteFinalEnabled", true,
+                        "liveFinalsRemainInRealtimeHistory", true));
+            } else {
+                submit("segment-finalize", () -> finalizeSegment(old));
+            }
         }
 
         pcmBuffer.trimBefore(endPtsUs);
