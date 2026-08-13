@@ -99,11 +99,40 @@ public final class TranscriptionRepository {
             }
         }
 
+        // Full-streaming live edits can happen before the five-minute transcript exists. Once the
+        // authoritative transcript is durable, bind those rolling live rows to canonical chunk
+        // edit keys and apply pending text/speaker/delete operations.
+        applyPendingLiveEdits(context, segmentId);
+
         // AI inference is never run here. This only wakes semantic AI queue items whose target
         // period overlaps the transcript that just became durable.
         try {
             AiAnalysisScheduler.wakeWaitingTargets(context, segmentId);
         } catch (RuntimeException ignored) {
+        }
+    }
+
+    private static void applyPendingLiveEdits(Context context, String segmentId) {
+        if (!FullStreamingStateStore.isOwned(context, segmentId)) return;
+        File ownership = new File(context.getFilesDir(),
+                "metadata/full-streaming/" + safeSegmentId(segmentId) + ".json");
+        if (!ownership.isFile()) return;
+        try (FileInputStream input = new FileInputStream(ownership);
+             InputStreamReader reader = new InputStreamReader(input, StandardCharsets.UTF_8)) {
+            StringBuilder json = new StringBuilder((int) Math.min(ownership.length(), 32 * 1024L));
+            char[] buffer = new char[4096];
+            int read;
+            while ((read = reader.read(buffer)) >= 0) {
+                if (read > 0) json.append(buffer, 0, read);
+            }
+            JSONObject row = new JSONObject(json.toString());
+            long startedAtMs = row.optLong("startedAtMs", 0L);
+            long endedAtMs = row.optLong("endedAtMs", startedAtMs);
+            if (startedAtMs > 0L) {
+                FullStreamingStateStore.bindAndApplyRecentEditsToSegment(
+                        context, segmentId, startedAtMs, Math.max(startedAtMs, endedAtMs));
+            }
+        } catch (Exception ignored) {
         }
     }
 
