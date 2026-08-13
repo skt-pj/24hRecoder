@@ -10,7 +10,6 @@ import androidx.work.Worker
 import androidx.work.WorkerParameters
 import com.sktpj.recorder24h.ui.SegmentHistoryRepository
 import com.sktpj.recorder24h.ui.SegmentRecord
-import com.sktpj.recorder24h.ui.TranscriptChunk
 import com.sktpj.recorder24h.util.AppLogger
 import org.json.JSONObject
 import java.io.File
@@ -31,6 +30,12 @@ class LiveSpeakerEnrollmentWorker(
     context: Context,
     params: WorkerParameters
 ) : Worker(context, params) {
+    private data class CanonicalChunk(
+        val startMs: Long,
+        val endMs: Long,
+        val editKey: String
+    )
+
     override fun doWork(): Result {
         val entryId = inputData.getString(EXTRA_ENTRY_ID).orEmpty()
         val startAtMs = inputData.getLong(EXTRA_START_AT_MS, -1L)
@@ -63,7 +68,8 @@ class LiveSpeakerEnrollmentWorker(
 
         // FullStreamingStateStore must have propagated the live manual label to the canonical
         // transcript sidecar before we learn from it. Never learn from an automatic guess alone.
-        if (chunks.any { !it.manuallyEdited || it.speaker != "自分" }) {
+        val edits = TranscriptEditRepository.load(applicationContext, record.segmentId)
+        if (chunks.any { edits[it.editKey]?.speaker != "自分" }) {
             return retryCanonical("manual-self-not-bound-yet", entryId)
         }
 
@@ -123,7 +129,7 @@ class LiveSpeakerEnrollmentWorker(
         val candidates = SegmentHistoryRepository.load(applicationContext).filter { record ->
             record.startedAtMs > 0L &&
                 record.endedAtMs >= record.startedAtMs &&
-                record.transcriptChunks.isNotEmpty() &&
+                TranscriptionRepository.exists(applicationContext, record.segmentId) &&
                 endAtMs >= record.startedAtMs - MATCH_TOLERANCE_MS &&
                 startAtMs <= record.endedAtMs + MATCH_TOLERANCE_MS
         }
@@ -134,19 +140,48 @@ class LiveSpeakerEnrollmentWorker(
         }
     }
 
+    private fun canonicalChunks(record: SegmentRecord): List<CanonicalChunk> {
+        val file = TranscriptionRepository.fileFor(applicationContext, record.segmentId)
+        if (!file.isFile) return emptyList()
+        return try {
+            val root = JSONObject(file.readText(Charsets.UTF_8))
+            val segments = root.optJSONArray("segments") ?: return emptyList()
+            buildList {
+                for (index in 0 until segments.length()) {
+                    val row = segments.optJSONObject(index) ?: continue
+                    val sourceText = row.optString("text", "").trim()
+                    val startMs = row.optLong("startMs", -1L)
+                    val endMs = row.optLong("endMs", -1L)
+                    if (sourceText.isEmpty() || startMs < 0L || endMs < startMs) continue
+                    add(
+                        CanonicalChunk(
+                            startMs = startMs,
+                            endMs = endMs,
+                            editKey = TranscriptEditRepository.chunkKey(startMs, endMs, sourceText)
+                        )
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     private fun matchingChunks(
         record: SegmentRecord,
         startAtMs: Long,
         endAtMs: Long
-    ): List<TranscriptChunk> {
+    ): List<CanonicalChunk> {
+        val canonical = canonicalChunks(record)
+        if (canonical.isEmpty()) return emptyList()
         val localStart = max(0L, startAtMs - record.startedAtMs)
         val localEnd = max(localStart, endAtMs - record.startedAtMs)
-        val overlapping = record.transcriptChunks.filter { chunk ->
+        val overlapping = canonical.filter { chunk ->
             max(chunk.startMs, localStart) <= min(chunk.endMs, localEnd)
         }
         if (overlapping.isNotEmpty()) return overlapping
         val center = (localStart + localEnd) / 2L
-        val nearest = record.transcriptChunks.minByOrNull { chunk ->
+        val nearest = canonical.minByOrNull { chunk ->
             abs(center - (chunk.startMs + chunk.endMs) / 2L)
         } ?: return emptyList()
         val distance = abs(center - (nearest.startMs + nearest.endMs) / 2L)
@@ -159,7 +194,7 @@ class LiveSpeakerEnrollmentWorker(
         removeEnrollments(record, chunks)
     }
 
-    private fun removeEnrollments(record: SegmentRecord, chunks: List<TranscriptChunk>) {
+    private fun removeEnrollments(record: SegmentRecord, chunks: List<CanonicalChunk>) {
         for (chunk in chunks) {
             SpeakerProfileStore.removeEnrollment(
                 applicationContext,
