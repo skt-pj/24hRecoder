@@ -1,0 +1,53 @@
+name: Apply 0.7.28 live final immediate off
+
+on:
+  push:
+    branches:
+      - agent/live-final-off-immediate-0.7.28
+    paths:
+      - tools/apply_live_final_off_0_7_28.py
+      - .github/workflows/apply-0.7.28.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-0.7.28-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/live-final-off-immediate-0.7.28
+          fetch-depth: 0
+
+      - name: Apply source migration
+        run: python3 tools/apply_live_final_off_0_7_28.py
+
+      - name: Validate patch
+        run: |
+          git diff --check
+          git status --short
+
+      - name: Commit source changes
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No source changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/build.gradle \
+            app/src/main/java/com/sktpj/recorder24h/TranscriptionBackendSettingsCard.kt \
+            app/src/main/java/com/sktpj/recorder24h/transcription/FullStreamingTranscriptionCoordinator.java \
+            app/src/main/java/com/sktpj/recorder24h/transcription/LiveSegmentPolicyStore.java \
+            app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionRepository.java \
+            app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionScheduler.java \
+            app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionWorker.java
+          git commit -m "Make five-minute final OFF immediate"
+          git push origin HEAD:agent/live-final-off-immediate-0.7.28
