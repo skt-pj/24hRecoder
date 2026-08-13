@@ -916,20 +916,7 @@ private fun LiveHistoryScreen(
                 contentPadding = PaddingValues(bottom = 8.dp)
             ) {
                 itemsIndexed(finals, key = { _, item -> item.id }) { _, item ->
-                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(formatLiveTime(item.startAtMs), style = MaterialTheme.typography.labelLarge)
-                                Spacer(Modifier.width(10.dp))
-                                Text(
-                                    item.speaker?.takeIf { it.isNotBlank() } ?: "確定",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Text(item.text, style = MaterialTheme.typography.bodyLarge)
-                        }
-                    }
+                    EditableLiveFinalCard(item)
                 }
                 if (partial.isNotBlank()) {
                     item(key = "live-partial") {
