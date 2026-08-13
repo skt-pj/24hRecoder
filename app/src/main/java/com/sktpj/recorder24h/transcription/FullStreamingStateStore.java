@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /** Durable ownership and live-display state for full-streaming transcription. */
 public final class FullStreamingStateStore {
@@ -22,6 +23,7 @@ public final class FullStreamingStateStore {
     private static final String RECENT_FILE = "recent.json";
     private static final long RECENT_RETENTION_MS = 24L * 60L * 60L * 1000L;
     private static final int RECENT_MAX_ENTRIES = 1000;
+    private static final long BIND_TOLERANCE_MS = 2_500L;
 
     private FullStreamingStateStore() {
     }
@@ -132,14 +134,19 @@ public final class FullStreamingStateStore {
                 entry.put("startPtsUs", startPtsUs);
                 entry.put("endPtsUs", endPtsUs);
                 entry.put("text", text.trim());
+                entry.put("manualText", JSONObject.NULL);
                 entry.put("backend", backend == null ? JSONObject.NULL : backend);
                 String speaker = firstSpeaker(segments);
                 entry.put("speaker", speaker == null ? JSONObject.NULL : speaker);
+                entry.put("manualSpeaker", JSONObject.NULL);
+                entry.put("deleted", false);
                 entry.put("segments", segments == null ? new JSONArray() : new JSONArray(segments.toString()));
                 entry.put("createdAtMs", now);
+                entry.put("updatedAtMs", now);
                 kept.put(entry);
-                root.put("schemaVersion", 1);
+                root.put("schemaVersion", 2);
                 root.put("retentionMs", RECENT_RETENTION_MS);
+                root.put("maxEntries", RECENT_MAX_ENTRIES);
                 root.put("updatedAtMs", now);
                 root.put("entries", kept);
                 writeAtomic(recentFile(context), root.toString());
@@ -160,23 +167,245 @@ public final class FullStreamingStateStore {
                 int start = Math.max(0, rows.length() - RECENT_MAX_ENTRIES);
                 for (int i = start; i < rows.length(); i++) {
                     JSONObject row = rows.optJSONObject(i);
-                    if (row == null) continue;
+                    if (row == null || row.optBoolean("deleted", false)) continue;
                     long endAtMs = row.optLong("endAtMs", 0L);
                     if (endAtMs > 0L && endAtMs < cutoff) continue;
+                    String effectiveText = row.isNull("manualText")
+                            ? row.optString("text", "") : row.optString("manualText", "");
+                    String effectiveSpeaker = row.isNull("manualSpeaker")
+                            ? (row.isNull("speaker") ? null : row.optString("speaker", null))
+                            : row.optString("manualSpeaker", null);
                     out.add(new RecentFinal(
                             row.optString("id", "live-" + i),
                             row.optLong("startAtMs", 0L),
                             endAtMs,
                             row.optLong("startPtsUs", -1L),
                             row.optLong("endPtsUs", -1L),
-                            row.optString("text", ""),
-                            row.isNull("speaker") ? null : row.optString("speaker", null),
+                            effectiveText,
+                            effectiveSpeaker,
                             row.isNull("backend") ? null : row.optString("backend", null)));
                 }
             } catch (Exception ignored) {
             }
         }
         return out;
+    }
+
+    public static boolean editRecentFinalText(Context context, String entryId, String text,
+                                              String segmentId, long segmentStartedAtMs,
+                                              long segmentEndedAtMs) {
+        return mutateRecentFinal(context, entryId, text == null ? "" : text, null, false,
+                segmentId, segmentStartedAtMs, segmentEndedAtMs);
+    }
+
+    public static boolean setRecentFinalSpeaker(Context context, String entryId, String speaker,
+                                                String segmentId, long segmentStartedAtMs,
+                                                long segmentEndedAtMs) {
+        String normalized = speaker == null || speaker.trim().isEmpty() ? "判定不能" : speaker.trim();
+        return mutateRecentFinal(context, entryId, null, normalized, false,
+                segmentId, segmentStartedAtMs, segmentEndedAtMs);
+    }
+
+    public static boolean deleteRecentFinal(Context context, String entryId,
+                                            String segmentId, long segmentStartedAtMs,
+                                            long segmentEndedAtMs) {
+        return mutateRecentFinal(context, entryId, null, null, true,
+                segmentId, segmentStartedAtMs, segmentEndedAtMs);
+    }
+
+    /**
+     * Called after a five-minute full-streaming transcript is saved. It binds recent live rows to
+     * exact canonical transcript edit keys and applies any edit/delete that happened before the
+     * five-minute boundary.
+     */
+    public static void bindAndApplyRecentEditsToSegment(Context context, String segmentId,
+                                                        long segmentStartedAtMs, long segmentEndedAtMs) {
+        if (segmentId == null || segmentId.isEmpty() || segmentStartedAtMs <= 0L) return;
+        synchronized (LOCK) {
+            try {
+                JSONObject root = readRecentRoot(context);
+                JSONArray entries = root.optJSONArray("entries");
+                if (entries == null) return;
+                boolean changed = false;
+                for (int i = 0; i < entries.length(); i++) {
+                    JSONObject entry = entries.optJSONObject(i);
+                    if (entry == null) continue;
+                    long startAtMs = entry.optLong("startAtMs", 0L);
+                    long endAtMs = entry.optLong("endAtMs", startAtMs);
+                    if (!overlaps(startAtMs, endAtMs,
+                            segmentStartedAtMs - BIND_TOLERANCE_MS,
+                            segmentEndedAtMs + BIND_TOLERANCE_MS)) continue;
+                    if (bindEntryToTranscript(context, entry, segmentId, segmentStartedAtMs)) {
+                        changed = true;
+                    }
+                    applyEntryEdits(context, entry);
+                }
+                if (changed) {
+                    root.put("schemaVersion", 2);
+                    root.put("updatedAtMs", System.currentTimeMillis());
+                    writeAtomic(recentFile(context), root.toString());
+                }
+            } catch (Exception ignored) {
+                // Realtime edit synchronization must not fail authoritative transcript saving.
+            }
+        }
+    }
+
+    private static boolean mutateRecentFinal(Context context, String entryId,
+                                             String manualText, String manualSpeaker,
+                                             boolean delete,
+                                             String segmentId, long segmentStartedAtMs,
+                                             long segmentEndedAtMs) {
+        if (entryId == null || entryId.isEmpty()) return false;
+        synchronized (LOCK) {
+            try {
+                JSONObject root = readRecentRoot(context);
+                JSONArray entries = root.optJSONArray("entries");
+                if (entries == null) return false;
+                JSONObject target = null;
+                for (int i = 0; i < entries.length(); i++) {
+                    JSONObject row = entries.optJSONObject(i);
+                    if (row != null && entryId.equals(row.optString("id", ""))) {
+                        target = row;
+                        break;
+                    }
+                }
+                if (target == null) return false;
+
+                if (segmentId != null && !segmentId.trim().isEmpty() && segmentStartedAtMs > 0L) {
+                    bindEntryToTranscript(context, target, segmentId, segmentStartedAtMs);
+                }
+                if (manualText != null) target.put("manualText", manualText);
+                if (manualSpeaker != null) target.put("manualSpeaker", manualSpeaker);
+                if (delete) target.put("deleted", true);
+                target.put("updatedAtMs", System.currentTimeMillis());
+                root.put("schemaVersion", 2);
+                root.put("updatedAtMs", System.currentTimeMillis());
+                writeAtomic(recentFile(context), root.toString());
+                applyEntryEdits(context, target);
+                return true;
+            } catch (Exception ignored) {
+                return false;
+            }
+        }
+    }
+
+    private static boolean bindEntryToTranscript(Context context, JSONObject entry,
+                                                 String segmentId, long segmentStartedAtMs) {
+        try {
+            File transcriptFile = TranscriptionRepository.fileFor(context, segmentId);
+            if (!transcriptFile.isFile()) return false;
+            JSONObject transcript = new JSONObject(new String(
+                    Files.readAllBytes(transcriptFile.toPath()), StandardCharsets.UTF_8));
+            JSONArray segments = transcript.optJSONArray("segments");
+            if (segments == null || segments.length() == 0) return false;
+
+            long entryStart = entry.optLong("startAtMs", 0L);
+            long entryEnd = entry.optLong("endAtMs", entryStart);
+            JSONArray bindings = new JSONArray();
+            long bestDistance = Long.MAX_VALUE;
+            JSONObject best = null;
+            for (int i = 0; i < segments.length(); i++) {
+                JSONObject segment = segments.optJSONObject(i);
+                if (segment == null) continue;
+                long startMs = segment.optLong("startMs", -1L);
+                long endMs = segment.optLong("endMs", -1L);
+                String sourceText = segment.optString("text", "").trim();
+                if (startMs < 0L || endMs < startMs || sourceText.isEmpty()) continue;
+                long absoluteStart = segmentStartedAtMs + startMs;
+                long absoluteEnd = segmentStartedAtMs + endMs;
+                JSONObject binding = bindingFor(segment, startMs, endMs, sourceText);
+                if (overlaps(entryStart, entryEnd, absoluteStart, absoluteEnd)) {
+                    bindings.put(binding);
+                }
+                long entryCenter = (entryStart + entryEnd) / 2L;
+                long segmentCenter = (absoluteStart + absoluteEnd) / 2L;
+                long distance = Math.abs(entryCenter - segmentCenter);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    best = binding;
+                }
+            }
+            if (bindings.length() == 0 && best != null && bestDistance <= BIND_TOLERANCE_MS) {
+                bindings.put(best);
+            }
+            if (bindings.length() == 0) return false;
+            entry.put("segmentId", segmentId);
+            entry.put("segmentStartedAtMs", segmentStartedAtMs);
+            entry.put("canonicalBindings", bindings);
+            entry.put("boundAtMs", System.currentTimeMillis());
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static JSONObject bindingFor(JSONObject segment, long startMs, long endMs,
+                                         String sourceText) throws Exception {
+        JSONObject binding = new JSONObject();
+        binding.put("startMs", startMs);
+        binding.put("endMs", endMs);
+        binding.put("sourceText", sourceText);
+        binding.put("editKey", TranscriptEditRepository.chunkKey(startMs, endMs, sourceText));
+        binding.put("sourceSpeaker", canonicalSpeaker(segment));
+        return binding;
+    }
+
+    private static void applyEntryEdits(Context context, JSONObject entry) {
+        try {
+            String segmentId = entry.optString("segmentId", "");
+            JSONArray bindings = entry.optJSONArray("canonicalBindings");
+            if (segmentId.isEmpty() || bindings == null || bindings.length() == 0
+                    || !TranscriptionRepository.exists(context, segmentId)) return;
+
+            boolean deleted = entry.optBoolean("deleted", false);
+            String manualText = entry.isNull("manualText") ? null : entry.optString("manualText", "");
+            String manualSpeaker = entry.isNull("manualSpeaker")
+                    ? null : entry.optString("manualSpeaker", "判定不能").trim();
+            if (!deleted && manualText == null && manualSpeaker == null) return;
+
+            Map<String, TranscriptEdit> existing = TranscriptEditRepository.load(context, segmentId);
+            for (int i = 0; i < bindings.length(); i++) {
+                JSONObject binding = bindings.optJSONObject(i);
+                if (binding == null) continue;
+                String editKey = binding.optString("editKey", "");
+                if (editKey.isEmpty()) continue;
+                String sourceText = binding.optString("sourceText", "");
+                String sourceSpeaker = binding.optString("sourceSpeaker", "判定不能");
+                TranscriptEdit prior = existing.get(editKey);
+                String speaker = manualSpeaker != null && !manualSpeaker.isEmpty()
+                        ? manualSpeaker
+                        : (prior != null && prior.getSpeaker() != null && !prior.getSpeaker().trim().isEmpty()
+                        ? prior.getSpeaker() : sourceSpeaker);
+                String text;
+                if (deleted) {
+                    text = "";
+                } else if (manualText != null) {
+                    text = i == 0 ? manualText : "";
+                } else {
+                    text = prior != null && prior.getText() != null ? prior.getText() : sourceText;
+                }
+                TranscriptEditRepository.save(context, segmentId, editKey, text, speaker);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static String canonicalSpeaker(JSONObject segment) {
+        String explicit = segment.optString("speaker", "").trim();
+        if (!explicit.isEmpty()) return explicit;
+        explicit = segment.optString("speakerId", "").trim();
+        if (!explicit.isEmpty()) return explicit;
+        String automatic = segment.optString("autoSpeaker", "unknown");
+        if ("self".equalsIgnoreCase(automatic)) return "自分";
+        if ("other".equalsIgnoreCase(automatic)) return "他人";
+        return "判定不能";
+    }
+
+    private static boolean overlaps(long leftStart, long leftEnd, long rightStart, long rightEnd) {
+        long safeLeftEnd = Math.max(leftStart, leftEnd);
+        long safeRightEnd = Math.max(rightStart, rightEnd);
+        return safeLeftEnd >= rightStart && leftStart <= safeRightEnd;
     }
 
     private static JSONObject readRecentRoot(Context context) {
