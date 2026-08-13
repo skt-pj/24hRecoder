@@ -93,6 +93,7 @@ object SpeakerIdentifier {
                     row.put("autoSpeakerScore", score)
                 }
             }
+            stampLiveSpeakerLabels(segments)
             segments
         } catch (error: Exception) {
             if (TranscriptionCancellation.isCancellation(error)) throw error
@@ -165,11 +166,54 @@ object SpeakerIdentifier {
         return if (end > start) samples.copyOfRange(start, end) else FloatArray(0)
     }
 
+    /**
+     * Full-streaming recent history historically looked only at speaker/speakerId while automatic
+     * speaker identification stores autoSpeaker. Mirror the automatic result into a display label
+     * without changing the authoritative autoSpeaker fields used by normal transcript history.
+     * If one finalized utterance contains both SELF and OTHER ASR segments, expose that fact instead
+     * of incorrectly labeling the whole utterance as whichever segment happened to come first.
+     */
+    private fun stampLiveSpeakerLabels(segments: JSONArray) {
+        var hasSelf = false
+        var hasOther = false
+        var hasUnknown = false
+        var firstRow: JSONObject? = null
+        for (index in 0 until segments.length()) {
+            val row = segments.optJSONObject(index) ?: continue
+            if (firstRow == null) firstRow = row
+            val label = when (row.optString("autoSpeaker", UNKNOWN)) {
+                SELF -> {
+                    hasSelf = true
+                    "自分"
+                }
+                OTHER -> {
+                    hasOther = true
+                    "他人"
+                }
+                else -> {
+                    hasUnknown = true
+                    "判定不能"
+                }
+            }
+            row.put("speaker", label)
+        }
+        val aggregate = when {
+            hasSelf && hasOther -> "複数話者"
+            hasSelf && hasUnknown -> "自分 / 判定不能"
+            hasOther && hasUnknown -> "他人 / 判定不能"
+            hasSelf -> "自分"
+            hasOther -> "他人"
+            else -> "判定不能"
+        }
+        firstRow?.put("speaker", aggregate)
+    }
+
     private fun markUnknown(segments: JSONArray) {
         for (index in 0 until segments.length()) {
             val row = segments.optJSONObject(index) ?: continue
             if (!row.has("autoSpeaker")) row.put("autoSpeaker", UNKNOWN)
             if (!row.has("autoSpeakerScore")) row.put("autoSpeakerScore", JSONObject.NULL)
+            row.put("speaker", "判定不能")
         }
     }
 }
