@@ -28,6 +28,13 @@ final class PostprocessWhisperLiveRunner {
         if (samples == null || samples.length == 0) {
             return new Result("", new JSONArray(), 0L, 0L, 0L);
         }
+
+        LiveWhisperNoSpeechGuard.InputStats input = LiveWhisperNoSpeechGuard.measure(samples);
+        if (LiveWhisperNoSpeechGuard.shouldSkipBeforeAsr(
+                context, TranscriptionPipelineSettings.LIVE_WHISPER_POSTPROCESS_NATIVE, input)) {
+            return new Result("", new JSONArray(), 0L, 0L, 0L);
+        }
+
         File model = WhisperModelManager.modelFile(context, modelId);
         if (!model.isFile()) throw new IllegalStateException("LOCAL_WHISPER_MODEL_MISSING");
 
@@ -44,9 +51,15 @@ final class PostprocessWhisperLiveRunner {
         if (raw == null) throw new IllegalStateException("POSTPROCESS_LIVE_WHISPER_RETURNED_NULL");
         JSONObject json = new JSONObject(raw);
         JSONArray segments = json.optJSONArray("segments");
+        LiveWhisperNoSpeechGuard.Output filtered = LiveWhisperNoSpeechGuard.filterAfterAsr(
+                context,
+                TranscriptionPipelineSettings.LIVE_WHISPER_POSTPROCESS_NATIVE,
+                input,
+                json.optString("text", ""),
+                segments == null ? new JSONArray() : segments);
         return new Result(
-                json.optString("text", "").trim(),
-                segments == null ? new JSONArray() : segments,
+                filtered.text,
+                filtered.segments,
                 json.optLong("modelLoadMs", -1L),
                 json.optLong("whisperFullMs", -1L),
                 json.optLong("lastOutputEndMs", 0L));

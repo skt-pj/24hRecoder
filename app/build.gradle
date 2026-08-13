@@ -13,8 +13,8 @@ android {
         applicationId 'com.sktpj.recorder24h'
         minSdk 29
         targetSdk 36
-        versionCode 1021
-        versionName '0.7.21'
+        versionCode 1022
+        versionName '0.7.22'
         // Normal local transcription model is user-selectable in Settings.
         // AI analysis can switch between OpenAI GPT-5.6 Luna and local Gemma 4 E2B.
         // Dense Gemma hourly input is split near conversation gaps with overlap, then synthesized from deduplicated evidence.
@@ -37,6 +37,7 @@ android {
         // Streaming ASR logs prior process exit reason and memory/stage breadcrumbs for native crash diagnosis.
         // Full streaming can explicitly choose persistent live Whisper or the normal postprocess JNI per utterance.
         // The standard live route uses nativeTranscribeDetailed without automatic backend fallback.
+        // Live Whisper suppresses low-signal/no-speech hallucinations before they reach partial or final history.
 
         ndk {
             abiFilters 'arm64-v8a'
