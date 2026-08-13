@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.sktpj.recorder24h.transcription.FullStreamingStateStore
+import com.sktpj.recorder24h.transcription.LiveSpeakerEnrollmentWorker
 import com.sktpj.recorder24h.ui.SegmentHistoryRepository
 import com.sktpj.recorder24h.ui.SegmentRecord
 import java.text.SimpleDateFormat
@@ -133,6 +134,15 @@ internal fun EditableLiveFinalCard(item: FullStreamingStateStore.RecentFinal) {
                         record?.startedAtMs ?: 0L,
                         record?.endedAtMs ?: 0L
                     )
+                    if (updated) {
+                        LiveSpeakerEnrollmentWorker.reconcile(
+                            context,
+                            item.id,
+                            item.startAtMs,
+                            item.endAtMs,
+                            normalized == "自分"
+                        )
+                    }
                     editingSpeaker = false
                     Toast.makeText(
                         context,
@@ -162,6 +172,15 @@ internal fun EditableLiveFinalCard(item: FullStreamingStateStore.RecentFinal) {
                         record?.startedAtMs ?: 0L,
                         record?.endedAtMs ?: 0L
                     )
+                    if (deleted) {
+                        LiveSpeakerEnrollmentWorker.reconcile(
+                            context,
+                            item.id,
+                            item.startAtMs,
+                            item.endAtMs,
+                            false
+                        )
+                    }
                     confirmingDelete = false
                     Toast.makeText(
                         context,
