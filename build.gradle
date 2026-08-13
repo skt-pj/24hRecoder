@@ -4,13 +4,370 @@ plugins {
     id 'org.jetbrains.kotlin.plugin.compose' version '2.3.21' apply false
 }
 
+import java.nio.charset.StandardCharsets
+
+def replaceOnce = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+def readUtf8 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8 = { File file, String text -> file.setText(text, 'UTF-8') }
+
+def appRoot = rootProject.file('app')
+def schedulerFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionScheduler.java')
+def queueServiceFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionQueueService.java')
+def applicationFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/RecorderApplication.java')
+def manifestFile = rootProject.file('app/src/main/AndroidManifest.xml')
+def remoteWorkerFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/RemoteTranscriptionWorker.kt')
+def recoveryFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/PostprocessProcessRecovery.java')
+
+// 0.7.32: keep Whisper Vulkan selected, but never execute five-minute/final Vulkan inference in
+// the UI process. Both automatic WorkManager and manual queue service use :postprocess_asr.
+def scheduler = readUtf8(schedulerFile)
+if (!scheduler.contains('RemoteTranscriptionWorker.class')) {
+    scheduler = replaceOnce(
+            scheduler,
+            'import android.content.Context;\nimport android.content.Intent;\nimport android.content.SharedPreferences;\n',
+            'import android.app.Application;\nimport android.content.ComponentName;\nimport android.content.Context;\nimport android.content.Intent;\nimport android.content.SharedPreferences;\n',
+            'scheduler android imports')
+    scheduler = replaceOnce(
+            scheduler,
+            'import androidx.work.Constraints;\nimport androidx.work.ExistingWorkPolicy;\nimport androidx.work.OneTimeWorkRequest;\nimport androidx.work.WorkManager;\n',
+            'import androidx.work.Constraints;\nimport androidx.work.Data;\nimport androidx.work.ExistingWorkPolicy;\nimport androidx.work.OneTimeWorkRequest;\nimport androidx.work.WorkManager;\nimport androidx.work.multiprocess.RemoteListenableWorker;\nimport androidx.work.multiprocess.RemoteWorkManager;\nimport androidx.work.multiprocess.RemoteWorkerService;\n',
+            'scheduler work imports')
+    scheduler = replaceOnce(
+            scheduler,
+            '''        OneTimeWorkRequest request = buildDrainRequest(true);
+        WorkManager.getInstance(app).enqueueUniqueWork(
+                DRAIN_WORK_NAME,
+                ExistingWorkPolicy.KEEP,
+                request);
+''',
+            '''        OneTimeWorkRequest request = buildDrainRequest(app, true);
+        enqueueDrain(app, ExistingWorkPolicy.KEEP, request);
+''',
+            'scheduler ensure remote drain')
+    scheduler = replaceOnce(
+            scheduler,
+            '''        WorkManager.getInstance(app).enqueueUniqueWork(
+                DRAIN_WORK_NAME,
+                ExistingWorkPolicy.APPEND_OR_REPLACE,
+                buildDrainRequest(true));
+''',
+            '''        enqueueDrain(app, ExistingWorkPolicy.APPEND_OR_REPLACE,
+                buildDrainRequest(app, true));
+''',
+            'scheduler continuation remote drain')
+    scheduler = replaceOnce(
+            scheduler,
+            '''    private static OneTimeWorkRequest buildDrainRequest(boolean batteryNotLow) {
+        Constraints.Builder constraints = new Constraints.Builder();
+        if (batteryNotLow) {
+            constraints.setRequiresBatteryNotLow(true);
+        }
+        return new OneTimeWorkRequest.Builder(TranscriptionWorker.class)
+                .setConstraints(constraints.build())
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag("transcription")
+                .addTag("transcription-drain")
+                .build();
+    }
+''',
+            '''    private static OneTimeWorkRequest buildDrainRequest(Context context, boolean batteryNotLow) {
+        Constraints.Builder constraints = new Constraints.Builder();
+        if (batteryNotLow) {
+            constraints.setRequiresBatteryNotLow(true);
+        }
+        ComponentName remoteService = new ComponentName(
+                context.getPackageName(), RemoteWorkerService.class.getName());
+        Data remoteData = new Data.Builder()
+                .putString(RemoteListenableWorker.ARGUMENT_PACKAGE_NAME,
+                        remoteService.getPackageName())
+                .putString(RemoteListenableWorker.ARGUMENT_CLASS_NAME,
+                        remoteService.getClassName())
+                .build();
+        return new OneTimeWorkRequest.Builder(RemoteTranscriptionWorker.class)
+                .setInputData(remoteData)
+                .setConstraints(constraints.build())
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag("transcription")
+                .addTag("transcription-drain")
+                .addTag("postprocess-asr-remote")
+                .build();
+    }
+
+    private static void enqueueDrain(Context context, ExistingWorkPolicy policy,
+                                     OneTimeWorkRequest request) {
+        Context app = context.getApplicationContext();
+        String postprocessProcess = app.getPackageName() + ":postprocess_asr";
+        if (postprocessProcess.equals(Application.getProcessName())) {
+            RemoteWorkManager.getInstance(app).enqueueUniqueWork(DRAIN_WORK_NAME, policy, request);
+        } else {
+            WorkManager.getInstance(app).enqueueUniqueWork(DRAIN_WORK_NAME, policy, request);
+        }
+    }
+
+    static void cancelUniqueWorkCrossProcess(Context context, String workName) {
+        Context app = context.getApplicationContext();
+        String postprocessProcess = app.getPackageName() + ":postprocess_asr";
+        if (postprocessProcess.equals(Application.getProcessName())) {
+            RemoteWorkManager.getInstance(app).cancelUniqueWork(workName);
+        } else {
+            WorkManager.getInstance(app).cancelUniqueWork(workName);
+        }
+    }
+''',
+            'scheduler remote request builder')
+    writeUtf8(schedulerFile, scheduler)
+}
+
+def queueService = readUtf8(queueServiceFile)
+if (!queueService.contains('cancelUniqueWorkCrossProcess')) {
+    queueService = queueService.replace(
+            'WorkManager.getInstance(context).cancelUniqueWork(TranscriptionScheduler.uniqueWorkName(segmentId));',
+            'TranscriptionScheduler.cancelUniqueWorkCrossProcess(context, TranscriptionScheduler.uniqueWorkName(segmentId));')
+    writeUtf8(queueServiceFile, queueService)
+}
+
+if (!remoteWorkerFile.isFile()) {
+    remoteWorkerFile.parentFile.mkdirs()
+    writeUtf8(remoteWorkerFile, '''package com.sktpj.recorder24h.transcription
+
+import android.content.Context
+import androidx.work.ListenableWorker
+import androidx.work.WorkerParameters
+import androidx.work.multiprocess.RemoteCoroutineWorker
+import com.sktpj.recorder24h.util.AppLogger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+
+/**
+ * WorkManager binder stub in the default process; doRemoteWork itself runs in :postprocess_asr.
+ * The existing TranscriptionWorker remains the single source of queue semantics.
+ */
+class RemoteTranscriptionWorker(
+    context: Context,
+    private val workerParameters: WorkerParameters
+) : RemoteCoroutineWorker(context, workerParameters) {
+    override suspend fun doRemoteWork(): ListenableWorker.Result = withContext(Dispatchers.IO) {
+        PostprocessProcessRecovery.onProcessStart(applicationContext)
+        try {
+            AppLogger.event(
+                applicationContext,
+                "POSTPROCESS_ASR_REMOTE_WORKER_STARTED",
+                JSONObject().put("runAttemptCount", runAttemptCount)
+            )
+        } catch (_: Exception) {
+        }
+        val result = TranscriptionWorker(applicationContext, workerParameters).doWork()
+        try {
+            AppLogger.event(
+                applicationContext,
+                "POSTPROCESS_ASR_REMOTE_WORKER_FINISHED",
+                JSONObject().put("result", result.toString())
+            )
+        } catch (_: Exception) {
+        }
+        result
+    }
+}
+''')
+}
+
+if (!recoveryFile.isFile()) {
+    recoveryFile.parentFile.mkdirs()
+    writeUtf8(recoveryFile, '''package com.sktpj.recorder24h.transcription;
+
+import android.app.ActivityManager;
+import android.app.ApplicationExitInfo;
+import android.content.Context;
+import android.os.Build;
+
+import com.sktpj.recorder24h.storage.SegmentRepository;
+import com.sktpj.recorder24h.ui.SegmentHistoryRepository;
+import com.sktpj.recorder24h.ui.SegmentRecord;
+import com.sktpj.recorder24h.util.AppLogger;
+
+import org.json.JSONObject;
+
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/** Recovery and crash evidence for the isolated five-minute/final ASR process. */
+public final class PostprocessProcessRecovery {
+    private static final AtomicBoolean STARTED = new AtomicBoolean(false);
+
+    private PostprocessProcessRecovery() {
+    }
+
+    public static void onProcessStart(Context context) {
+        Context app = context.getApplicationContext();
+        if (!STARTED.compareAndSet(false, true)) return;
+        logPreviousExit(app);
+        recoverInterrupted(app);
+    }
+
+    private static void recoverInterrupted(Context context) {
+        int recovered = 0;
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (!"TRANSCRIBING".equals(record.getStatus()) || !record.getAudioAvailable()) continue;
+            String audioPath = record.getAudioPath();
+            File audio = audioPath == null || audioPath.isEmpty() ? null : new File(audioPath);
+            if (audio == null || !audio.isFile()) continue;
+            SegmentRepository.appendWithoutNotify(
+                    context,
+                    record.getSegmentId(),
+                    audio,
+                    audio.lastModified(),
+                    System.currentTimeMillis(),
+                    "QUEUED",
+                    "RECOVERED_POSTPROCESS_PROCESS_RESTART");
+            recovered++;
+        }
+        try {
+            AppLogger.event(context, "POSTPROCESS_ASR_PROCESS_STARTED", new JSONObject()
+                    .put("recoveredInterruptedCount", recovered)
+                    .put("processIsolation", true)
+                    .put("automaticCpuFallback", false));
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static void logPreviousExit(Context context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return;
+        try {
+            ActivityManager manager = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+            if (manager == null) return;
+            String target = context.getPackageName() + ":postprocess_asr";
+            List<ApplicationExitInfo> exits = manager.getHistoricalProcessExitReasons(
+                    context.getPackageName(), 0, 16);
+            for (ApplicationExitInfo info : exits) {
+                if (!target.equals(info.getProcessName())) continue;
+                byte[] summary = info.getProcessStateSummary();
+                String stage = summary == null ? "" : new String(summary, StandardCharsets.UTF_8);
+                AppLogger.event(context, "POSTPROCESS_ASR_PREVIOUS_PROCESS_EXIT", new JSONObject()
+                        .put("processName", info.getProcessName())
+                        .put("reason", info.getReason())
+                        .put("reasonName", exitReasonName(info.getReason()))
+                        .put("status", info.getStatus())
+                        .put("importance", info.getImportance())
+                        .put("pssKb", info.getPss())
+                        .put("rssKb", info.getRss())
+                        .put("timestampMs", info.getTimestamp())
+                        .put("description", info.getDescription() == null
+                                ? JSONObject.NULL : info.getDescription())
+                        .put("processStateSummary", stage)
+                        .put("processIsolation", true)
+                        .put("automaticCpuFallback", false));
+                return;
+            }
+        } catch (Throwable error) {
+            try {
+                AppLogger.event(context, "POSTPROCESS_ASR_PREVIOUS_EXIT_READ_FAILED", new JSONObject()
+                        .put("error", error.getClass().getSimpleName())
+                        .put("message", error.getMessage() == null ? "" : error.getMessage()));
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private static String exitReasonName(int reason) {
+        switch (reason) {
+            case ApplicationExitInfo.REASON_CRASH_NATIVE: return "CRASH_NATIVE";
+            case ApplicationExitInfo.REASON_CRASH: return "CRASH";
+            case ApplicationExitInfo.REASON_LOW_MEMORY: return "LOW_MEMORY";
+            case ApplicationExitInfo.REASON_ANR: return "ANR";
+            case ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE: return "EXCESSIVE_RESOURCE_USAGE";
+            case ApplicationExitInfo.REASON_DEPENDENCY_DIED: return "DEPENDENCY_DIED";
+            case ApplicationExitInfo.REASON_SIGNALED: return "SIGNALED";
+            case ApplicationExitInfo.REASON_EXIT_SELF: return "EXIT_SELF";
+            case ApplicationExitInfo.REASON_USER_REQUESTED: return "USER_REQUESTED";
+            case ApplicationExitInfo.REASON_USER_STOPPED: return "USER_STOPPED";
+            case ApplicationExitInfo.REASON_INITIALIZATION_FAILURE: return "INITIALIZATION_FAILURE";
+            case ApplicationExitInfo.REASON_PERMISSION_CHANGE: return "PERMISSION_CHANGE";
+            case ApplicationExitInfo.REASON_OTHER: return "OTHER";
+            default: return "UNKNOWN_" + reason;
+        }
+    }
+}
+''')
+}
+
+def application = readUtf8(applicationFile)
+if (!application.contains('PostprocessProcessRecovery.onProcessStart')) {
+    application = replaceOnce(
+            application,
+            'import com.sktpj.recorder24h.transcription.TranscriptionScheduler;\n',
+            'import com.sktpj.recorder24h.transcription.PostprocessProcessRecovery;\nimport com.sktpj.recorder24h.transcription.TranscriptionScheduler;\n',
+            'application recovery import')
+    application = replaceOnce(
+            application,
+            '''        String processName = Application.getProcessName();
+        if (!getPackageName().equals(processName)) {
+            return;
+        }
+''',
+            '''        String processName = Application.getProcessName();
+        if ((getPackageName() + ":postprocess_asr").equals(processName)) {
+            PostprocessProcessRecovery.onProcessStart(this);
+            return;
+        }
+        if (!getPackageName().equals(processName)) {
+            return;
+        }
+''',
+            'application postprocess process bootstrap')
+    writeUtf8(applicationFile, application)
+}
+
+def manifest = readUtf8(manifestFile)
+if (!manifest.contains('android:process=":postprocess_asr"')) {
+    manifest = replaceOnce(
+            manifest,
+            '''        <service
+            android:name=".transcription.TranscriptionQueueService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProcessing" />
+''',
+            '''        <service
+            android:name=".transcription.TranscriptionQueueService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProcessing"
+            android:process=":postprocess_asr" />
+
+        <!-- Automatic five-minute/final ASR binds here so Vulkan cannot terminate the UI process. -->
+        <service
+            android:name="androidx.work.multiprocess.RemoteWorkerService"
+            android:exported="false"
+            android:process=":postprocess_asr" />
+''',
+            'manifest postprocess process services')
+    writeUtf8(manifestFile, manifest)
+}
+
+if (!schedulerFile.text.contains('RemoteTranscriptionWorker.class')) {
+    throw new GradleException('0.7.32 remote WorkManager patch was not applied')
+}
+if (!manifestFile.text.contains('android:name="androidx.work.multiprocess.RemoteWorkerService"')) {
+    throw new GradleException('0.7.32 RemoteWorkerService manifest patch was not applied')
+}
+
 subprojects { subproject ->
     subproject.plugins.withId('com.android.application') {
+        subproject.dependencies.add('implementation', 'androidx.work:work-multiprocess:2.11.2')
         subproject.extensions.configure(com.android.build.api.variant.AndroidComponentsExtension) { androidComponents ->
             androidComponents.onVariants(androidComponents.selector().withBuildType('debug')) { variant ->
                 variant.outputs.each { output ->
-                    output.versionCode.set(1031)
-                    output.versionName.set('0.7.31-debug')
+                    output.versionCode.set(1032)
+                    output.versionName.set('0.7.32-debug')
                 }
             }
         }
