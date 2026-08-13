@@ -1,0 +1,47 @@
+name: Patch 0.7.29 state labels
+
+on:
+  push:
+    branches: ["agent/state-inventory-0.7.29"]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/state-inventory-0.7.29
+          fetch-depth: 0
+      - name: Replace ambiguous labels
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          replacements = {
+              'app/src/main/java/com/sktpj/recorder24h/MainActivity.kt': [
+                  ('"${count}件の未処理音声を確認しました"', '"自動処理対象を${count}件再確認しました"'),
+              ],
+              'app/src/main/java/com/sktpj/recorder24h/WhisperModelSettingsCard.kt': [
+                  ('"${count}件の未処理・別モデル音声を確認しました"', '"自動処理対象・別モデル音声を${count}件再登録しました"'),
+                  ('Text("未処理・別モデルの音声を再登録")', 'Text("自動処理対象・別モデル音声を再登録")'),
+              ],
+          }
+          for path, pairs in replacements.items():
+              p = Path(path)
+              s = p.read_text(encoding='utf-8')
+              for old, new in pairs:
+                  if old not in s:
+                      raise SystemExit(f'missing label: {old}')
+                  s = s.replace(old, new, 1)
+              p.write_text(s, encoding='utf-8')
+          PY
+      - name: Commit label cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app
+          git commit -m "Clarify retained audio and processing labels"
+          git push origin HEAD:agent/state-inventory-0.7.29
