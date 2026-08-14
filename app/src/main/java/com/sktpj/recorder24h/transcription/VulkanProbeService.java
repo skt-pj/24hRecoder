@@ -22,6 +22,7 @@ public final class VulkanProbeService extends Service {
     public static final String EXTRA_MODEL_ID = "modelId";
     public static final String EXTRA_AUDIO_PATH = "audioPath";
     public static final String EXTRA_REQUEST_ID = "requestId";
+    public static final String EXTRA_DURATION_MS = "durationMs";
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     @Override
@@ -31,11 +32,15 @@ public final class VulkanProbeService extends Service {
         String modelId = intent.getStringExtra(EXTRA_MODEL_ID);
         String audioPath = intent.getStringExtra(EXTRA_AUDIO_PATH);
         String requestId = intent.getStringExtra(EXTRA_REQUEST_ID);
-        if (profile != null) executor.execute(() -> runProbe(profile, modelId, audioPath, requestId));
+        long requestedDurationMs = intent.getLongExtra(EXTRA_DURATION_MS, 0L);
+        if (profile != null) {
+            executor.execute(() -> runProbe(profile, modelId, audioPath, requestId, requestedDurationMs));
+        }
         return START_NOT_STICKY;
     }
 
-    private void runProbe(String profile, String modelId, String audioPath, String requestId) {
+    private void runProbe(String profile, String modelId, String audioPath, String requestId,
+                          long requestedDurationMs) {
         File audio = audioPath == null || audioPath.isEmpty() ? null : new File(audioPath);
         File model = modelId == null || modelId.isEmpty() ? null : WhisperModelManager.modelFile(this, modelId);
         VulkanProbeStore.begin(this, requestId, profile, modelId, audio == null ? null : audio.getName());
@@ -45,6 +50,7 @@ public final class VulkanProbeService extends Service {
                     .put("requestId", requestId == null ? JSONObject.NULL : requestId)
                     .put("modelId", modelId == null ? JSONObject.NULL : modelId)
                     .put("audioFile", audio == null ? JSONObject.NULL : audio.getName())
+                    .put("requestedDurationMs", requestedDurationMs)
                     .put("fixedInput", true));
             if (modelId == null || modelId.isEmpty()) throw new IllegalStateException("WHISPER_MODEL_ID_MISSING");
             if (model == null || !model.isFile()) throw new IllegalStateException("WHISPER_MODEL_MISSING");
@@ -67,7 +73,9 @@ public final class VulkanProbeService extends Service {
 
             int threads = Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors()));
             String breadcrumb = PostprocessAsrDiagnostics.nativeBreadcrumbPath(this, "vulkan_probe");
-            long[] durations = new long[] {0L, 2_000L, 10_000L};
+            long[] durations = requestedDurationMs > 0L
+                    ? new long[] {requestedDurationMs}
+                    : new long[] {0L, 2_000L, 10_000L};
             for (long durationMs : durations) {
                 String phase = durationMs == 0L ? "MODEL_LOAD_ONLY" : "INFERENCE_" + durationMs + "MS";
                 VulkanProbeStore.phase(this, phase);
@@ -80,6 +88,7 @@ public final class VulkanProbeService extends Service {
                 JSONObject result = new JSONObject(raw == null ? "{}" : raw);
                 result.put("audioFile", audio.getName());
                 result.put("modelId", modelId);
+                result.put("requestedDurationMs", requestedDurationMs);
                 result.put("fixedInput", true);
                 VulkanProbeStore.addResult(this, phase, result);
                 PostprocessAsrDiagnostics.mark(this, "PROBE_" + phase + "_END", null,
@@ -90,7 +99,8 @@ public final class VulkanProbeService extends Service {
                     new JSONObject().put("profile", profile)
                             .put("requestId", requestId == null ? JSONObject.NULL : requestId)
                             .put("modelId", modelId)
-                            .put("audioFile", audio.getName()));
+                            .put("audioFile", audio.getName())
+                            .put("requestedDurationMs", requestedDurationMs));
         } catch (Throwable error) {
             String message = error.getClass().getSimpleName() + ": "
                     + (error.getMessage() == null ? "" : error.getMessage());
@@ -99,6 +109,7 @@ public final class VulkanProbeService extends Service {
                 AppLogger.event(this, "CPU_VULKAN_BENCHMARK_PROBE_FAILED", new JSONObject()
                         .put("profile", profile)
                         .put("phase", VulkanProbeStore.read(this).optString("phase", "-"))
+                        .put("requestedDurationMs", requestedDurationMs)
                         .put("error", message));
             } catch (Exception ignored) {}
         } finally {
