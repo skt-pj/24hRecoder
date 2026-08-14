@@ -7,24 +7,25 @@ import android.content.Intent;
 import android.os.Build;
 import android.os.Process;
 
+import com.sktpj.recorder24h.ui.SegmentHistoryRepository;
+import com.sktpj.recorder24h.ui.SegmentRecord;
 import com.sktpj.recorder24h.util.AppLogger;
 import com.sktpj.recorder24h.util.DriveLogSync;
 
 import org.json.JSONObject;
 
+import java.io.File;
 import java.nio.charset.StandardCharsets;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Runs every Vulkan diagnostic profile after a single user action. */
+/** One-button CPU vs current-production Vulkan benchmark using one fixed retained audio file. */
 public final class VulkanAutoProbeController {
     private static final String[] PROFILES = new String[] {
             VulkanProbeStore.PROFILE_CPU,
-            VulkanProbeStore.PROFILE_VULKAN_DEFAULT,
-            VulkanProbeStore.PROFILE_VULKAN_COOPMAT_OFF,
-            VulkanProbeStore.PROFILE_VULKAN_GRAPH_OFF,
             VulkanProbeStore.PROFILE_VULKAN_SAFE
     };
     private static final long START_TIMEOUT_MS = 20_000L;
@@ -47,28 +48,53 @@ public final class VulkanAutoProbeController {
     }
 
     private static void runSession(Context context) {
-        VulkanAutoProbeStore.start(context, PROFILES.length);
+        String modelId = WhisperModelManager.selectedModelId(context);
+        File model = WhisperModelManager.modelFile(context, modelId);
+        SegmentRecord source = selectBenchmarkSource(context);
+        File audio = source == null || source.getAudioPath() == null
+                ? null : new File(source.getAudioPath());
+        VulkanAutoProbeStore.start(
+                context,
+                PROFILES.length,
+                modelId,
+                audio == null ? null : audio.getName(),
+                audio == null ? null : audio.getAbsolutePath(),
+                source == null ? 0L : source.getDurationMs());
         try {
-            AppLogger.event(context, "VULKAN_AUTO_PROBE_STARTED",
-                    new JSONObject().put("profileCount", PROFILES.length));
+            if (!model.isFile()) throw new IllegalStateException("WHISPER_MODEL_MISSING");
+            if (audio == null || !audio.isFile()) throw new IllegalStateException("RETAINED_AUDIO_MISSING");
+
+            AppLogger.event(context, "CPU_VULKAN_BENCHMARK_STARTED",
+                    new JSONObject()
+                            .put("profileCount", PROFILES.length)
+                            .put("modelId", modelId)
+                            .put("audioFile", audio.getName())
+                            .put("audioPathLocked", true)
+                            .put("sourceDurationMs", source == null ? 0L : source.getDurationMs())
+                            .put("durationsMs", "2000,10000"));
+
             for (int index = 0; index < PROFILES.length; index++) {
                 String profile = PROFILES[index];
                 ensurePreviousProbeGone(context);
                 VulkanAutoProbeStore.profileStarting(context, index, profile);
                 long requestedAtMs = System.currentTimeMillis();
-                AppLogger.event(context, "VULKAN_AUTO_PROBE_PROFILE_REQUESTED",
+                AppLogger.event(context, "CPU_VULKAN_BENCHMARK_PROFILE_REQUESTED",
                         new JSONObject()
                                 .put("index", index)
                                 .put("profile", profile)
-                                .put("label", VulkanProbeStore.profileLabel(profile)));
+                                .put("label", VulkanProbeStore.profileLabel(profile))
+                                .put("modelId", modelId)
+                                .put("audioFile", audio.getName()));
 
                 context.startService(new Intent(context, VulkanProbeService.class)
                         .setAction(VulkanProbeService.ACTION_RUN)
-                        .putExtra(VulkanProbeService.EXTRA_PROFILE, profile));
+                        .putExtra(VulkanProbeService.EXTRA_PROFILE, profile)
+                        .putExtra(VulkanProbeService.EXTRA_MODEL_ID, modelId)
+                        .putExtra(VulkanProbeService.EXTRA_AUDIO_PATH, audio.getAbsolutePath()));
 
                 JSONObject result = waitForProfile(context, profile, requestedAtMs);
                 VulkanAutoProbeStore.profileResult(context, index, profile, result);
-                AppLogger.event(context, "VULKAN_AUTO_PROBE_PROFILE_RESULT",
+                AppLogger.event(context, "CPU_VULKAN_BENCHMARK_PROFILE_RESULT",
                         new JSONObject(result.toString())
                                 .put("index", index)
                                 .put("profile", profile)
@@ -77,14 +103,17 @@ public final class VulkanAutoProbeController {
                 sleep(1_000L);
             }
             VulkanAutoProbeStore.complete(context);
-            AppLogger.event(context, "VULKAN_AUTO_PROBE_COMPLETED",
-                    new JSONObject().put("profileCount", PROFILES.length));
+            AppLogger.event(context, "CPU_VULKAN_BENCHMARK_COMPLETED",
+                    new JSONObject()
+                            .put("profileCount", PROFILES.length)
+                            .put("modelId", modelId)
+                            .put("audioFile", audio.getName()));
         } catch (Throwable error) {
             String message = error.getClass().getSimpleName() + ": "
                     + (error.getMessage() == null ? "" : error.getMessage());
             VulkanAutoProbeStore.fail(context, message);
             try {
-                AppLogger.event(context, "VULKAN_AUTO_PROBE_FAILED",
+                AppLogger.event(context, "CPU_VULKAN_BENCHMARK_FAILED",
                         new JSONObject().put("error", message));
             } catch (Exception ignored) {}
         } finally {
@@ -92,6 +121,22 @@ public final class VulkanAutoProbeController {
             DriveLogSync.enqueueNow(context);
             DriveLogSync.syncDirectAsync(context);
         }
+    }
+
+    private static SegmentRecord selectBenchmarkSource(Context context) {
+        List<SegmentRecord> records = SegmentHistoryRepository.load(context);
+        Comparator<SegmentRecord> newestFirst = Comparator.comparingLong(SegmentRecord::getSortTimeMs).reversed();
+        SegmentRecord fallback = records.stream()
+                .filter(record -> record.getAudioAvailable() && record.getAudioPath() != null)
+                .sorted(newestFirst)
+                .findFirst()
+                .orElse(null);
+        return records.stream()
+                .filter(record -> record.getAudioAvailable() && record.getAudioPath() != null)
+                .filter(record -> record.getDurationMs() >= 10_000L)
+                .sorted(newestFirst)
+                .findFirst()
+                .orElse(fallback);
     }
 
     private static JSONObject waitForProfile(Context context, String profile,
