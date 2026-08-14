@@ -1,6 +1,5 @@
 package com.sktpj.recorder24h
 
-import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -9,7 +8,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -20,9 +18,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.sktpj.recorder24h.transcription.VulkanProbeService
+import com.sktpj.recorder24h.transcription.VulkanAutoProbeController
+import com.sktpj.recorder24h.transcription.VulkanAutoProbeStore
 import com.sktpj.recorder24h.transcription.VulkanProbeStore
-import com.sktpj.recorder24h.util.DriveLogSync
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -30,18 +28,20 @@ import kotlinx.coroutines.withContext
 @Composable
 fun VulkanDiagnosticCard() {
     val context = LocalContext.current
-    var status by remember { mutableStateOf(VulkanProbeStore.read(context)) }
+    var status by remember { mutableStateOf(VulkanAutoProbeStore.read(context)) }
 
     LaunchedEffect(Unit) {
         while (true) {
-            status = withContext(Dispatchers.IO) { VulkanProbeStore.read(context) }
+            status = withContext(Dispatchers.IO) { VulkanAutoProbeStore.read(context) }
             delay(1_000L)
         }
     }
 
     val state = status.optString("state", "IDLE")
-    val running = state == "RUNNING"
-    val profile = status.optString("profile", "")
+    val running = VulkanAutoProbeController.isRunning()
+    val currentIndex = status.optInt("currentIndex", -1)
+    val totalProfiles = status.optInt("totalProfiles", 5)
+    val profile = status.optString("currentProfile", "")
     val phase = status.optString("phase", "-")
     val results = status.optJSONArray("results")
 
@@ -50,47 +50,54 @@ fun VulkanDiagnosticCard() {
             Modifier.padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text("Vulkan切り分け試験", style = MaterialTheme.typography.titleLarge)
+            Text("Vulkan自動診断", style = MaterialTheme.typography.titleLarge)
             Text(
-                "専用の :vulkan_probe プロセスで、同じWhisperモデルをCPU/Vulkan条件別に実行します。録音・UI・5分確定処理とは分離しています。",
+                "下のボタンを1回押すだけです。CPU対照と4種類のVulkan条件を順番に試します。途中でVulkanが落ちても自動で次へ進み、最後にログもDriveへ送ります。",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Text("状態: $state / ${VulkanProbeStore.profileLabel(profile)}")
-            Text("直近段階: $phase / 完了 ${results?.length() ?: 0}/4")
-            status.optString("error", "").takeIf { it.isNotBlank() }?.let {
-                Text(it, color = MaterialTheme.colorScheme.error)
-            }
+
             if (running) {
+                val displayIndex = (currentIndex + 1).coerceAtLeast(1)
+                Text("診断中: $displayIndex/$totalProfiles  ${VulkanProbeStore.profileLabel(profile)}")
+                Text("現在: ${simplePhase(phase)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
-                    "この表示が同じ段階のまま残る場合、その段階のnative処理で停止・クラッシュした可能性があります。",
+                    "このまま待つだけで大丈夫です。ほかの診断ボタンを押す必要はありません。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            } else if (state == "COMPLETED") {
+                Text("診断完了。ログ送信も自動で実行しました。これ以上の操作は不要です。")
+            } else if (state == "FAILED") {
+                Text("自動診断が途中で停止しました。もう一度ボタンを押すと最初からやり直します。")
+                status.optString("error", "").takeIf { it.isNotBlank() }?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error)
+                }
+            } else if (state == "RUNNING") {
+                Text("前回の自動診断は途中で中断されています。もう一度押すと最初からやり直します。")
             }
 
-            ProbeButton("CPU対照", VulkanProbeStore.PROFILE_CPU, running) { status = VulkanProbeStore.read(context) }
-            ProbeButton("Vulkan標準（回避策なし）", VulkanProbeStore.PROFILE_VULKAN_DEFAULT, running) { status = VulkanProbeStore.read(context) }
-            ProbeButton("Vulkan coopmatだけ無効", VulkanProbeStore.PROFILE_VULKAN_COOPMAT_OFF, running) { status = VulkanProbeStore.read(context) }
-            ProbeButton("Vulkan graph optimizeだけ無効", VulkanProbeStore.PROFILE_VULKAN_GRAPH_OFF, running) { status = VulkanProbeStore.read(context) }
-            ProbeButton("Vulkan 現行回避策（両方無効）", VulkanProbeStore.PROFILE_VULKAN_SAFE, running) { status = VulkanProbeStore.read(context) }
+            if (results != null && results.length() > 0) {
+                for (i in 0 until results.length()) {
+                    val row = results.optJSONObject(i) ?: continue
+                    val label = row.optString("label", row.optString("profile", ""))
+                    Text("${i + 1}. $label: ${simpleOutcome(row.optString("outcome", ""))}")
+                }
+            }
 
-            OutlinedButton(
+            FilledTonalButton(
                 onClick = {
-                    VulkanProbeStore.fail(context, "USER_MARKED_INTERRUPTED")
-                    status = VulkanProbeStore.read(context)
+                    if (!VulkanAutoProbeController.start(context)) {
+                        Toast.makeText(context, "すでに診断中です", Toast.LENGTH_SHORT).show()
+                    }
+                    status = VulkanAutoProbeStore.read(context)
                 },
-                enabled = running,
+                enabled = !running,
                 modifier = Modifier.fillMaxWidth()
-            ) { Text("停止扱い") }
-            OutlinedButton(
-                onClick = {
-                    DriveLogSync.enqueueNow(context)
-                    Toast.makeText(context, "診断ログのDrive同期を登録しました", Toast.LENGTH_SHORT).show()
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("ログを同期") }
+            ) {
+                Text(if (state == "COMPLETED") "もう一度まとめて診断する" else "全部まとめて自動診断する")
+            }
 
             Text(
-                "各試験は モデル読込のみ → 2秒 → 10秒 → 30秒 の順です。native breadcrumbsとJava側の画面状態・省電力・thermal状態をログへ残します。",
+                "内部では各条件ごとに専用プロセスを作り直し、モデル読込 → 2秒 → 10秒 → 30秒を確認します。クラッシュ位置、終了理由、native直前の段階も自動記録します。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -98,28 +105,23 @@ fun VulkanDiagnosticCard() {
     }
 }
 
-@Composable
-private fun ProbeButton(
-    label: String,
-    profile: String,
-    running: Boolean,
-    onStarted: () -> Unit
-) {
-    val context = LocalContext.current
-    FilledTonalButton(
-        onClick = {
-            try {
-                context.startService(
-                    Intent(context, VulkanProbeService::class.java)
-                        .setAction(VulkanProbeService.ACTION_RUN)
-                        .putExtra(VulkanProbeService.EXTRA_PROFILE, profile)
-                )
-                onStarted()
-            } catch (error: Exception) {
-                Toast.makeText(context, "試験を開始できませんでした: ${error.javaClass.simpleName}", Toast.LENGTH_LONG).show()
-            }
-        },
-        enabled = !running,
-        modifier = Modifier.fillMaxWidth()
-    ) { Text(label) }
+private fun simpleOutcome(value: String): String = when (value) {
+    "COMPLETED" -> "完了"
+    "PROCESS_EXIT" -> "クラッシュ/強制終了"
+    "FAILED" -> "エラー"
+    "TIMEOUT" -> "タイムアウト"
+    "START_TIMEOUT" -> "起動失敗"
+    else -> if (value.isBlank()) "-" else value
+}
+
+private fun simplePhase(value: String): String = when (value) {
+    "WAITING_FOR_PROCESS", "PROFILE_STARTING" -> "試験プロセス起動"
+    "PREPARE_AUDIO" -> "音声準備"
+    "MODEL_LOAD_ONLY" -> "モデル読込"
+    "INFERENCE_2000MS" -> "2秒音声"
+    "INFERENCE_10000MS" -> "10秒音声"
+    "INFERENCE_30000MS" -> "30秒音声"
+    "PROFILE_FINISHED" -> "次の条件へ移動"
+    "DONE" -> "完了"
+    else -> value
 }
