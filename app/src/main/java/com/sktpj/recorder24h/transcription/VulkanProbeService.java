@@ -21,6 +21,7 @@ public final class VulkanProbeService extends Service {
     public static final String EXTRA_PROFILE = "profile";
     public static final String EXTRA_MODEL_ID = "modelId";
     public static final String EXTRA_AUDIO_PATH = "audioPath";
+    public static final String EXTRA_REQUEST_ID = "requestId";
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     @Override
@@ -29,17 +30,19 @@ public final class VulkanProbeService extends Service {
         String profile = intent.getStringExtra(EXTRA_PROFILE);
         String modelId = intent.getStringExtra(EXTRA_MODEL_ID);
         String audioPath = intent.getStringExtra(EXTRA_AUDIO_PATH);
-        if (profile != null) executor.execute(() -> runProbe(profile, modelId, audioPath));
+        String requestId = intent.getStringExtra(EXTRA_REQUEST_ID);
+        if (profile != null) executor.execute(() -> runProbe(profile, modelId, audioPath, requestId));
         return START_NOT_STICKY;
     }
 
-    private void runProbe(String profile, String modelId, String audioPath) {
+    private void runProbe(String profile, String modelId, String audioPath, String requestId) {
         File audio = audioPath == null || audioPath.isEmpty() ? null : new File(audioPath);
         File model = modelId == null || modelId.isEmpty() ? null : WhisperModelManager.modelFile(this, modelId);
-        VulkanProbeStore.begin(this, profile, modelId, audio == null ? null : audio.getName());
+        VulkanProbeStore.begin(this, requestId, profile, modelId, audio == null ? null : audio.getName());
         try {
             AppLogger.event(this, "CPU_VULKAN_BENCHMARK_PROBE_STARTED", new JSONObject()
                     .put("profile", profile)
+                    .put("requestId", requestId == null ? JSONObject.NULL : requestId)
                     .put("modelId", modelId == null ? JSONObject.NULL : modelId)
                     .put("audioFile", audio == null ? JSONObject.NULL : audio.getName())
                     .put("fixedInput", true));
@@ -85,6 +88,7 @@ public final class VulkanProbeService extends Service {
             VulkanProbeStore.complete(this);
             AppLogger.event(this, "CPU_VULKAN_BENCHMARK_PROBE_COMPLETED",
                     new JSONObject().put("profile", profile)
+                            .put("requestId", requestId == null ? JSONObject.NULL : requestId)
                             .put("modelId", modelId)
                             .put("audioFile", audio.getName()));
         } catch (Throwable error) {
