@@ -107,11 +107,11 @@ public final class VulkanProbeStore {
     }
 
     public static String profileLabel(String profile) {
-        if (PROFILE_CPU.equals(profile)) return "CPU対照";
+        if (PROFILE_CPU.equals(profile)) return "CPU";
         if (PROFILE_VULKAN_DEFAULT.equals(profile)) return "Vulkan標準";
         if (PROFILE_VULKAN_COOPMAT_OFF.equals(profile)) return "Vulkan coopmat無効";
         if (PROFILE_VULKAN_GRAPH_OFF.equals(profile)) return "Vulkan graph optimize無効";
-        if (PROFILE_VULKAN_SAFE.equals(profile)) return "Vulkan 現行回避策";
+        if (PROFILE_VULKAN_SAFE.equals(profile)) return "Vulkan（現在の実運用設定）";
         return profile == null ? "-" : profile;
     }
 
