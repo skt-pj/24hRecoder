@@ -1,0 +1,129 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceExact036 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.36 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+def cmakeFile = rootProject.file('app/src/main/cpp/CMakeLists.txt')
+def pipelineFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionPipelineSettings.java')
+def localWhisperFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/LocalWhisperEngine.java')
+def nativeFile = rootProject.file('app/src/main/cpp/whisper_jni.cpp')
+
+// v1.9.1 predates the upstream Vulkan submission/DeviceLost fixes observed on Mali.
+def cmake = readUtf8(cmakeFile)
+cmake = replaceExact036(cmake,
+        'URL https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.9.1.tar.gz',
+        'URL https://github.com/ggml-org/whisper.cpp/archive/5a80d0ad900ae2fd0dcb3bc2a38cafbb25e30246.tar.gz',
+        'whisper.cpp upstream revision')
+writeUtf8(cmakeFile, cmake)
+
+// Keep GPU selected. Reduce command-graph batch size so Mali receives smaller submissions.
+def pipeline = readUtf8(pipelineFile)
+pipeline = pipeline.replace(
+        'android-mali-safe-coopmat-off-graph-optimize-off',
+        'android-mali-upstream-5a80d0ad-coopmat-off-graph-optimize-off-maxnodes8')
+pipeline = replaceExact036(pipeline,
+        '''            Os.setenv("GGML_VK_DISABLE_COOPMAT", "1", true);\n            Os.setenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE", "1", true);''',
+        '''            Os.setenv("GGML_VK_DISABLE_COOPMAT", "1", true);\n            Os.setenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE", "1", true);\n            Os.setenv("GGML_VK_MAX_NODES_PER_SUBMIT", "8", true);''',
+        'Vulkan stability environment')
+writeUtf8(pipelineFile, pipeline)
+
+// Make transcript diagnostics state the actual native revision instead of v1.9.1.
+def localWhisper = readUtf8(localWhisperFile)
+localWhisper = localWhisper.replace('whisper.cpp-v1.9.1/', 'whisper.cpp-5a80d0ad/')
+writeUtf8(localWhisperFile, localWhisper)
+
+// Upstream now throws DeviceLost/SystemError instead of calling exit() in key Vulkan paths.
+// Catch those exceptions at the JNI boundary so they become a recoverable Java failure rather
+// than std::terminate killing :postprocess_asr / :vulkan_probe.
+def nativeSource = readUtf8(nativeFile)
+if (!nativeSource.contains('#include <exception>')) {
+    nativeSource = nativeSource.replace('#include <cmath>\n', '#include <cmath>\n#include <exception>\n')
+}
+
+def initCall = '    whisper_context * ctx = whisper_init_from_file_with_params(model, context_params);'
+def initReplacement = '''    whisper_context * ctx = nullptr;
+    try {
+        ctx = whisper_init_from_file_with_params(model, context_params);
+    } catch (const std::exception & error) {
+        native_breadcrumb(diagnostic, "MODEL_LOAD_NATIVE_EXCEPTION");
+        env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+        env->ReleaseStringUTFChars(language, lang);
+        env->ReleaseStringUTFChars(model_path, model);
+        throw_runtime(env, error.what());
+        return nullptr;
+    } catch (...) {
+        native_breadcrumb(diagnostic, "MODEL_LOAD_NATIVE_EXCEPTION_UNKNOWN");
+        env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+        env->ReleaseStringUTFChars(language, lang);
+        env->ReleaseStringUTFChars(model_path, model);
+        throw_runtime(env, "Unknown native exception while loading Whisper model");
+        return nullptr;
+    }'''
+int initCount = nativeSource.split(java.util.regex.Pattern.quote(initCall), -1).length - 1
+if (initCount != 2) throw new GradleException("0.7.36 native model init: expected 2 matches, got ${initCount}")
+nativeSource = nativeSource.replace(initCall, initReplacement)
+
+def prodFull = '        const int result = whisper_full(ctx, params, samples + start_sample, chunk_sample_count);'
+def prodFullReplacement = '''        int result = -1;
+        try {
+            result = whisper_full(ctx, params, samples + start_sample, chunk_sample_count);
+        } catch (const std::exception & error) {
+            native_breadcrumb(diagnostic, "WHISPER_FULL_NATIVE_EXCEPTION",
+                    std::string("\\\"chunkIndex\\\":") + std::to_string(chunk_index));
+            whisper_free(ctx);
+            env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+            env->ReleaseStringUTFChars(language, lang);
+            env->ReleaseStringUTFChars(model_path, model);
+            throw_runtime(env, error.what());
+            return nullptr;
+        } catch (...) {
+            native_breadcrumb(diagnostic, "WHISPER_FULL_NATIVE_EXCEPTION_UNKNOWN",
+                    std::string("\\\"chunkIndex\\\":") + std::to_string(chunk_index));
+            whisper_free(ctx);
+            env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+            env->ReleaseStringUTFChars(language, lang);
+            env->ReleaseStringUTFChars(model_path, model);
+            throw_runtime(env, "Unknown native exception during Whisper inference");
+            return nullptr;
+        }'''
+nativeSource = replaceExact036(nativeSource, prodFull, prodFullReplacement, 'production whisper_full exception guard')
+
+def probeFull = '        result = whisper_full(ctx, params, samples, used_samples);'
+def probeFullReplacement = '''        try {
+            result = whisper_full(ctx, params, samples, used_samples);
+        } catch (const std::exception & error) {
+            native_breadcrumb(diagnostic, "PROBE_WHISPER_FULL_NATIVE_EXCEPTION");
+            whisper_free(ctx);
+            env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+            env->ReleaseStringUTFChars(language, lang);
+            env->ReleaseStringUTFChars(model_path, model);
+            throw_runtime(env, error.what());
+            return nullptr;
+        } catch (...) {
+            native_breadcrumb(diagnostic, "PROBE_WHISPER_FULL_NATIVE_EXCEPTION_UNKNOWN");
+            whisper_free(ctx);
+            env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+            env->ReleaseStringUTFChars(language, lang);
+            env->ReleaseStringUTFChars(model_path, model);
+            throw_runtime(env, "Unknown native exception during probe inference");
+            return nullptr;
+        }'''
+nativeSource = replaceExact036(nativeSource, probeFull, probeFullReplacement, 'probe whisper_full exception guard')
+writeUtf8(nativeFile, nativeSource)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1036)
+            output.versionName.set('0.7.36-debug')
+        }
+    }
+}
