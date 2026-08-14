@@ -43,13 +43,12 @@ class LiveSpeakerEnrollmentWorker(
         val desiredSelf = inputData.getBoolean(EXTRA_DESIRED_SELF, false)
         if (entryId.isBlank() || startAtMs < 0L || endAtMs < startAtMs) return Result.failure()
 
-        val current = FullStreamingStateStore.readRecentFinals(applicationContext)
-            .firstOrNull { it.id == entryId }
-        if (desiredSelf && current?.speaker != "自分") {
+        val currentSpeaker = currentRequestedSpeaker(entryId)
+        if (desiredSelf && currentSpeaker != "自分") {
             removeMatchingEnrollments(startAtMs, endAtMs)
             return Result.success()
         }
-        if (!desiredSelf && current?.speaker == "自分") {
+        if (!desiredSelf && currentSpeaker == "自分") {
             // A newer SELF correction won the race; its unique work request replaces this one, but
             // guard again here in case this run was already executing when replacement happened.
             return Result.success()
@@ -96,9 +95,7 @@ class LiveSpeakerEnrollmentWorker(
                 }
             }
 
-            val stillSelf = FullStreamingStateStore.readRecentFinals(applicationContext)
-                .firstOrNull { it.id == entryId }
-                ?.speaker == "自分"
+            val stillSelf = currentRequestedSpeaker(entryId) == "自分"
             if (!stillSelf) {
                 removeEnrollments(record, chunks)
                 log("LIVE_SELF_SPEAKER_ENROLLMENT_REVERTED", entryId, record, chunks.size)
@@ -122,6 +119,26 @@ class LiveSpeakerEnrollmentWorker(
                     .put("error", error.javaClass.simpleName)
             )
             if (runAttemptCount < MAX_RETRIES) Result.retry() else Result.failure()
+        }
+    }
+
+    /**
+     * 0.7.41 can enqueue one enrollment request for a decoder subsegment using an ID suffix
+     * `<recent-entry-id>:seg:<index>`. Older callers still pass the bare recent-entry ID.
+     */
+    private fun currentRequestedSpeaker(requestId: String): String? {
+        val marker = ":seg:"
+        val markerIndex = requestId.lastIndexOf(marker)
+        val baseId = if (markerIndex > 0) requestId.substring(0, markerIndex) else requestId
+        val segmentIndex = if (markerIndex > 0) {
+            requestId.substring(markerIndex + marker.length).toIntOrNull()
+        } else null
+        val current = FullStreamingStateStore.readRecentFinals(applicationContext)
+            .firstOrNull { it.id == baseId } ?: return null
+        return if (segmentIndex != null) {
+            current.segments.firstOrNull { it.index == segmentIndex }?.speaker
+        } else {
+            current.speaker
         }
     }
 
