@@ -47,7 +47,8 @@ final class PostprocessWhisperLiveRunner {
         String raw = LocalWhisperEngine.nativeTranscribeDetailed(
                 model.getAbsolutePath(), samples,
                 new int[]{0}, new int[]{durationMs},
-                LANGUAGE, threads, useGpu, cancellationToken);
+                LANGUAGE, threads, useGpu, cancellationToken,
+                PostprocessAsrDiagnostics.nativeBreadcrumbPath(context, "streaming_asr"));
         if (raw == null) throw new IllegalStateException("POSTPROCESS_LIVE_WHISPER_RETURNED_NULL");
         JSONObject json = new JSONObject(raw);
         JSONArray segments = json.optJSONArray("segments");
