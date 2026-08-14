@@ -28,6 +28,7 @@ apply from: rootProject.file('gradle/nightly-hour-batch-java-fix-0.7.44.gradle')
 apply from: rootProject.file('gradle/hour-audio-vad-compaction-0.7.45.gradle')
 apply from: rootProject.file('gradle/hour-canonical-persist-0.7.45.gradle')
 apply from: rootProject.file('gradle/hour-native-diagnostic-0.7.45.gradle')
+apply from: rootProject.file('gradle/realtime-only-mode-0.7.46.gradle')
 
 android {
     namespace 'com.sktpj.recorder24h'
