@@ -15,6 +15,9 @@ def cmakeFile = rootProject.file('app/src/main/cpp/CMakeLists.txt')
 def pipelineFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionPipelineSettings.java')
 def localWhisperFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/LocalWhisperEngine.java')
 def nativeFile = rootProject.file('app/src/main/cpp/whisper_jni.cpp')
+def schedulerFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionScheduler.java')
+def recoveryFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/PostprocessProcessRecovery.java')
+def probeServiceFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/VulkanProbeService.java')
 
 // v1.9.1 predates the upstream Vulkan submission/DeviceLost fixes observed on Mali.
 def cmake = readUtf8(cmakeFile)
@@ -39,6 +42,45 @@ writeUtf8(pipelineFile, pipeline)
 def localWhisper = readUtf8(localWhisperFile)
 localWhisper = localWhisper.replace('whisper.cpp-v1.9.1/', 'whisper.cpp-5a80d0ad/')
 writeUtf8(localWhisperFile, localWhisper)
+
+// A process-death recovery must not immediately select the same oldest item forever. The
+// history loader treats *_WORK_ENQUEUED as a new queue timestamp, so a recovered item rotates
+// behind already-waiting audio while remaining queued and retained.
+def scheduler = readUtf8(schedulerFile)
+scheduler = scheduler.replace('"RECOVERED_INTERRUPTED_TRANSCRIPTION"',
+        '"RECOVERED_INTERRUPTED_TRANSCRIPTION_WORK_ENQUEUED"')
+writeUtf8(schedulerFile, scheduler)
+if (recoveryFile.isFile()) {
+    def recovery = readUtf8(recoveryFile)
+    recovery = recovery.replace('"RECOVERED_POSTPROCESS_PROCESS_RESTART"',
+            '"RECOVERED_POSTPROCESS_PROCESS_RESTART_WORK_ENQUEUED"')
+    writeUtf8(recoveryFile, recovery)
+}
+
+// Probe failures before JNI were previously invisible in the synced process log. Keep the probe,
+// but record the Java-side error too so no extra manual test cycle is required if production fails.
+def probeService = readUtf8(probeServiceFile)
+if (!probeService.contains('VULKAN_PROBE_FAILED')) {
+    probeService = replaceExact036(probeService,
+            '''        } catch (Throwable error) {
+            VulkanProbeStore.fail(this, error.getClass().getSimpleName() + ": "
+                    + (error.getMessage() == null ? "" : error.getMessage()));
+        } finally {
+''',
+            '''        } catch (Throwable error) {
+            String message = error.getClass().getSimpleName() + ": "
+                    + (error.getMessage() == null ? "" : error.getMessage());
+            VulkanProbeStore.fail(this, message);
+            try {
+                AppLogger.event(this, "VULKAN_PROBE_FAILED", new JSONObject()
+                        .put("profile", profile)
+                        .put("error", message));
+            } catch (Exception ignored) {}
+        } finally {
+''',
+            'probe Java failure logging')
+    writeUtf8(probeServiceFile, probeService)
+}
 
 // Upstream now throws DeviceLost/SystemError instead of calling exit() in key Vulkan paths.
 // Catch those exceptions at the JNI boundary so they become a recoverable Java failure rather
