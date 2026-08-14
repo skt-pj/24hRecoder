@@ -1,0 +1,10 @@
+def target = rootProject.file('app/src/main/java/com/sktpj/recorder24h/VulkanDiagnosticCard.kt')
+if (target.isFile()) {
+    String source = target.getText('UTF-8')
+    if (!source.contains('import androidx.compose.foundation.layout.weight')) {
+        source = source.replace(
+                'import androidx.compose.foundation.layout.padding\n',
+                'import androidx.compose.foundation.layout.padding\nimport androidx.compose.foundation.layout.weight\n')
+        target.setText(source, 'UTF-8')
+    }
+}
