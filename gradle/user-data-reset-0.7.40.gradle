@@ -65,7 +65,8 @@ aiSettings040 = replaceOnce040(
 @Composable
 private fun ProviderRow(
 ''',
-'''        UserDataResetCard()
+'''    }
+        UserDataResetCard()
     }
 }
 
