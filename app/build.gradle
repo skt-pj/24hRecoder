@@ -13,6 +13,7 @@ apply from: rootProject.file('gradle/cpu-vulkan-benchmark-0.7.37.gradle')
 apply from: rootProject.file('gradle/version-0.7.38.gradle')
 apply from: rootProject.file('gradle/nightly-hourly-transcription-0.7.39.gradle')
 apply from: rootProject.file('gradle/nightly-hourly-transcription-fix-0.7.39.gradle')
+apply from: rootProject.file('gradle/nightly-hourly-transcription-java-fix-0.7.39.gradle')
 
 android {
     namespace 'com.sktpj.recorder24h'
