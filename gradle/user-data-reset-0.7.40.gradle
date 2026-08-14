@@ -1,0 +1,70 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8040 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8040 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce040 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.40 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// Persistent generation invalidation makes any transcription Worker that began before the reset
+// stale before user data is deleted, so it cannot write a transcript/status back afterwards.
+def resetFile040 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionResetManager.java')
+def reset040 = readUtf8040(resetFile040)
+reset040 = replaceOnce040(
+        reset040,
+'''    public static boolean isCurrentGeneration(Context context, int generation) {
+        return currentGeneration(context) == generation;
+    }
+
+    public static synchronized boolean applyV049ResetIfNeeded(Context context) {
+''',
+'''    public static boolean isCurrentGeneration(Context context, int generation) {
+        return currentGeneration(context) == generation;
+    }
+
+    public static synchronized int invalidateGeneration(Context context) {
+        Context app = context.getApplicationContext();
+        SharedPreferences prefs = prefs(app);
+        int nextGeneration = prefs.getInt(KEY_GENERATION, 0) + 1;
+        if (!prefs.edit().putInt(KEY_GENERATION, nextGeneration).commit()) {
+            throw new IllegalStateException("Unable to invalidate transcription generation");
+        }
+        return nextGeneration;
+    }
+
+    public static synchronized boolean applyV049ResetIfNeeded(Context context) {
+''',
+        'persistent reset generation')
+writeUtf8040(resetFile040, reset040)
+
+// Add the destructive action only to Settings, after model/API settings. The card itself states
+// the exact deletion/preservation scope and requires a second confirmation tap.
+def mainFile040 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+def main040 = readUtf8040(mainFile040)
+main040 = replaceOnce040(
+        main040,
+'''        item { AiSettingsCard() }
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+''',
+'''        item { AiSettingsCard() }
+        item { UserDataResetCard() }
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+''',
+        'settings reset card')
+writeUtf8040(mainFile040, main040)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1040)
+            output.versionName.set('0.7.40-debug')
+        }
+    }
+}
