@@ -4,7 +4,6 @@ import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Card
@@ -27,7 +26,6 @@ import com.sktpj.recorder24h.util.DriveLogSync
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 
 @Composable
 fun VulkanDiagnosticCard() {
@@ -75,23 +73,22 @@ fun VulkanDiagnosticCard() {
             ProbeButton("Vulkan graph optimizeだけ無効", VulkanProbeStore.PROFILE_VULKAN_GRAPH_OFF, running) { status = VulkanProbeStore.read(context) }
             ProbeButton("Vulkan 現行回避策（両方無効）", VulkanProbeStore.PROFILE_VULKAN_SAFE, running) { status = VulkanProbeStore.read(context) }
 
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = {
-                        VulkanProbeStore.fail(context, "USER_MARKED_INTERRUPTED")
-                        status = VulkanProbeStore.read(context)
-                    },
-                    enabled = running,
-                    modifier = Modifier.weight(1f)
-                ) { Text("停止扱い") }
-                OutlinedButton(
-                    onClick = {
-                        DriveLogSync.enqueueNow(context)
-                        Toast.makeText(context, "診断ログのDrive同期を登録しました", Toast.LENGTH_SHORT).show()
-                    },
-                    modifier = Modifier.weight(1f)
-                ) { Text("ログを同期") }
-            }
+            OutlinedButton(
+                onClick = {
+                    VulkanProbeStore.fail(context, "USER_MARKED_INTERRUPTED")
+                    status = VulkanProbeStore.read(context)
+                },
+                enabled = running,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("停止扱い") }
+            OutlinedButton(
+                onClick = {
+                    DriveLogSync.enqueueNow(context)
+                    Toast.makeText(context, "診断ログのDrive同期を登録しました", Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("ログを同期") }
+
             Text(
                 "各試験は モデル読込のみ → 2秒 → 10秒 → 30秒 の順です。native breadcrumbsとJava側の画面状態・省電力・thermal状態をログへ残します。",
                 style = MaterialTheme.typography.bodySmall,
