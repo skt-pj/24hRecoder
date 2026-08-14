@@ -1,0 +1,59 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce037 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.37 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// The 0.7.34 diagnostic helper predates production's 0.7.36 max-nodes=8 Vulkan setting.
+// Make the benchmark's Vulkan profile exactly match the current production stability environment.
+def nativeFile = rootProject.file('app/src/main/cpp/whisper_jni.cpp')
+def nativeSource = readUtf8(nativeFile)
+def oldProfile = '''void apply_probe_profile(const std::string & profile) {
+    unsetenv("GGML_VK_DISABLE_COOPMAT");
+    unsetenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE");
+    if (profile == "vulkan-coopmat-off") {
+        setenv("GGML_VK_DISABLE_COOPMAT", "1", 1);
+    } else if (profile == "vulkan-graph-optimize-off") {
+        setenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE", "1", 1);
+    } else if (profile == "vulkan-current-safe") {
+        setenv("GGML_VK_DISABLE_COOPMAT", "1", 1);
+        setenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE", "1", 1);
+    }
+}
+'''
+def newProfile = '''void apply_probe_profile(const std::string & profile) {
+    unsetenv("GGML_VK_DISABLE_COOPMAT");
+    unsetenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE");
+    unsetenv("GGML_VK_MAX_NODES_PER_SUBMIT");
+    if (profile == "vulkan-coopmat-off") {
+        setenv("GGML_VK_DISABLE_COOPMAT", "1", 1);
+    } else if (profile == "vulkan-graph-optimize-off") {
+        setenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE", "1", 1);
+    } else if (profile == "vulkan-current-safe") {
+        setenv("GGML_VK_DISABLE_COOPMAT", "1", 1);
+        setenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE", "1", 1);
+        setenv("GGML_VK_MAX_NODES_PER_SUBMIT", "8", 1);
+    }
+}
+'''
+nativeSource = replaceOnce037(nativeSource, oldProfile, newProfile, 'production-equivalent probe profile')
+writeUtf8(nativeFile, nativeSource)
+if (!nativeFile.text.contains('setenv("GGML_VK_MAX_NODES_PER_SUBMIT", "8", 1);')) {
+    throw new GradleException('0.7.37 benchmark must use production GGML_VK_MAX_NODES_PER_SUBMIT=8')
+}
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1037)
+            output.versionName.set('0.7.37-debug')
+        }
+    }
+}
