@@ -7,7 +7,6 @@ import androidx.work.Operation;
 import androidx.work.WorkManager;
 
 import com.sktpj.recorder24h.ai.AiAnalysisScheduler;
-import com.sktpj.recorder24h.service.RecorderService;
 import com.sktpj.recorder24h.storage.RecorderStateStore;
 import com.sktpj.recorder24h.storage.RecordingIntentStore;
 import com.sktpj.recorder24h.transcription.NightlyHourlyTranscriptionScheduler;
@@ -95,6 +94,11 @@ public final class UserDataResetManager {
 
             filesDeleted = total.files;
             bytesDeleted = total.bytes;
+            if (total.failures > 0) {
+                throw new IllegalStateException(
+                        "Unable to delete " + total.failures + " data item(s): " + total.firstFailure);
+            }
+
             RealtimeSpeechGateStore.resetStream();
 
             // Preserve configured providers/settings while recreating only their periodic wakeups.
@@ -156,24 +160,41 @@ public final class UserDataResetManager {
         if (target == null || !target.exists()) return result;
         if (target.isDirectory()) {
             File[] children = target.listFiles();
-            if (children != null) {
-                for (File child : children) result.add(deleteTree(child));
+            if (children == null) {
+                result.recordFailure(target);
+                return result;
             }
-        } else {
-            result.bytes += Math.max(0L, target.length());
+            for (File child : children) result.add(deleteTree(child));
         }
-        if (target.delete()) result.files++;
+        long size = target.isFile() ? Math.max(0L, target.length()) : 0L;
+        if (target.delete()) {
+            result.files++;
+            result.bytes += size;
+        } else if (target.exists()) {
+            result.recordFailure(target);
+        }
         return result;
     }
 
     private static final class DeleteStats {
         int files;
         long bytes;
+        int failures;
+        String firstFailure = "";
 
         void add(DeleteStats other) {
             if (other == null) return;
             files += other.files;
             bytes += other.bytes;
+            failures += other.failures;
+            if (firstFailure.isEmpty() && !other.firstFailure.isEmpty()) {
+                firstFailure = other.firstFailure;
+            }
+        }
+
+        void recordFailure(File file) {
+            failures++;
+            if (firstFailure.isEmpty() && file != null) firstFailure = file.getAbsolutePath();
         }
     }
 
