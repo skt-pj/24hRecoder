@@ -21,9 +21,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.sktpj.recorder24h.transcription.FullStreamingStateStore
-import com.sktpj.recorder24h.transcription.LiveTranscriptionSettings
+import com.sktpj.recorder24h.transcription.NightlyHourlyTranscriptionScheduler
 import com.sktpj.recorder24h.transcription.TranscriptionPipelineSettings
-import com.sktpj.recorder24h.transcription.TranscriptionScheduler
 import com.sktpj.recorder24h.util.AppLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -34,7 +33,6 @@ import org.json.JSONObject
 fun TranscriptionBackendSettingsCard() {
     val context = LocalContext.current
     var pipeline by remember { mutableStateOf(TranscriptionPipelineSettings.snapshot(context)) }
-    var fiveMinuteFinalEnabled by remember { mutableStateOf(LiveTranscriptionSettings.isFiveMinuteFinalEnabled(context)) }
     var liveState by remember { mutableStateOf(FullStreamingStateStore.readLiveState(context)) }
     val vulkanAvailable = remember {
         TranscriptionPipelineSettings.isAsrRuntimeAvailable(
@@ -61,7 +59,6 @@ fun TranscriptionBackendSettingsCard() {
 
     fun refresh() {
         pipeline = TranscriptionPipelineSettings.snapshot(context)
-        fiveMinuteFinalEnabled = LiveTranscriptionSettings.isFiveMinuteFinalEnabled(context)
     }
 
     fun logChange(kind: String, before: String, after: String) {
@@ -95,7 +92,7 @@ fun TranscriptionBackendSettingsCard() {
                 BackendChip(
                     selected = pipeline.executionMode == TranscriptionPipelineSettings.MODE_SEGMENT_POSTPROCESS,
                     enabled = true,
-                    text = "5分終了後に処理"
+                    text = "夜間確定のみ"
                 ) {
                     val before = pipeline.executionMode
                     TranscriptionPipelineSettings.setExecutionMode(
@@ -106,7 +103,7 @@ fun TranscriptionBackendSettingsCard() {
                 BackendChip(
                     selected = pipeline.executionMode == TranscriptionPipelineSettings.MODE_LIVE_STREAMING,
                     enabled = true,
-                    text = "完全ストリーミング"
+                    text = "30秒暫定 + 夜間確定"
                 ) {
                     val before = pipeline.executionMode
                     TranscriptionPipelineSettings.setExecutionMode(
@@ -118,39 +115,15 @@ fun TranscriptionBackendSettingsCard() {
 
             if (pipeline.executionMode == TranscriptionPipelineSettings.MODE_LIVE_STREAMING) {
                 Text(
-                    "通常の文字起こしキューは自動停止しません。ライブ中に止める場合は、キュー画面の「一時停止」を使ってください。",
+                    "録音中は30秒単位の暫定文字起こしだけを表示します。発話ごとのWhisper実行と5分ごとの確定Whisperは行いません。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
-
-            if (pipeline.executionMode == TranscriptionPipelineSettings.MODE_LIVE_STREAMING) {
-                PipelineSection("5分後の確定文字起こし") {
-                    BackendChip(
-                        selected = fiveMinuteFinalEnabled,
-                        enabled = true,
-                        text = "ON"
-                    ) {
-                        val before = fiveMinuteFinalEnabled.toString()
-                        LiveTranscriptionSettings.setFiveMinuteFinalEnabled(context, true)
-                        refresh(); logChange("fiveMinuteFinalEnabled", before, fiveMinuteFinalEnabled.toString())
-                    }
-                    BackendChip(
-                        selected = !fiveMinuteFinalEnabled,
-                        enabled = true,
-                        text = "OFF"
-                    ) {
-                        val before = fiveMinuteFinalEnabled.toString()
-                        LiveTranscriptionSettings.setFiveMinuteFinalEnabled(context, false)
-                        TranscriptionScheduler.disableAutomaticLiveFinals(context)
-                        refresh(); logChange("fiveMinuteFinalEnabled", before, fiveMinuteFinalEnabled.toString())
-                    }
-                }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("確定文字起こし", fontWeight = FontWeight.SemiBold)
                 Text(
-                    if (fiveMinuteFinalEnabled)
-                        "ON: ライブ表示とは別に、5分音声を通常/確定モデルで再処理して履歴の確定結果にします。"
-                    else
-                        "OFF: 押した時点から5分後の通常モデル再処理を止め、待機中のライブ所有5分確定も外します。ライブで確定した発話だけを5分履歴へ保存します。",
+                    "前日分を端末のローカル時刻 ${NightlyHourlyTranscriptionScheduler.NIGHT_START_HOUR_LOCAL}:00 以降にまとめて処理し、履歴では1時間単位にまとめます。録音ファイルは安全性のため内部では5分分割のまま保持します。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -160,7 +133,7 @@ fun TranscriptionBackendSettingsCard() {
                 pipeline.vadBackend != TranscriptionPipelineSettings.VAD_STREAMING_SILERO
             ) {
                 Text(
-                    "完全ストリーミングには「Silero ストリーミング」を選択してください。自動変更はしません。",
+                    "30秒暫定表示には「Silero ストリーミング」を選択してください。自動変更はしません。",
                     color = MaterialTheme.colorScheme.error,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -199,11 +172,11 @@ fun TranscriptionBackendSettingsCard() {
             if (pipeline.executionMode == TranscriptionPipelineSettings.MODE_LIVE_STREAMING &&
                 pipeline.asrBackend != TranscriptionPipelineSettings.ASR_ANDROID_ON_DEVICE
             ) {
-                PipelineSection("ライブWhisper経路") {
+                PipelineSection("暫定Whisper経路") {
                     BackendChip(
                         selected = pipeline.liveWhisperRoute == TranscriptionPipelineSettings.LIVE_WHISPER_PERSISTENT,
                         enabled = true,
-                        text = "ライブ専用常駐"
+                        text = "モデル常駐"
                     ) {
                         val before = pipeline.liveWhisperRoute
                         TranscriptionPipelineSettings.setLiveWhisperRoute(
@@ -214,7 +187,7 @@ fun TranscriptionBackendSettingsCard() {
                     BackendChip(
                         selected = pipeline.liveWhisperRoute == TranscriptionPipelineSettings.LIVE_WHISPER_POSTPROCESS_NATIVE,
                         enabled = true,
-                        text = "通常JNI（発話ごとロード）"
+                        text = "通常JNI（30秒ごとロード）"
                     ) {
                         val before = pipeline.liveWhisperRoute
                         TranscriptionPipelineSettings.setLiveWhisperRoute(
@@ -225,9 +198,9 @@ fun TranscriptionBackendSettingsCard() {
                 }
                 Text(
                     if (pipeline.liveWhisperRoute == TranscriptionPipelineSettings.LIVE_WHISPER_POSTPROCESS_NATIVE)
-                        "通常JNIは5分処理と同じnativeTranscribeDetailedを発話ごとに使い、毎回モデルをロード・解放します。"
+                        "通常JNIは30秒の暫定窓ごとにモデルをロード・解放します。"
                     else
-                        "ライブ専用常駐はモデルを保持する既存経路です。どちらも選択backendのままで、自動フォールバックしません。",
+                        "モデル常駐は同じモデルを保持して30秒窓を順次処理します。どちらも選択backendのままで、自動フォールバックしません。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -300,16 +273,16 @@ fun TranscriptionBackendSettingsCard() {
                 liveState.state != "OFF"
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("ライブ文字起こし", fontWeight = FontWeight.SemiBold)
+                    Text("30秒暫定文字起こし", fontWeight = FontWeight.SemiBold)
                     Text(
                         "状態: ${liveState.state} / backend: ${liveState.backend ?: "-"} / 推論待ち: ${liveState.queueDepth}",
                         style = MaterialTheme.typography.bodySmall
                     )
                     if (liveState.partialText.isNotBlank()) {
-                        Text("暫定: ${liveState.partialText}", style = MaterialTheme.typography.bodyMedium)
+                        Text("処理中: ${liveState.partialText}", style = MaterialTheme.typography.bodyMedium)
                     }
                     if (liveState.latestFinalText.isNotBlank()) {
-                        Text("最新確定: ${liveState.latestFinalText}", style = MaterialTheme.typography.bodyMedium)
+                        Text("最新暫定: ${liveState.latestFinalText}", style = MaterialTheme.typography.bodyMedium)
                     }
                     if (!liveState.error.isNullOrBlank()) {
                         Text("エラー: ${liveState.error}", color = MaterialTheme.colorScheme.error)
@@ -328,7 +301,7 @@ fun TranscriptionBackendSettingsCard() {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                "完全ストリーミングでは録音中PCMを専用ASRプロセスへ渡します。ライブモデルと5分確定モデルは独立します。5分確定ON/OFFは即時反映し、ライブモデル・backend変更は次の5分セグメント境界から反映します。5分音声保存自体は常に継続します。",
+                "録音中PCMは専用ASRプロセスへ渡し、暫定表示は30秒窓で更新します。確定処理は前日分を夜間にまとめて実行します。内部5分M4Aは録音継続・障害復旧のための保存単位であり、5分ごとに確定文字起こしを出すための単位ではありません。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
