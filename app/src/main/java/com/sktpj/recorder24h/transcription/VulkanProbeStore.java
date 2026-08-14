@@ -35,16 +35,38 @@ public final class VulkanProbeStore {
         }
     }
 
-    public static void begin(Context context, String profile, String modelId, String audioFile) {
+    public static void prepareRequest(Context context, String requestId, String profile,
+                                      String modelId, String audioFile) {
         JSONObject row = empty();
         try {
+            long now = System.currentTimeMillis();
+            row.put("state", "REQUESTED");
+            row.put("requestId", requestId == null ? JSONObject.NULL : requestId);
+            row.put("profile", profile == null ? JSONObject.NULL : profile);
+            row.put("phase", "WAITING_FOR_PROCESS");
+            row.put("modelId", modelId == null ? JSONObject.NULL : modelId);
+            row.put("audioFile", audioFile == null ? JSONObject.NULL : audioFile);
+            row.put("requestedAtMs", now);
+            row.put("updatedAtMs", now);
+            row.put("results", new JSONArray());
+        } catch (Exception ignored) {}
+        write(context, row);
+    }
+
+    public static void begin(Context context, String requestId, String profile,
+                             String modelId, String audioFile) {
+        JSONObject row = empty();
+        try {
+            long now = System.currentTimeMillis();
             row.put("state", "RUNNING");
+            row.put("requestId", requestId == null ? JSONObject.NULL : requestId);
             row.put("profile", profile);
             row.put("phase", "STARTING");
             row.put("modelId", modelId);
             row.put("audioFile", audioFile == null ? JSONObject.NULL : audioFile);
-            row.put("startedAtMs", System.currentTimeMillis());
-            row.put("updatedAtMs", System.currentTimeMillis());
+            row.put("startedAtMs", now);
+            row.put("phaseStartedAtMs", now);
+            row.put("updatedAtMs", now);
             row.put("results", new JSONArray());
         } catch (Exception ignored) {}
         write(context, row);
@@ -54,9 +76,11 @@ public final class VulkanProbeStore {
         synchronized (LOCK) {
             JSONObject row = read(context);
             try {
+                long now = System.currentTimeMillis();
                 row.put("state", "RUNNING");
                 row.put("phase", phase);
-                row.put("updatedAtMs", System.currentTimeMillis());
+                row.put("phaseStartedAtMs", now);
+                row.put("updatedAtMs", now);
             } catch (Exception ignored) {}
             writeLocked(context, row);
         }
@@ -68,13 +92,15 @@ public final class VulkanProbeStore {
             try {
                 JSONArray results = row.optJSONArray("results");
                 if (results == null) results = new JSONArray();
+                long now = System.currentTimeMillis();
                 results.put(new JSONObject()
                         .put("phase", phase)
-                        .put("finishedAtMs", System.currentTimeMillis())
+                        .put("finishedAtMs", now)
                         .put("result", result == null ? new JSONObject() : result));
                 row.put("results", results);
                 row.put("phase", phase + "_DONE");
-                row.put("updatedAtMs", System.currentTimeMillis());
+                row.put("phaseStartedAtMs", now);
+                row.put("updatedAtMs", now);
             } catch (Exception ignored) {}
             writeLocked(context, row);
         }
@@ -84,10 +110,12 @@ public final class VulkanProbeStore {
         synchronized (LOCK) {
             JSONObject row = read(context);
             try {
+                long now = System.currentTimeMillis();
                 row.put("state", "COMPLETED");
                 row.put("phase", "DONE");
-                row.put("finishedAtMs", System.currentTimeMillis());
-                row.put("updatedAtMs", System.currentTimeMillis());
+                row.put("phaseStartedAtMs", now);
+                row.put("finishedAtMs", now);
+                row.put("updatedAtMs", now);
             } catch (Exception ignored) {}
             writeLocked(context, row);
         }
@@ -97,10 +125,11 @@ public final class VulkanProbeStore {
         synchronized (LOCK) {
             JSONObject row = read(context);
             try {
+                long now = System.currentTimeMillis();
                 row.put("state", "FAILED");
                 row.put("error", error == null ? "unknown" : error);
-                row.put("finishedAtMs", System.currentTimeMillis());
-                row.put("updatedAtMs", System.currentTimeMillis());
+                row.put("finishedAtMs", now);
+                row.put("updatedAtMs", now);
             } catch (Exception ignored) {}
             writeLocked(context, row);
         }
@@ -117,8 +146,12 @@ public final class VulkanProbeStore {
 
     private static JSONObject empty() {
         JSONObject row = new JSONObject();
-        try { row.put("schemaVersion", 1).put("state", "IDLE").put("phase", "-"); }
-        catch (Exception ignored) {}
+        try {
+            row.put("schemaVersion", 2)
+                    .put("state", "IDLE")
+                    .put("phase", "-")
+                    .put("requestId", JSONObject.NULL);
+        } catch (Exception ignored) {}
         return row;
     }
 
