@@ -2,7 +2,10 @@ package com.sktpj.recorder24h.transcription;
 
 import android.app.Service;
 import android.content.Intent;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
+import android.os.Process;
 
 import com.sktpj.recorder24h.ui.SegmentHistoryRepository;
 import com.sktpj.recorder24h.ui.SegmentRecord;
@@ -68,6 +71,8 @@ public final class VulkanProbeService extends Service {
                     + (error.getMessage() == null ? "" : error.getMessage()));
         } finally {
             stopSelf();
+            new Handler(Looper.getMainLooper()).postDelayed(
+                    () -> Process.killProcess(Process.myPid()), 500L);
         }
     }
 
