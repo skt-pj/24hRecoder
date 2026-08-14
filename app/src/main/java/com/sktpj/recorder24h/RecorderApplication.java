@@ -13,6 +13,7 @@ import com.sktpj.recorder24h.service.RecorderService;
 import com.sktpj.recorder24h.storage.RecorderHealth;
 import com.sktpj.recorder24h.storage.RecorderStateStore;
 import com.sktpj.recorder24h.storage.RecordingIntentStore;
+import com.sktpj.recorder24h.transcription.NightlyHourlyTranscriptionScheduler;
 import com.sktpj.recorder24h.transcription.TranscriptionScheduler;
 import com.sktpj.recorder24h.util.AppLogger;
 import com.sktpj.recorder24h.util.DriveLogSync;
@@ -49,6 +50,11 @@ public final class RecorderApplication extends Application implements Applicatio
             return;
         }
         DriveLogSync.ensureScheduled(this);
+        // Apply the 0.7.39 policy before legacy queue recovery can restart old automatic
+        // five-minute work. Manual queue items are intentionally preserved.
+        NightlyHourlyTranscriptionScheduler.migrateLegacyAutomaticBacklog(this);
+        NightlyHourlyTranscriptionScheduler.stageRetainedUntranscribed(this);
+        NightlyHourlyTranscriptionScheduler.ensureScheduled(this);
         TranscriptionScheduler.recoverInterruptedAndEnsureDrainAsync(this);
         registerActivityLifecycleCallbacks(this);
     }
