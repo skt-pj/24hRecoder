@@ -96,12 +96,16 @@ public final class NightlyHourlyTranscriptionScheduler {
                     PENDING_REASON);
             staged++;
         }
+        // Cancel persisted automatic drain copies. Manual QUEUED metadata remains and the normal
+        // recovery path below re-schedules it, so this does not discard explicit user requests.
+        WorkManager.getInstance(app).cancelAllWorkByTag("transcription");
         if (cancelRunning) TranscriptionCancellation.cancelCurrent();
         prefs.edit().putBoolean(KEY_MIGRATED_039, true).commit();
         try {
             AppLogger.event(app, "NIGHTLY_HOURLY_MIGRATION_COMPLETED", new JSONObject()
                     .put("stagedCount", staged)
                     .put("runningAutomaticCancelled", cancelRunning)
+                    .put("persistedDrainCancelled", true)
                     .put("manualQueuePreserved", true));
         } catch (Exception ignored) {}
         return staged;
@@ -131,7 +135,9 @@ public final class NightlyHourlyTranscriptionScheduler {
     }
 
     public static boolean isNightlyPending(SegmentRecord record) {
-        return record != null && PENDING_REASON.equals(record.getReason());
+        if (record == null) return false;
+        String reason = record.getReason();
+        return PENDING_REASON.equals(reason) || ENQUEUED_REASON.equals(reason);
     }
 
     public static void ensureScheduled(Context context) {
@@ -191,10 +197,20 @@ public final class NightlyHourlyTranscriptionScheduler {
             File audio = audioPath == null ? null : new File(audioPath);
             if (audio == null || !audio.isFile()) continue;
             if (TranscriptionScheduler.enqueue(context, record.getSegmentId(), audio)) {
+                // Overwrite the legacy LOCAL_* reason with the explicit nightly reason. The old
+                // five-minute-final toggle must not filter this new canonical policy out.
+                SegmentRepository.appendWithoutNotify(app, record.getSegmentId(), audio,
+                        record.getStartedAtMs(), System.currentTimeMillis(),
+                        "QUEUED", ENQUEUED_REASON);
                 enqueued++;
                 String hourKey = localHourKey(record.getSortTimeMs());
                 hourlyCounts.put(hourKey, hourlyCounts.getOrDefault(hourKey, 0) + 1);
             }
+        }
+        if (enqueued > 0) {
+            // enqueue() may have evaluated the old five-minute ownership flag before we rewrote
+            // the queue reason. Re-evaluate once all rows carry the nightly policy reason.
+            TranscriptionScheduler.ensureDrainScheduled(app);
         }
         try {
             JSONArray hours = new JSONArray();
