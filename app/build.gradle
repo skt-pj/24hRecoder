@@ -22,6 +22,7 @@ apply from: rootProject.file('gradle/nightly-charging-0.7.42.gradle')
 apply from: rootProject.file('gradle/nightly-charging-recovery-0.7.42.gradle')
 apply from: rootProject.file('gradle/hour-detail-0.7.42.gradle')
 apply from: rootProject.file('gradle/model-30s-benchmark-0.7.43.gradle')
+apply from: rootProject.file('gradle/nightly-hour-batch-compat-0.7.44.gradle')
 apply from: rootProject.file('gradle/nightly-hour-batch-0.7.44.gradle')
 
 android {
