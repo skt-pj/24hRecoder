@@ -18,18 +18,22 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.util.Comparator;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** One-button CPU vs current-production Vulkan benchmark using one fixed retained audio file. */
 public final class VulkanAutoProbeController {
+    // Vulkan runs first so an extremely slow CPU test cannot leave the app backgrounded before
+    // the GPU comparison has even started. CPU is intentionally last and may end as TIMEOUT.
     private static final String[] PROFILES = new String[] {
-            VulkanProbeStore.PROFILE_CPU,
-            VulkanProbeStore.PROFILE_VULKAN_SAFE
+            VulkanProbeStore.PROFILE_VULKAN_SAFE,
+            VulkanProbeStore.PROFILE_CPU
     };
     private static final long START_TIMEOUT_MS = 20_000L;
-    private static final long PROFILE_TIMEOUT_MS = 8L * 60L * 1000L;
+    private static final long VULKAN_PROFILE_TIMEOUT_MS = 4L * 60L * 1000L;
+    private static final long CPU_PROFILE_TIMEOUT_MS = 3L * 60L * 1000L;
     private static final long POLL_MS = 500L;
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
@@ -67,21 +71,27 @@ public final class VulkanAutoProbeController {
             AppLogger.event(context, "CPU_VULKAN_BENCHMARK_STARTED",
                     new JSONObject()
                             .put("profileCount", PROFILES.length)
+                            .put("profileOrder", "vulkan,cpu")
                             .put("modelId", modelId)
                             .put("audioFile", audio.getName())
                             .put("audioPathLocked", true)
                             .put("sourceDurationMs", source == null ? 0L : source.getDurationMs())
-                            .put("durationsMs", "2000,10000"));
+                            .put("durationsMs", "2000,10000")
+                            .put("cpuTimeoutMs", CPU_PROFILE_TIMEOUT_MS)
+                            .put("vulkanTimeoutMs", VULKAN_PROFILE_TIMEOUT_MS));
 
             for (int index = 0; index < PROFILES.length; index++) {
                 String profile = PROFILES[index];
                 ensurePreviousProbeGone(context);
+                String requestId = UUID.randomUUID().toString();
+                VulkanProbeStore.prepareRequest(context, requestId, profile, modelId, audio.getName());
                 VulkanAutoProbeStore.profileStarting(context, index, profile);
                 long requestedAtMs = System.currentTimeMillis();
                 AppLogger.event(context, "CPU_VULKAN_BENCHMARK_PROFILE_REQUESTED",
                         new JSONObject()
                                 .put("index", index)
                                 .put("profile", profile)
+                                .put("requestId", requestId)
                                 .put("label", VulkanProbeStore.profileLabel(profile))
                                 .put("modelId", modelId)
                                 .put("audioFile", audio.getName()));
@@ -89,15 +99,17 @@ public final class VulkanAutoProbeController {
                 context.startService(new Intent(context, VulkanProbeService.class)
                         .setAction(VulkanProbeService.ACTION_RUN)
                         .putExtra(VulkanProbeService.EXTRA_PROFILE, profile)
+                        .putExtra(VulkanProbeService.EXTRA_REQUEST_ID, requestId)
                         .putExtra(VulkanProbeService.EXTRA_MODEL_ID, modelId)
                         .putExtra(VulkanProbeService.EXTRA_AUDIO_PATH, audio.getAbsolutePath()));
 
-                JSONObject result = waitForProfile(context, profile, requestedAtMs);
+                JSONObject result = waitForProfile(context, profile, requestId, requestedAtMs);
                 VulkanAutoProbeStore.profileResult(context, index, profile, result);
                 AppLogger.event(context, "CPU_VULKAN_BENCHMARK_PROFILE_RESULT",
                         new JSONObject(result.toString())
                                 .put("index", index)
                                 .put("profile", profile)
+                                .put("requestId", requestId)
                                 .put("label", VulkanProbeStore.profileLabel(profile)));
                 ensurePreviousProbeGone(context);
                 sleep(1_000L);
@@ -139,21 +151,25 @@ public final class VulkanAutoProbeController {
                 .orElse(fallback);
     }
 
-    private static JSONObject waitForProfile(Context context, String profile,
+    private static JSONObject waitForProfile(Context context, String profile, String requestId,
                                              long requestedAtMs) throws Exception {
         boolean seenRunning = false;
-        long deadline = requestedAtMs + PROFILE_TIMEOUT_MS;
+        long profileTimeoutMs = VulkanProbeStore.PROFILE_CPU.equals(profile)
+                ? CPU_PROFILE_TIMEOUT_MS : VULKAN_PROFILE_TIMEOUT_MS;
+        long deadline = requestedAtMs + profileTimeoutMs;
         String lastPhase = "WAITING_FOR_PROCESS";
         VulkanAutoProbeStore.updatePhase(context, profile, lastPhase);
 
         while (System.currentTimeMillis() < deadline) {
             long now = System.currentTimeMillis();
             JSONObject status = VulkanProbeStore.read(context);
+            String currentRequestId = status.optString("requestId", "");
             String currentProfile = status.optString("profile", "");
             String state = status.optString("state", "IDLE");
             String phase = status.optString("phase", "-");
+            boolean currentRequest = requestId.equals(currentRequestId) && profile.equals(currentProfile);
 
-            if (profile.equals(currentProfile)) {
+            if (currentRequest) {
                 if (!phase.equals(lastPhase)) {
                     lastPhase = phase;
                     VulkanAutoProbeStore.updatePhase(context, profile, phase);
@@ -177,8 +193,7 @@ public final class VulkanAutoProbeController {
             }
 
             int pid = probePid(context);
-            if (seenRunning && pid <= 0 && profile.equals(currentProfile)
-                    && "RUNNING".equals(state)) {
+            if (currentRequest && seenRunning && pid <= 0 && "RUNNING".equals(state)) {
                 JSONObject result = new JSONObject()
                         .put("outcome", "PROCESS_EXIT")
                         .put("probeState", state)
@@ -192,8 +207,8 @@ public final class VulkanAutoProbeController {
             if (!seenRunning && now - requestedAtMs > START_TIMEOUT_MS) {
                 JSONObject result = new JSONObject()
                         .put("outcome", "START_TIMEOUT")
-                        .put("lastPhase", phase)
-                        .put("probeStatus", new JSONObject(status.toString()));
+                        .put("lastPhase", currentRequest ? phase : "WAITING_FOR_PROCESS");
+                if (currentRequest) result.put("probeStatus", new JSONObject(status.toString()));
                 JSONObject exit = latestProbeExit(context, requestedAtMs);
                 if (exit != null) result.put("exit", exit);
                 return result;
@@ -201,16 +216,25 @@ public final class VulkanAutoProbeController {
             sleep(POLL_MS);
         }
 
+        long timedOutAtMs = System.currentTimeMillis();
+        JSONObject status = VulkanProbeStore.read(context);
+        boolean currentRequest = requestId.equals(status.optString("requestId", ""))
+                && profile.equals(status.optString("profile", ""));
+        long phaseStartedAtMs = currentRequest ? status.optLong("phaseStartedAtMs", 0L) : 0L;
         int pid = probePid(context);
         if (pid > 0) {
             try { Process.killProcess(pid); } catch (Throwable ignored) {}
         }
         JSONObject result = new JSONObject()
                 .put("outcome", "TIMEOUT")
-                .put("lastPhase", lastPhase)
-                .put("timeoutMs", PROFILE_TIMEOUT_MS);
-        JSONObject exit = latestProbeExit(context, requestedAtMs);
-        if (exit != null) result.put("exit", exit);
+                .put("lastPhase", currentRequest ? status.optString("phase", lastPhase) : lastPhase)
+                .put("timeoutMs", profileTimeoutMs)
+                .put("timedOutByBenchmark", true)
+                .put("crashConfirmed", false);
+        if (phaseStartedAtMs > 0L) {
+            result.put("phaseElapsedMs", Math.max(0L, timedOutAtMs - phaseStartedAtMs));
+        }
+        if (currentRequest) result.put("probeStatus", new JSONObject(status.toString()));
         return result;
     }
 
