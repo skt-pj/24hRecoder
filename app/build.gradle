@@ -9,6 +9,7 @@ apply from: rootProject.file('gradle/vulkan-diagnostics-0.7.34.gradle')
 apply from: rootProject.file('gradle/vulkan-diagnostics-ui-fix-0.7.34.gradle')
 apply from: rootProject.file('gradle/vulkan-auto-probe-0.7.35.gradle')
 apply from: rootProject.file('gradle/vulkan-upstream-fix-0.7.36.gradle')
+apply from: rootProject.file('gradle/cpu-vulkan-benchmark-0.7.37.gradle')
 
 android {
     namespace 'com.sktpj.recorder24h'
