@@ -18,7 +18,7 @@ import java.util.Comparator;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Runs ASR comparison probes only inside the dedicated :vulkan_probe process. */
+/** Runs one ASR comparison profile only inside the dedicated :vulkan_probe process. */
 public final class VulkanProbeService extends Service {
     public static final String ACTION_RUN = "com.sktpj.recorder24h.action.RUN_VULKAN_PROBE";
     public static final String EXTRA_PROFILE = "profile";
@@ -43,12 +43,26 @@ public final class VulkanProbeService extends Service {
         VulkanProbeStore.begin(this, profile, modelId, audio == null ? null : audio.getName());
         try {
             AppLogger.event(this, "VULKAN_PROBE_STARTED", new JSONObject()
-                    .put("profile", profile).put("modelId", modelId));
+                    .put("profile", profile)
+                    .put("modelId", modelId)
+                    .put("audioFile", audio == null ? JSONObject.NULL : audio.getName()));
             if (!model.isFile()) throw new IllegalStateException("WHISPER_MODEL_MISSING");
             if (audio == null || !audio.isFile()) throw new IllegalStateException("RETAINED_AUDIO_MISSING");
-            LocalWhisperEngine.PreparedAudio prepared = LocalWhisperEngine.prepareAudio(audio);
-            int threads = Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors()));
+
             boolean useGpu = !VulkanProbeStore.PROFILE_CPU.equals(profile);
+            VulkanProbeStore.phase(this, "PREPARE_AUDIO");
+            PostprocessAsrDiagnostics.mark(this, "PROBE_PREPARE_AUDIO_BEGIN", null,
+                    useGpu ? "whisper-vulkan" : "whisper-cpu", modelId,
+                    new JSONObject().put("profile", profile).put("audioFile", audio.getName()));
+            LocalWhisperEngine.PreparedAudio prepared = LocalWhisperEngine.prepareAudio(audio);
+            PostprocessAsrDiagnostics.mark(this, "PROBE_PREPARE_AUDIO_END", null,
+                    useGpu ? "whisper-vulkan" : "whisper-cpu", modelId,
+                    new JSONObject()
+                            .put("profile", profile)
+                            .put("sampleCount", prepared.frontEnd.samples.length)
+                            .put("durationMs", prepared.durationMs()));
+
+            int threads = Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors()));
             String breadcrumb = PostprocessAsrDiagnostics.nativeBreadcrumbPath(this, "vulkan_probe");
             long[] durations = new long[] {0L, 2_000L, 10_000L, 30_000L};
             for (long durationMs : durations) {
@@ -67,8 +81,15 @@ public final class VulkanProbeService extends Service {
             VulkanProbeStore.complete(this);
             AppLogger.event(this, "VULKAN_PROBE_COMPLETED", new JSONObject().put("profile", profile));
         } catch (Throwable error) {
-            VulkanProbeStore.fail(this, error.getClass().getSimpleName() + ": "
-                    + (error.getMessage() == null ? "" : error.getMessage()));
+            String message = error.getClass().getSimpleName() + ": "
+                    + (error.getMessage() == null ? "" : error.getMessage());
+            VulkanProbeStore.fail(this, message);
+            try {
+                AppLogger.event(this, "VULKAN_PROBE_FAILED", new JSONObject()
+                        .put("profile", profile)
+                        .put("phase", VulkanProbeStore.read(this).optString("phase", "-"))
+                        .put("error", message));
+            } catch (Exception ignored) {}
         } finally {
             stopSelf();
             new Handler(Looper.getMainLooper()).postDelayed(
