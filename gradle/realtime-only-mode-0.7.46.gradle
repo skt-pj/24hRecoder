@@ -1,0 +1,450 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8046 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8046 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce046 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.46 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+def replaceBetween046 = { String source, String startMarker, String endMarker, String replacement, String label ->
+    int start = source.indexOf(startMarker)
+    if (start < 0) throw new GradleException("0.7.46 ${label}: start marker missing")
+    int end = source.indexOf(endMarker, start)
+    if (end < 0) throw new GradleException("0.7.46 ${label}: end marker missing")
+    source.substring(0, start) + replacement + source.substring(end)
+}
+
+// -----------------------------------------------------------------------------
+// Execution mode: keep the two existing modes and add realtime-only.
+// Realtime-only uses the existing 30-second live path, promotes those windows to
+// canonical segment transcripts at the five-minute storage boundary, and never
+// stages those segments for the nightly canonical queue.
+// -----------------------------------------------------------------------------
+def pipelineFile046 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionPipelineSettings.java')
+def pipeline046 = readUtf8046(pipelineFile046)
+pipeline046 = replaceOnce046(pipeline046,
+'''    public static final String MODE_SEGMENT_POSTPROCESS = "segment-postprocess";
+    public static final String MODE_LIVE_STREAMING = "live-streaming";
+''',
+'''    public static final String MODE_SEGMENT_POSTPROCESS = "segment-postprocess";
+    public static final String MODE_LIVE_STREAMING = "live-streaming";
+    public static final String MODE_REALTIME_ONLY = "realtime-only";
+''', 'realtime-only mode constant')
+pipeline046 = replaceOnce046(pipeline046,
+'''    public static boolean isLiveStreaming(Snapshot snapshot) {
+        return snapshot != null && MODE_LIVE_STREAMING.equals(snapshot.executionMode);
+    }
+''',
+'''    public static boolean isLiveStreaming(Snapshot snapshot) {
+        return snapshot != null
+                && (MODE_LIVE_STREAMING.equals(snapshot.executionMode)
+                || MODE_REALTIME_ONLY.equals(snapshot.executionMode));
+    }
+
+    public static boolean isRealtimeOnly(Snapshot snapshot) {
+        return snapshot != null && MODE_REALTIME_ONLY.equals(snapshot.executionMode);
+    }
+''', 'live mode classification')
+pipeline046 = replaceOnce046(pipeline046,
+'''        if (MODE_LIVE_STREAMING.equals(pipeline.executionMode)
+                && !VAD_STREAMING_SILERO.equals(pipeline.vadBackend)) {
+''',
+'''        if (isLiveStreaming(pipeline)
+                && !VAD_STREAMING_SILERO.equals(pipeline.vadBackend)) {
+''', 'live VAD validation')
+pipeline046 = replaceOnce046(pipeline046,
+'''    public static String modeLabel(String value) {
+        return MODE_LIVE_STREAMING.equals(normalizeMode(value))
+                ? "完全ストリーミング" : "5分終了後に処理";
+    }
+''',
+'''    public static String modeLabel(String value) {
+        String normalized = normalizeMode(value);
+        if (MODE_REALTIME_ONLY.equals(normalized)) return "リアルタイムのみ";
+        return MODE_LIVE_STREAMING.equals(normalized)
+                ? "30秒暫定 + 夜間確定" : "夜間確定のみ";
+    }
+''', 'mode label')
+pipeline046 = replaceOnce046(pipeline046,
+'''    private static String normalizeMode(String value) {
+        return MODE_LIVE_STREAMING.equals(value) ? MODE_LIVE_STREAMING : MODE_SEGMENT_POSTPROCESS;
+    }
+''',
+'''    private static String normalizeMode(String value) {
+        if (MODE_LIVE_STREAMING.equals(value) || MODE_REALTIME_ONLY.equals(value)) return value;
+        return MODE_SEGMENT_POSTPROCESS;
+    }
+''', 'mode normalization')
+writeUtf8046(pipelineFile046, pipeline046)
+
+// Dedicated streaming process must classify realtime-only as live.
+def streamFile046 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/StreamingTranscriptionService.java')
+def stream046 = readUtf8046(streamFile046)
+stream046 = replaceOnce046(stream046,
+'''        boolean isLive() {
+            return TranscriptionPipelineSettings.MODE_LIVE_STREAMING.equals(snapshot.executionMode);
+        }
+''',
+'''        boolean isLive() {
+            return TranscriptionPipelineSettings.isLiveStreaming(snapshot);
+        }
+''', 'streaming process live classification')
+
+// 0.7.45 VAD compaction also applies to authoritative realtime-only windows.
+stream046 = replaceOnce046(stream046,
+'''        if (partial) {
+            StreamingVadStore.Snapshot previewVad = StreamingVadStore.analyzeOffline(this, asrSamples);
+''',
+'''        if (partial || TranscriptionPipelineSettings.MODE_REALTIME_ONLY.equals(
+                accumulator.config.snapshot.executionMode)) {
+            StreamingVadStore.Snapshot previewVad = StreamingVadStore.analyzeOffline(this, asrSamples);
+''', 'realtime-only VAD compaction')
+stream046 = replaceOnce046(stream046,
+'''        if (partial && provisionalTimeMap != null) {
+            segments = provisionalTimeMap.remapSegments(segments);
+        }
+''',
+'''        if (provisionalTimeMap != null) {
+            segments = provisionalTimeMap.remapSegments(segments);
+        }
+''', 'realtime-only timestamp remap')
+
+// 0.7.39 installs scheduleProvisionalWindow before this patch runs.
+stream046 = replaceOnce046(stream046,
+'''        final long queuedAtMs = System.currentTimeMillis();
+        submit("provisional-30s", () -> {
+            try {
+                Recognition result = recognize(samples, accumulator, true);
+                long windowDurationMs = Math.max(0L, (windowEndUs - windowStartUs) / 1000L);
+''',
+'''        final long queuedAtMs = System.currentTimeMillis();
+        final boolean realtimeOnly = TranscriptionPipelineSettings.MODE_REALTIME_ONLY.equals(
+                accumulator.config.snapshot.executionMode);
+        submit("provisional-30s", () -> {
+            try {
+                Recognition result = recognize(samples, accumulator, !realtimeOnly);
+                if (realtimeOnly) {
+                    accumulator.addFinal(result, windowStartUs, windowEndUs);
+                }
+                long windowDurationMs = Math.max(0L, (windowEndUs - windowStartUs) / 1000L);
+''', 'realtime-only canonical 30-second result')
+stream046 = replaceOnce046(stream046,
+'''                        .put("queueDepth", pendingInference.get())
+                        .put("canonical", false));
+''',
+'''                        .put("queueDepth", pendingInference.get())
+                        .put("canonical", realtimeOnly));
+''', 'realtime-only canonical log')
+stream046 = replaceOnce046(stream046,
+'''                        "message", safeMessage(error),
+                        "nightlyCanonicalStillRequired", true,
+                        "automaticFallback", false));
+''',
+'''                        "message", safeMessage(error),
+                        "nightlyCanonicalStillRequired", !realtimeOnly,
+                        "automaticFallback", false));
+''', 'realtime-only failure log')
+stream046 = replaceOnce046(stream046,
+'''            } catch (Throwable error) {
+                // Preview failure must not poison the retained audio or nightly canonical pass.
+                writeState("WAITING", "", accumulator.latestFinalText, accumulator, null);
+                log("FULL_STREAMING_PROVISIONAL_30S_FAILED", details(
+                        "startPtsUs", windowStartUs,
+                        "endPtsUs", windowEndUs,
+                        "error", error.getClass().getSimpleName(),
+                        "message", safeMessage(error),
+                        "nightlyCanonicalStillRequired", !realtimeOnly,
+                        "automaticFallback", false));
+            }
+''',
+'''            } catch (Throwable error) {
+                if (realtimeOnly) {
+                    markAccumulatorFailed(accumulator, "REALTIME_ONLY_WINDOW_ASR_FAILED", error);
+                } else {
+                    // Preview failure must not poison the retained audio or nightly canonical pass.
+                    writeState("WAITING", "", accumulator.latestFinalText, accumulator, null);
+                }
+                log("FULL_STREAMING_PROVISIONAL_30S_FAILED", details(
+                        "startPtsUs", windowStartUs,
+                        "endPtsUs", windowEndUs,
+                        "error", error.getClass().getSimpleName(),
+                        "message", safeMessage(error),
+                        "nightlyCanonicalStillRequired", !realtimeOnly,
+                        "automaticFallback", false));
+            }
+''', 'realtime-only window failure state')
+
+// At a storage boundary, flush the final partial window then persist the accumulated 30-second
+// results through the existing authoritative TranscriptionRepository path.
+def realtimeBoundary046 = '''        if (old != null && old.config.isLive()) {
+            old.correctBase(actualBasePtsUs);
+            old.segmentId = data.getString("segmentId");
+            old.startedAtMs = data.getLong("startedAtMs", 0L);
+            old.endedAtMs = data.getLong("endedAtMs", 0L);
+            old.endPtsUs = endPtsUs;
+            boolean realtimeOnly = TranscriptionPipelineSettings.MODE_REALTIME_ONLY.equals(
+                    old.config.snapshot.executionMode);
+            if (realtimeOnly) {
+                if (provisionalWindowHasSpeech && endPtsUs > lastPartialRequestedEndUs) {
+                    scheduleProvisionalWindow(lastPartialRequestedEndUs, endPtsUs, old);
+                }
+                submit("realtime-only-segment-finalize", () -> finalizeSegment(old));
+                log("FULL_STREAMING_REALTIME_ONLY_SEGMENT_FINALIZE", details(
+                        "segmentId", old.segmentId,
+                        "liveModelId", old.config.modelId,
+                        "canonicalSource", "30-second-realtime",
+                        "nightlyCanonicalRequired", false));
+            } else {
+                log("FULL_STREAMING_SEGMENT_STAGED_FOR_NIGHTLY_CANONICAL", details(
+                        "segmentId", old.segmentId,
+                        "liveModelId", old.config.modelId,
+                        "provisionalWindowMs", PROVISIONAL_WINDOW_US / 1000L,
+                        "canonicalDisplayUnitMinutes", 60,
+                        "automaticFiveMinuteWhisper", false,
+                        "liveOutputCanonical", false));
+            }
+        }
+'''
+stream046 = replaceBetween046(stream046,
+        '        if (old != null && old.config.isLive()) {',
+        '\n\n        pcmBuffer.trimBefore(endPtsUs);',
+        realtimeBoundary046,
+        'realtime-only boundary persistence')
+writeUtf8046(streamFile046, stream046)
+
+// Ownership is written before SegmentReadyReceiver sees the retained M4A, so use the frozen
+// segment mode instead of the current global setting when deciding nightly ownership.
+def stateFile046 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/FullStreamingStateStore.java')
+def state046 = readUtf8046(stateFile046)
+state046 = replaceOnce046(state046,
+'''    public static boolean isOwned(Context context, String segmentId) {
+        if (segmentId == null || segmentId.isEmpty()) return false;
+        JSONObject row = readOwnership(context, segmentId);
+        return row.optBoolean("owned", false);
+    }
+
+''',
+'''    public static boolean isOwned(Context context, String segmentId) {
+        if (segmentId == null || segmentId.isEmpty()) return false;
+        JSONObject row = readOwnership(context, segmentId);
+        return row.optBoolean("owned", false);
+    }
+
+    public static boolean isRealtimeOnlyOwned(Context context, String segmentId) {
+        if (segmentId == null || segmentId.isEmpty()) return false;
+        JSONObject row = readOwnership(context, segmentId);
+        if (!row.optBoolean("owned", false)) return false;
+        JSONObject pipeline = row.optJSONObject("pipeline");
+        return pipeline != null && TranscriptionPipelineSettings.MODE_REALTIME_ONLY.equals(
+                pipeline.optString("executionMode", ""));
+    }
+
+''', 'realtime-only ownership query')
+writeUtf8046(stateFile046, state046)
+
+// Realtime-only segments are never staged or recovered into the nightly automatic queue.
+def nightlyFile046 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/NightlyHourlyTranscriptionScheduler.java')
+def nightly046 = readUtf8046(nightlyFile046)
+nightly046 = replaceOnce046(nightly046,
+'''        Context app = context.getApplicationContext();
+        SegmentRepository.appendWithoutNotify(
+''',
+'''        Context app = context.getApplicationContext();
+        if (FullStreamingStateStore.isRealtimeOnlyOwned(app, segmentId)) {
+            try {
+                AppLogger.event(app, "REALTIME_ONLY_SEGMENT_NOT_STAGED_NIGHTLY", new JSONObject()
+                        .put("segmentId", segmentId)
+                        .put("audioFile", file.getName())
+                        .put("nightlyCanonicalRequired", false));
+            } catch (Exception ignored) {}
+            return;
+        }
+        SegmentRepository.appendWithoutNotify(
+''', 'skip nightly staging for realtime-only')
+nightly046 = replaceOnce046(nightly046,
+'''        for (SegmentRecord record : SegmentHistoryRepository.load(app)) {
+            if (!record.getAudioAvailable() || record.getHasTranscript()) continue;
+            if (record.getStatus().equals("CORRUPT")) continue;
+            if ("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus())
+''',
+'''        for (SegmentRecord record : SegmentHistoryRepository.load(app)) {
+            if (!record.getAudioAvailable() || record.getHasTranscript()) continue;
+            if (FullStreamingStateStore.isRealtimeOnlyOwned(app, record.getSegmentId())) continue;
+            if (record.getStatus().equals("CORRUPT")) continue;
+            if ("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus())
+''', 'skip realtime-only reset recovery')
+nightly046 = replaceOnce046(nightly046,
+'''        Context app = context.getApplicationContext();
+        long todayStartMs = startOfLocalDay(System.currentTimeMillis());
+        List<SegmentRecord> eligible = new ArrayList<>();
+''',
+'''        Context app = context.getApplicationContext();
+        if (TranscriptionPipelineSettings.isRealtimeOnly(TranscriptionPipelineSettings.snapshot(app))) {
+            try {
+                AppLogger.event(app, "NIGHTLY_HOURLY_SKIPPED_REALTIME_ONLY",
+                        new JSONObject().put("nightlyCanonicalRequired", false));
+            } catch (Exception ignored) {}
+            return 0;
+        }
+        long todayStartMs = startOfLocalDay(System.currentTimeMillis());
+        List<SegmentRecord> eligible = new ArrayList<>();
+''', 'skip nightly scan in realtime-only mode')
+nightly046 = replaceOnce046(nightly046,
+'''        for (SegmentRecord record : SegmentHistoryRepository.load(app)) {
+            if (!record.getAudioAvailable() || record.getHasTranscript()) continue;
+            if (record.getSortTimeMs() <= 0L || record.getSortTimeMs() >= todayStartMs) continue;
+''',
+'''        for (SegmentRecord record : SegmentHistoryRepository.load(app)) {
+            if (!record.getAudioAvailable() || record.getHasTranscript()) continue;
+            if (FullStreamingStateStore.isRealtimeOnlyOwned(app, record.getSegmentId())) continue;
+            if (record.getSortTimeMs() <= 0L || record.getSortTimeMs() >= todayStartMs) continue;
+''', 'exclude realtime-only from nightly eligibility')
+nightly046 = replaceOnce046(nightly046,
+'''            if (record.getAudioAvailable() && !record.getHasTranscript()
+                    && record.getSortTimeMs() > 0L && record.getSortTimeMs() < todayStart
+                    && !"CORRUPT".equals(record.getStatus())) return true;
+''',
+'''            if (record.getAudioAvailable() && !record.getHasTranscript()
+                    && !FullStreamingStateStore.isRealtimeOnlyOwned(context, record.getSegmentId())
+                    && record.getSortTimeMs() > 0L && record.getSortTimeMs() < todayStart
+                    && !"CORRUPT".equals(record.getStatus())) return true;
+''', 'exclude realtime-only catchup')
+writeUtf8046(nightlyFile046, nightly046)
+
+// Settings UI: preserve the existing two choices and add the requested third choice.
+def settingsFile046 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/TranscriptionBackendSettingsCard.kt')
+def settings046 = readUtf8046(settingsFile046)
+settings046 = replaceOnce046(settings046,
+'''                BackendChip(
+                    selected = pipeline.executionMode == TranscriptionPipelineSettings.MODE_LIVE_STREAMING,
+                    enabled = true,
+                    text = "30秒暫定 + 夜間確定"
+                ) {
+                    val before = pipeline.executionMode
+                    TranscriptionPipelineSettings.setExecutionMode(
+                        context, TranscriptionPipelineSettings.MODE_LIVE_STREAMING
+                    )
+                    refresh(); logChange("executionMode", before, pipeline.executionMode)
+                }
+''',
+'''                BackendChip(
+                    selected = pipeline.executionMode == TranscriptionPipelineSettings.MODE_LIVE_STREAMING,
+                    enabled = true,
+                    text = "30秒暫定 + 夜間確定"
+                ) {
+                    val before = pipeline.executionMode
+                    TranscriptionPipelineSettings.setExecutionMode(
+                        context, TranscriptionPipelineSettings.MODE_LIVE_STREAMING
+                    )
+                    refresh(); logChange("executionMode", before, pipeline.executionMode)
+                }
+                BackendChip(
+                    selected = pipeline.executionMode == TranscriptionPipelineSettings.MODE_REALTIME_ONLY,
+                    enabled = true,
+                    text = "リアルタイムのみ"
+                ) {
+                    val before = pipeline.executionMode
+                    TranscriptionPipelineSettings.setExecutionMode(
+                        context, TranscriptionPipelineSettings.MODE_REALTIME_ONLY
+                    )
+                    refresh(); logChange("executionMode", before, pipeline.executionMode)
+                }
+''', 'settings realtime-only chip')
+settings046 = replaceOnce046(settings046,
+'''            if (pipeline.executionMode == TranscriptionPipelineSettings.MODE_LIVE_STREAMING) {
+                Text(
+                    "録音中は30秒単位の暫定文字起こしだけを表示します。発話ごとのWhisper実行と5分ごとの確定Whisperは行いません。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("確定文字起こし", fontWeight = FontWeight.SemiBold)
+                Text(
+                    "前日分を端末のローカル時刻 ${NightlyHourlyTranscriptionScheduler.NIGHT_START_HOUR_LOCAL}:00 以降にまとめて処理し、履歴では1時間単位にまとめます。録音ファイルは安全性のため内部では5分分割のまま保持します。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+''',
+'''            if (TranscriptionPipelineSettings.isLiveStreaming(pipeline)) {
+                Text(
+                    if (pipeline.executionMode == TranscriptionPipelineSettings.MODE_REALTIME_ONLY)
+                        "録音中は30秒単位で文字起こしし、5分の保存境界で確定保存します。夜間の再文字起こしは行いません。"
+                    else
+                        "録音中は30秒単位の暫定文字起こしだけを表示します。発話ごとのWhisper実行と5分ごとの確定Whisperは行いません。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    if (pipeline.executionMode == TranscriptionPipelineSettings.MODE_REALTIME_ONLY)
+                        "リアルタイム確定"
+                    else "確定文字起こし",
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    if (pipeline.executionMode == TranscriptionPipelineSettings.MODE_REALTIME_ONLY)
+                        "30秒単位の結果を5分の保存境界で確定履歴として保存します。録音ファイルは内部では5分分割のまま保持します。"
+                    else
+                        "前日分を端末のローカル時刻 ${NightlyHourlyTranscriptionScheduler.NIGHT_START_HOUR_LOCAL}:00 以降にまとめて処理し、履歴では1時間単位にまとめます。録音ファイルは安全性のため内部では5分分割のまま保持します。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+''', 'settings mode explanation')
+settings046 = settings046.replace(
+        'if (pipeline.executionMode == TranscriptionPipelineSettings.MODE_LIVE_STREAMING &&\n',
+        'if (TranscriptionPipelineSettings.isLiveStreaming(pipeline) &&\n')
+settings046 = replaceOnce046(settings046,
+'''            if (pipeline.executionMode == TranscriptionPipelineSettings.MODE_LIVE_STREAMING ||
+                liveState.state != "OFF"
+''',
+'''            if (TranscriptionPipelineSettings.isLiveStreaming(pipeline) ||
+                liveState.state != "OFF"
+''', 'live state visibility')
+settings046 = replaceOnce046(settings046,
+'''            Text(
+                "録音中PCMは専用ASRプロセスへ渡し、暫定表示は30秒窓で更新します。確定処理は前日分を夜間にまとめて実行します。内部5分M4Aは録音継続・障害復旧のための保存単位であり、5分ごとに確定文字起こしを出すための単位ではありません。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+''',
+'''            Text(
+                if (pipeline.executionMode == TranscriptionPipelineSettings.MODE_REALTIME_ONLY)
+                    "録音中PCMは専用ASRプロセスへ渡し、30秒窓で文字起こしします。結果は5分の保存境界で確定保存し、夜間の再文字起こしは行いません。"
+                else
+                    "録音中PCMは専用ASRプロセスへ渡し、暫定表示は30秒窓で更新します。確定処理は前日分を夜間にまとめて実行します。内部5分M4Aは録音継続・障害復旧のための保存単位であり、5分ごとに確定文字起こしを出すための単位ではありません。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+''', 'settings footer')
+writeUtf8046(settingsFile046, settings046)
+
+// Effective debug build version.
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1046)
+            output.versionName.set('0.7.46-debug')
+        }
+    }
+}
+
+if (!pipelineFile046.text.contains('MODE_REALTIME_ONLY')) {
+    throw new GradleException('0.7.46 realtime-only mode missing')
+}
+if (!settingsFile046.text.contains('text = "リアルタイムのみ"')) {
+    throw new GradleException('0.7.46 realtime-only UI missing')
+}
+if (!streamFile046.text.contains('FULL_STREAMING_REALTIME_ONLY_SEGMENT_FINALIZE')) {
+    throw new GradleException('0.7.46 realtime-only persistence missing')
+}
+if (!nightlyFile046.text.contains('REALTIME_ONLY_SEGMENT_NOT_STAGED_NIGHTLY')) {
+    throw new GradleException('0.7.46 realtime-only nightly exclusion missing')
+}
