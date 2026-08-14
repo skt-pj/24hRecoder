@@ -60,7 +60,8 @@ if (recoveryFile.isFile()) {
 // Probe failures before JNI were previously invisible in the synced process log. Keep the probe,
 // but record the Java-side error too so no extra manual test cycle is required if production fails.
 def probeService = readUtf8(probeServiceFile)
-if (!probeService.contains('VULKAN_PROBE_FAILED')) {
+if (!probeService.contains('VULKAN_PROBE_FAILED')
+        && !probeService.contains('CPU_VULKAN_BENCHMARK_PROBE_FAILED')) {
     probeService = replaceExact036(probeService,
             '''        } catch (Throwable error) {
             VulkanProbeStore.fail(this, error.getClass().getSimpleName() + ": "
