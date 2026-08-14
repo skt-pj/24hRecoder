@@ -42,23 +42,38 @@ reset040 = replaceOnce040(
         'persistent reset generation')
 writeUtf8040(resetFile040, reset040)
 
-// Add the destructive action only to Settings, after model/API settings. The card itself states
-// the exact deletion/preservation scope and requires a second confirmation tap.
-def mainFile040 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
-def main040 = readUtf8040(mainFile040)
-main040 = replaceOnce040(
-        main040,
-'''        item { AiSettingsCard() }
-        item {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+// 0.7.39 rewrites several MainActivity sections during Gradle configuration. Keep 0.7.40
+// independent of that generated text by nesting the reset card directly under AiSettingsCard,
+// which is already a Settings item and is not rewritten by the 0.7.39 scripts.
+def aiSettingsFile040 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiSettingsCard.kt')
+def aiSettings040 = readUtf8040(aiSettingsFile040)
+aiSettings040 = replaceOnce040(
+        aiSettings040,
+'''    Card {
+        Column(
 ''',
-'''        item { AiSettingsCard() }
-        item { UserDataResetCard() }
-        item {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+'''    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Card {
+            Column(
 ''',
-        'settings reset card')
-writeUtf8040(mainFile040, main040)
+        'settings reset container start')
+aiSettings040 = replaceOnce040(
+        aiSettings040,
+'''    }
+}
+
+@Composable
+private fun ProviderRow(
+''',
+'''        UserDataResetCard()
+    }
+}
+
+@Composable
+private fun ProviderRow(
+''',
+        'settings reset container end')
+writeUtf8040(aiSettingsFile040, aiSettings040)
 
 androidComponents {
     onVariants(selector().withBuildType('debug')) { variant ->
