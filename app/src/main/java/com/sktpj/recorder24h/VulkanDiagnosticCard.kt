@@ -61,7 +61,7 @@ fun VulkanDiagnosticCard() {
         ) {
             Text("CPU / Vulkan 速度比較", style = MaterialTheme.typography.titleLarge)
             Text(
-                "ボタンを1回押すだけです。保存済みの同じ音声・同じWhisperモデル・同じ区間をCPUと現在のVulkan設定で処理し、速度を直接比較します。新しく話す必要はありません。",
+                "保存済みの同じ音声・同じWhisperモデル・同じ区間で比較します。通常の文字起こし設定は変更しません。Vulkanを先に測り、その後CPUを測ります。",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
@@ -111,7 +111,7 @@ fun VulkanDiagnosticCard() {
             }
 
             Text(
-                "比較対象はモデル読込、2秒音声、10秒音声です。Whisper本体の処理時間と、音声長に対する実時間倍率(RTF)を記録します。通常の文字起こし設定は変更しません。",
+                "比較対象はモデル読込、2秒音声、10秒音声です。CPU試験が3分を超えた場合は診断側で終了し、『クラッシュ』ではなく『処理時間超過』として記録します。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -122,13 +122,17 @@ fun VulkanDiagnosticCard() {
 @Composable
 private fun BenchmarkResultBlock(cpu: BenchmarkProfile?, gpu: BenchmarkProfile?) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        val cpuOutcome = cpu?.outcome
-        val gpuOutcome = gpu?.outcome
-        if (cpuOutcome != null && cpuOutcome != "COMPLETED") {
-            Text("CPU: ${simpleOutcome(cpuOutcome)}", color = MaterialTheme.colorScheme.error)
+        if (cpu != null && cpu.outcome != "COMPLETED") {
+            Text("CPU: ${outcomeText(cpu)}", color = MaterialTheme.colorScheme.error)
+            timeoutPhaseText("CPU", cpu)?.let {
+                Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
-        if (gpuOutcome != null && gpuOutcome != "COMPLETED") {
-            Text("Vulkan: ${simpleOutcome(gpuOutcome)}", color = MaterialTheme.colorScheme.error)
+        if (gpu != null && gpu.outcome != "COMPLETED") {
+            Text("Vulkan: ${outcomeText(gpu)}", color = MaterialTheme.colorScheme.error)
+            timeoutPhaseText("Vulkan", gpu)?.let {
+                Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
 
         comparisonRow("モデル読込", cpu?.modelLoadMs, gpu?.modelLoadMs, null)
@@ -162,6 +166,10 @@ private fun comparisonRow(label: String, cpuMs: Long?, gpuMs: Long?, audioMs: Lo
 
 private data class BenchmarkProfile(
     val outcome: String,
+    val lastPhase: String,
+    val timeoutMs: Long?,
+    val phaseElapsedMs: Long?,
+    val exitReasonName: String?,
     val modelLoadMs: Long?,
     val twoSecondMs: Long?,
     val twoSecondAudioMs: Long?,
@@ -182,6 +190,10 @@ private fun benchmarkProfile(results: JSONArray?, profile: String): BenchmarkPro
         val ten = phaseResult(probeResults, "INFERENCE_10000MS")
         return BenchmarkProfile(
             outcome = outcome,
+            lastPhase = row.optString("lastPhase", ""),
+            timeoutMs = row.longOrNull("timeoutMs"),
+            phaseElapsedMs = row.longOrNull("phaseElapsedMs"),
+            exitReasonName = row.optJSONObject("exit")?.optString("reasonName", "")?.takeIf { it.isNotBlank() },
             modelLoadMs = model?.longOrNull("modelLoadMs"),
             twoSecondMs = two?.longOrNull("whisperFullMs"),
             twoSecondAudioMs = two?.audioDurationMs(),
@@ -228,13 +240,40 @@ private fun formatRtf(processMs: Long?, audioMs: Long): String {
     return String.format(Locale.JAPAN, "%.2f", processMs / audioMs.toDouble())
 }
 
-private fun simpleOutcome(value: String): String = when (value) {
+private fun outcomeText(profile: BenchmarkProfile): String = when (profile.outcome) {
     "COMPLETED" -> "完了"
-    "PROCESS_EXIT" -> "クラッシュ/強制終了"
+    "PROCESS_EXIT" -> when (profile.exitReasonName) {
+        "CRASH_NATIVE" -> "nativeクラッシュ"
+        "CRASH" -> "クラッシュ"
+        "LOW_MEMORY" -> "メモリ不足で終了"
+        "ANR" -> "ANRで終了"
+        else -> "試験プロセス終了（クラッシュ未確認）"
+    }
     "FAILED" -> "エラー"
-    "TIMEOUT" -> "タイムアウト"
-    "START_TIMEOUT" -> "起動失敗"
-    else -> if (value.isBlank()) "-" else value
+    "TIMEOUT" -> {
+        val limit = profile.timeoutMs?.let { formatLimit(it) } ?: "制限時間"
+        "処理時間超過（$limit、クラッシュではない）"
+    }
+    "START_TIMEOUT" -> "試験プロセス起動待ちタイムアウト"
+    else -> if (profile.outcome.isBlank()) "-" else profile.outcome
+}
+
+private fun timeoutPhaseText(label: String, profile: BenchmarkProfile): String? {
+    if (profile.outcome != "TIMEOUT") return null
+    val elapsed = profile.phaseElapsedMs ?: return null
+    return when (profile.lastPhase) {
+        "INFERENCE_2000MS" -> "$label: 2秒音声の文字起こしが${formatMs(elapsed)}以上かかっても未完了"
+        "INFERENCE_10000MS" -> "$label: 10秒音声の文字起こしが${formatMs(elapsed)}以上かかっても未完了"
+        "MODEL_LOAD_ONLY" -> "$label: モデル読込が${formatMs(elapsed)}以上かかっても未完了"
+        "PREPARE_AUDIO" -> "$label: 音声準備が${formatMs(elapsed)}以上かかっても未完了"
+        else -> null
+    }
+}
+
+private fun formatLimit(ms: Long): String = when {
+    ms % 60_000L == 0L -> "${ms / 60_000L}分"
+    ms >= 1_000L -> String.format(Locale.JAPAN, "%.1f秒", ms / 1000.0)
+    else -> "${ms}ms"
 }
 
 private fun simplePhase(value: String): String = when (value) {
