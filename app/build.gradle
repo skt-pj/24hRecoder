@@ -18,7 +18,8 @@ apply from: rootProject.file('gradle/nightly-hourly-copy-fix-0.7.39.gradle')
 apply from: rootProject.file('gradle/user-data-reset-0.7.40.gradle')
 apply from: rootProject.file('gradle/live-segment-editor-0.7.41.gradle')
 apply from: rootProject.file('gradle/live-segment-display-0.7.41.gradle')
-apply from: rootProject.file('gradle/nightly-charging-hour-detail-0.7.42.gradle')
+apply from: rootProject.file('gradle/nightly-charging-0.7.42.gradle')
+apply from: rootProject.file('gradle/hour-detail-0.7.42.gradle')
 
 android {
     namespace 'com.sktpj.recorder24h'
