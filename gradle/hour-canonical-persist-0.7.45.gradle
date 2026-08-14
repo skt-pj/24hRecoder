@@ -1,0 +1,42 @@
+import java.nio.charset.StandardCharsets
+
+def hourlyFile045p = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/HourlyCanonicalTranscriber.java')
+def hourly045p = new String(hourlyFile045p.bytes, StandardCharsets.UTF_8)
+def marker045p = '''        Map<String, JSONArray> perSegment = new LinkedHashMap<>();
+'''
+def insertion045p = '''        List<String> sourceSegmentIds = new ArrayList<>();
+        for (SourcePlan source : sources) sourceSegmentIds.add(source.record.getSegmentId());
+        File hourlyTranscriptFile = HourlyTranscriptionRepository.save(
+                context,
+                hourKey,
+                hourStartAtMs,
+                selectedEngineId,
+                fullText,
+                mappedHourSegments,
+                timeMap,
+                sourceSegmentIds,
+                sourceAudioMs,
+                speechInputMs,
+                removedSilenceMs);
+        log(context, "NIGHTLY_HOUR_CANONICAL_FILE_SAVED", details(
+                "hour", hourKey,
+                "file", hourlyTranscriptFile.getAbsolutePath(),
+                "textChars", fullText.length(),
+                "outputSegmentCount", mappedHourSegments.length(),
+                "silenceCompactionMapped", true,
+                "whisperCallCount", compacted.length == 0 ? 0 : 1));
+
+        Map<String, JSONArray> perSegment = new LinkedHashMap<>();
+'''
+int first045p = hourly045p.indexOf(marker045p)
+int last045p = hourly045p.lastIndexOf(marker045p)
+if (first045p < 0 || first045p != last045p) {
+    throw new GradleException('0.7.45 hourly canonical persistence: expected exactly one marker')
+}
+hourly045p = hourly045p.substring(0, first045p) + insertion045p +
+        hourly045p.substring(first045p + marker045p.length())
+hourlyFile045p.setText(hourly045p, 'UTF-8')
+
+if (!hourlyFile045p.text.contains('NIGHTLY_HOUR_CANONICAL_FILE_SAVED')) {
+    throw new GradleException('0.7.45 hourly canonical durable file patch missing')
+}
