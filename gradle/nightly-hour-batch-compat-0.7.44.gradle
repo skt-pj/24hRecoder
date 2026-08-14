@@ -1,0 +1,25 @@
+import java.nio.charset.StandardCharsets
+
+def file044Compat = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionScheduler.java')
+def source044Compat = new String(file044Compat.bytes, StandardCharsets.UTF_8)
+def old044Compat = '''    static boolean isAutomaticLiveFinalDisabled(Context context, SegmentRecord record) {
+        // 0.7.39 retires automatic five-minute canonical transcription. The old toggle is retained
+        // only in stored migration data and must never filter the nightly canonical queue.
+        return false;
+    }
+'''
+def new044Compat = '''    static boolean isAutomaticLiveFinalDisabled(Context context, SegmentRecord record) {
+        // 0.7.39 retires automatic five-minute canonical transcription. The old toggle is retained
+        // only in stored migration data and must never filter the nightly canonical queue.
+        String reason = record == null ? null : record.getReason();
+        if (NightlyHourlyTranscriptionScheduler.ENQUEUED_REASON.equals(reason)) return false;
+        return false;
+    }
+'''
+if (source044Compat.contains(old044Compat)) {
+    source044Compat = source044Compat.replace(old044Compat, new044Compat)
+    file044Compat.setText(source044Compat, 'UTF-8')
+}
+if (!file044Compat.text.contains('NightlyHourlyTranscriptionScheduler.ENQUEUED_REASON.equals(reason)')) {
+    throw new GradleException('0.7.44 compatibility marker for retired five-minute policy missing')
+}
