@@ -15,6 +15,7 @@ apply from: rootProject.file('gradle/nightly-hourly-transcription-0.7.39.gradle'
 apply from: rootProject.file('gradle/nightly-hourly-transcription-fix-0.7.39.gradle')
 apply from: rootProject.file('gradle/nightly-hourly-transcription-java-fix-0.7.39.gradle')
 apply from: rootProject.file('gradle/nightly-hourly-copy-fix-0.7.39.gradle')
+apply from: rootProject.file('gradle/user-data-reset-0.7.40.gradle')
 
 android {
     namespace 'com.sktpj.recorder24h'
