@@ -11,7 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 
-/** Shared progress/result store for the one-button Vulkan diagnostic sequence. */
+/** Shared progress/result store for the one-button CPU vs production Vulkan benchmark. */
 public final class VulkanAutoProbeStore {
     private static final Object LOCK = new Object();
     private static final String FILE_NAME = "vulkan_auto_probe_status.json";
@@ -30,7 +30,8 @@ public final class VulkanAutoProbeStore {
         }
     }
 
-    public static void start(Context context, int totalProfiles) {
+    public static void start(Context context, int totalProfiles, String modelId,
+                             String audioFile, String audioPath, long sourceDurationMs) {
         JSONObject row = empty();
         try {
             long now = System.currentTimeMillis();
@@ -41,6 +42,12 @@ public final class VulkanAutoProbeStore {
             row.put("currentProfile", JSONObject.NULL);
             row.put("startedAtMs", now);
             row.put("updatedAtMs", now);
+            row.put("modelId", modelId == null ? JSONObject.NULL : modelId);
+            row.put("audioFile", audioFile == null ? JSONObject.NULL : audioFile);
+            row.put("audioPath", audioPath == null ? JSONObject.NULL : audioPath);
+            row.put("sourceDurationMs", sourceDurationMs);
+            row.put("fixedInput", true);
+            row.put("benchmarkDurationsMs", new JSONArray().put(2_000L).put(10_000L));
             row.put("results", new JSONArray());
         } catch (Exception ignored) {}
         write(context, row);
@@ -124,12 +131,13 @@ public final class VulkanAutoProbeStore {
     private static JSONObject empty() {
         JSONObject row = new JSONObject();
         try {
-            row.put("schemaVersion", 1);
+            row.put("schemaVersion", 2);
             row.put("state", "IDLE");
             row.put("phase", "-");
-            row.put("totalProfiles", 5);
+            row.put("totalProfiles", 2);
             row.put("currentIndex", -1);
             row.put("currentProfile", JSONObject.NULL);
+            row.put("fixedInput", true);
             row.put("results", new JSONArray());
         } catch (Exception ignored) {}
         return row;
