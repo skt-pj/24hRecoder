@@ -87,8 +87,13 @@ scheduler048 = replaceOnce048(scheduler048,
                 ExistingPeriodicWorkPolicy.UPDATE,
                 rollup);
 
-        long[] latestClosedHour = periodFor(KIND_HOURLY);
-        enqueueScheduledPeriod(app, KIND_HOURLY, latestClosedHour[0], latestClosedHour[1]);
+        java.time.ZoneId zone = java.time.ZoneId.systemDefault();
+        java.time.ZonedDateTime latestClosedHourEnd = java.time.ZonedDateTime.now(zone)
+                .truncatedTo(java.time.temporal.ChronoUnit.HOURS);
+        long latestClosedHourEndMs = latestClosedHourEnd.toInstant().toEpochMilli();
+        long latestClosedHourStartMs = latestClosedHourEnd.minusHours(1).toInstant().toEpochMilli();
+        enqueueScheduledPeriod(app, KIND_HOURLY,
+                latestClosedHourStartMs, latestClosedHourEndMs);
     }
 ''', 'immediate previous-hour AI target')
 writeUtf8048(schedulerFile048, scheduler048)
@@ -141,7 +146,7 @@ if (!appFile048.text.contains('AiAnalysisScheduler.ensureScheduled(this);')) {
 if (!resetFile048.text.contains('AiAnalysisScheduler.ensureScheduled(app);')) {
     throw new GradleException('0.7.48 reset failure AI recovery missing')
 }
-if (!schedulerFile048.text.contains('latestClosedHour')) {
+if (!schedulerFile048.text.contains('latestClosedHourStartMs')) {
     throw new GradleException('0.7.48 immediate hourly target missing')
 }
 if (!lunaFile048.text.contains('target roughly 8-15 sentences')) {
