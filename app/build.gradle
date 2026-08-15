@@ -30,6 +30,7 @@ apply from: rootProject.file('gradle/hour-canonical-persist-0.7.45.gradle')
 apply from: rootProject.file('gradle/hour-native-diagnostic-0.7.45.gradle')
 apply from: rootProject.file('gradle/realtime-only-mode-0.7.46.gradle')
 apply from: rootProject.file('gradle/vad-diagnostics-presets-0.7.47.gradle')
+apply from: rootProject.file('gradle/vad-diagnostics-presets-fix-0.7.47.gradle')
 
 android {
     namespace 'com.sktpj.recorder24h'
