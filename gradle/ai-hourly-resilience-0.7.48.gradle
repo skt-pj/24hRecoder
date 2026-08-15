@@ -1,0 +1,149 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8048 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8048 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce048 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.48 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// A completed hour with empty canonical text must never display the legacy nightly-wait message.
+def mainFile048 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+def main048 = readUtf8048(mainFile048)
+main048 = replaceOnce048(main048,
+'''    val conversation = when {
+        group.text.isNotBlank() -> group.text
+        group.records.any { it.status == "CORRUPT" } -> "一部の録音データを確認できません"
+        else -> "確定文字起こしは夜間にまとめて実行します"
+    }
+''',
+'''    val conversation = when {
+        group.text.isNotBlank() -> group.text
+        group.canonical -> "この1時間の確定文字起こしは空です"
+        group.records.any { it.status == "CORRUPT" } -> "一部の録音データを確認できません"
+        else -> "確定文字起こしは夜間にまとめて実行します"
+    }
+''', 'canonical empty hour wording')
+writeUtf8048(mainFile048, main048)
+
+// Recreate AI periodic work on every main-process start. Unique periodic UPDATE keeps this idempotent.
+def appFile048 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/RecorderApplication.java')
+def app048 = readUtf8048(appFile048)
+app048 = replaceOnce048(app048,
+'''import com.sktpj.recorder24h.service.RecorderService;
+''',
+'''import com.sktpj.recorder24h.ai.AiAnalysisScheduler;
+import com.sktpj.recorder24h.service.RecorderService;
+''', 'application AI scheduler import')
+app048 = replaceOnce048(app048,
+'''        DriveLogSync.ensureScheduled(this);
+        // Apply the 0.7.39 policy before legacy queue recovery can restart old automatic
+''',
+'''        DriveLogSync.ensureScheduled(this);
+        AiAnalysisScheduler.ensureScheduled(this);
+        // Apply the 0.7.39 policy before legacy queue recovery can restart old automatic
+''', 'application AI schedule repair')
+writeUtf8048(appFile048, app048)
+
+// A partial reset can fail after cancelling ai-analysis. Always restore periodic wakeups even on failure.
+def resetFile048 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/UserDataResetManager.java')
+def reset048 = readUtf8048(resetFile048)
+reset048 = replaceOnce048(reset048,
+'''        } catch (Exception error) {
+            try {
+                JSONObject details = new JSONObject();
+''',
+'''        } catch (Exception error) {
+            try {
+                AiAnalysisScheduler.ensureScheduled(app);
+            } catch (Exception ignored) {
+            }
+            try {
+                NightlyHourlyTranscriptionScheduler.ensureScheduled(app);
+            } catch (Exception ignored) {
+            }
+            try {
+                JSONObject details = new JSONObject();
+''', 'reset failure scheduler recovery')
+writeUtf8048(resetFile048, reset048)
+
+// When periodic scheduling is recreated, enqueue the immediately preceding closed hour now rather
+// than waiting up to another hour for the periodic worker to fire.
+def schedulerFile048 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/AiAnalysisScheduler.java')
+def scheduler048 = readUtf8048(schedulerFile048)
+scheduler048 = replaceOnce048(scheduler048,
+'''        manager.enqueueUniquePeriodicWork(
+                PERIODIC_ROLLUP,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                rollup);
+    }
+''',
+'''        manager.enqueueUniquePeriodicWork(
+                PERIODIC_ROLLUP,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                rollup);
+
+        long[] latestClosedHour = periodFor(KIND_HOURLY);
+        enqueueScheduledPeriod(app, KIND_HOURLY, latestClosedHour[0], latestClosedHour[1]);
+    }
+''', 'immediate previous-hour AI target')
+writeUtf8048(schedulerFile048, scheduler048)
+
+// Hourly Luna output was explicitly configured for low reasoning/low verbosity and a concise
+// summary. Increase depth while remaining evidence-only and proportional for sparse hours.
+def lunaFile048 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/OpenAiLunaClient.java')
+def luna048 = readUtf8048(lunaFile048)
+luna048 = replaceOnce048(luna048,
+'''        return request(apiKey, prompt, "low", "hourly_analysis", hourlySchema(), 8_000);
+''',
+'''        return request(apiKey, prompt, "medium", "hourly_analysis", hourlySchema(), 16_000);
+''', 'hourly reasoning and output budget')
+luna048 = replaceOnce048(luna048,
+'''        request.put("text", new JSONObject()
+                .put("verbosity", "low")
+''',
+'''        request.put("text", new JSONObject()
+                .put("verbosity", "hourly_analysis".equals(schemaName) ? "medium" : "low")
+''', 'hourly response verbosity')
+luna048 = replaceOnce048(luna048,
+'''                "Keep the summary concise. Preserve timestamps when they are useful. " +
+                "For quotes, only copy wording that is actually present in the transcript.\\n\\n" +
+''',
+'''                "Do not compress a content-rich hour into a generic short summary. When the evidence supports it, " +
+                "make the summary detailed enough to reconstruct what mattered during the hour: preserve chronology, " +
+                "topic transitions, concrete claims, decisions and their reasons, tasks, ideas, unresolved points, and relevant context. " +
+                "For a content-rich hour, target roughly 8-15 sentences; for sparse input, stay proportional and do not add filler. " +
+                "Populate every structured field with all materially distinct items supported by the transcript, not only the top one or two. " +
+                "Make topic entries specific rather than generic, and preserve timestamps whenever they help connect evidence to events. " +
+                "For quotes, only copy wording that is actually present in the transcript.\\n\\n" +
+''', 'deepen hourly prompt')
+writeUtf8048(lunaFile048, luna048)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1048)
+            output.versionName.set('0.7.48-debug')
+        }
+    }
+}
+
+if (!mainFile048.text.contains('group.canonical -> "この1時間の確定文字起こしは空です"')) {
+    throw new GradleException('0.7.48 canonical empty wording missing')
+}
+if (!appFile048.text.contains('AiAnalysisScheduler.ensureScheduled(this);')) {
+    throw new GradleException('0.7.48 startup AI schedule repair missing')
+}
+if (!resetFile048.text.contains('AiAnalysisScheduler.ensureScheduled(app);')) {
+    throw new GradleException('0.7.48 reset failure AI recovery missing')
+}
+if (!schedulerFile048.text.contains('latestClosedHour')) {
+    throw new GradleException('0.7.48 immediate hourly target missing')
+}
+if (!lunaFile048.text.contains('target roughly 8-15 sentences')) {
+    throw new GradleException('0.7.48 detailed hourly prompt missing')
+}
