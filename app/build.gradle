@@ -38,6 +38,7 @@ apply from: rootProject.file('gradle/capture-silenced-retry-0.7.50.gradle')
 apply from: rootProject.file('gradle/ai-notebook-editorial-0.7.51.gradle')
 apply from: rootProject.file('gradle/ai-notebook-tap-detail-0.7.52.gradle')
 apply from: rootProject.file('gradle/ai-notebook-visual-hour-detail-0.7.53.gradle')
+apply from: rootProject.file('gradle/ai-notebook-restore-actions-0.7.54.gradle')
 
 android {
     namespace 'com.sktpj.recorder24h'
