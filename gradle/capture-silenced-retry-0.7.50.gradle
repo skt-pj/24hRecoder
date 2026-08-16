@@ -1,0 +1,120 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8050 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8050 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce050 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.50 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+def recorderServiceFile050 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/service/RecorderService.java')
+def recorderService050 = readUtf8050(recorderServiceFile050)
+
+recorderService050 = replaceOnce050(recorderService050,
+'''    private static final long AUTO_RECOVERY_BURST_WINDOW_MS = 60_000L;
+    private static final int MAX_AUTO_RECOVERY_ATTEMPTS_PER_WINDOW = 3;
+''',
+'''    private static final long AUTO_RECOVERY_BURST_WINDOW_MS = 60_000L;
+    private static final int MAX_AUTO_RECOVERY_ATTEMPTS_PER_WINDOW = 3;
+    private static final long CAPTURE_SILENCED_RETRY_INTERVAL_MS = 60_000L;
+''', 'capture silenced retry interval')
+
+recorderService050 = replaceOnce050(recorderService050,
+'''        AacSegmentRecorder recorderToStop;
+        boolean startWithoutExistingThread;
+        String reason = health.code + ": " + health.detail;
+        if (!registerAutomaticRecoveryAttempt(reason)) {
+            return;
+        }
+        synchronized (lock) {
+            if (recoveryInProgress) {
+                return;
+            }
+            recoveryInProgress = true;
+            recoveryStartedAtMs = System.currentTimeMillis();
+            pendingRecoveryReason = reason;
+            RecorderStateStore.write(this, "RECOVERING", activeSegmentId, reason);
+            recorderToStop = recorder;
+            startWithoutExistingThread = recorderThread == null || !recorderThread.isAlive();
+        }
+''',
+'''        AacSegmentRecorder recorderToStop;
+        boolean startWithoutExistingThread;
+        String reason = health.code + ": " + health.detail;
+        boolean captureSilenced = "CAPTURE_SILENCED".equals(health.code);
+
+        synchronized (lock) {
+            if (recoveryInProgress) {
+                return;
+            }
+        }
+
+        if (captureSilenced) {
+            long now = System.currentTimeMillis();
+            long retryAtMs = now + CAPTURE_SILENCED_RETRY_INTERVAL_MS;
+            synchronized (lock) {
+                autoRecoveryNotBeforeMs = Math.max(autoRecoveryNotBeforeMs, retryAtMs);
+            }
+            try {
+                JSONObject d = new JSONObject();
+                d.put("reason", reason);
+                d.put("retryAtMs", retryAtMs);
+                d.put("retryDelayMs", CAPTURE_SILENCED_RETRY_INTERVAL_MS);
+                AppLogger.event(this, "RECORDER_CAPTURE_SILENCED_RETRY_SCHEDULED", d);
+            } catch (Exception ignored) {
+            }
+        } else if (!registerAutomaticRecoveryAttempt(reason)) {
+            return;
+        }
+
+        synchronized (lock) {
+            if (recoveryInProgress) {
+                return;
+            }
+            recoveryInProgress = true;
+            recoveryStartedAtMs = System.currentTimeMillis();
+            pendingRecoveryReason = reason;
+            RecorderStateStore.write(this, "RECOVERING", activeSegmentId, reason);
+            recorderToStop = recorder;
+            startWithoutExistingThread = recorderThread == null || !recorderThread.isAlive();
+        }
+''', 'capture silenced retry scheduling')
+
+recorderService050 = replaceOnce050(recorderService050,
+'''        updateNotification("録音異常を検知。自動再試行します");
+
+        if (startWithoutExistingThread) {
+''',
+'''        if (captureSilenced) {
+            updateNotification("他のアプリがマイクを使用中です。約1分後に自動再試行します");
+        } else {
+            updateNotification("録音異常を検知。自動再試行します");
+        }
+
+        if (startWithoutExistingThread) {
+''', 'capture silenced notification')
+
+writeUtf8050(recorderServiceFile050, recorderService050)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1050)
+            output.versionName.set('0.7.50-debug')
+        }
+    }
+}
+
+if (!recorderServiceFile050.text.contains('CAPTURE_SILENCED_RETRY_INTERVAL_MS = 60_000L')) {
+    throw new GradleException('0.7.50 capture silenced retry interval missing')
+}
+if (!recorderServiceFile050.text.contains('RECORDER_CAPTURE_SILENCED_RETRY_SCHEDULED')) {
+    throw new GradleException('0.7.50 capture silenced retry log missing')
+}
+if (!recorderServiceFile050.text.contains('約1分後に自動再試行します')) {
+    throw new GradleException('0.7.50 capture silenced retry notification missing')
+}
