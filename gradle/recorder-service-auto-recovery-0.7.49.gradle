@@ -1,0 +1,136 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8049 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8049 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce049 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.49 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+def recorderServiceFile049 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/service/RecorderService.java')
+def recorderService049 = readUtf8049(recorderServiceFile049)
+
+recorderService049 = replaceOnce049(recorderService049,
+'''    private long autoRecoveryWindowStartedAtMs;
+    private int autoRecoveryAttempts;
+    private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
+''',
+'''    private long autoRecoveryWindowStartedAtMs;
+    private int autoRecoveryAttempts;
+    private volatile long autoRecoveryNotBeforeMs;
+    private final Handler watchdogHandler = new Handler(Looper.getMainLooper());
+''', 'recovery backoff field')
+
+recorderService049 = replaceOnce049(recorderService049,
+'''    private void startRecorderIfNeeded() {
+        if (!RecordingIntentStore.isRequested(this) || serviceDestroyed) {
+            return;
+        }
+
+        String blocker = currentBlockingReason(null);
+''',
+'''    private void startRecorderIfNeeded() {
+        if (!RecordingIntentStore.isRequested(this) || serviceDestroyed) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        long notBefore = autoRecoveryNotBeforeMs;
+        if (notBefore > now) {
+            watchdogHandler.postDelayed(this::startRecorderIfNeeded, notBefore - now);
+            return;
+        }
+        autoRecoveryNotBeforeMs = 0L;
+
+        String blocker = currentBlockingReason(null);
+''', 'deferred recorder start gate')
+
+recorderService049 = replaceOnce049(recorderService049,
+'''                        watchdogHandler.post(RecorderService.this::startRecorderIfNeeded);
+                        return;
+''',
+'''                        long delayMs = Math.max(0L,
+                                autoRecoveryNotBeforeMs - System.currentTimeMillis());
+                        if (delayMs > 0L) {
+                            watchdogHandler.postDelayed(
+                                    RecorderService.this::startRecorderIfNeeded,
+                                    delayMs);
+                        } else {
+                            watchdogHandler.post(RecorderService.this::startRecorderIfNeeded);
+                        }
+                        return;
+''', 'recorder thread deferred restart')
+
+recorderService049 = replaceOnce049(recorderService049,
+'''        if (attempts <= MAX_AUTO_RECOVERY_ATTEMPTS_PER_WINDOW) {
+            return true;
+        }
+
+        failPermanently(
+                "短時間に録音異常が繰り返されたため自動再試行を停止しました。最終理由: " + reason,
+                null);
+        return false;
+''',
+'''        if (attempts <= MAX_AUTO_RECOVERY_ATTEMPTS_PER_WINDOW) {
+            return true;
+        }
+
+        long retryAtMs;
+        synchronized (lock) {
+            retryAtMs = autoRecoveryWindowStartedAtMs + AUTO_RECOVERY_BURST_WINDOW_MS;
+            autoRecoveryNotBeforeMs = Math.max(autoRecoveryNotBeforeMs, retryAtMs);
+        }
+        try {
+            JSONObject d = new JSONObject();
+            d.put("reason", reason);
+            d.put("attemptsInWindow", attempts);
+            d.put("retryAtMs", retryAtMs);
+            d.put("retryDelayMs", Math.max(0L, retryAtMs - now));
+            AppLogger.event(this, "RECORDER_AUTO_RECOVERY_DEFERRED", d);
+        } catch (Exception ignored) {
+        }
+        updateNotification("録音異常が継続しています。サービスを維持して自動再試行します");
+        return true;
+''', 'burst recovery stays requested')
+
+recorderService049 = replaceOnce049(recorderService049,
+'''    private void resetAutomaticRecoveryWindow() {
+        synchronized (lock) {
+            autoRecoveryWindowStartedAtMs = 0L;
+            autoRecoveryAttempts = 0;
+        }
+    }
+''',
+'''    private void resetAutomaticRecoveryWindow() {
+        synchronized (lock) {
+            autoRecoveryWindowStartedAtMs = 0L;
+            autoRecoveryAttempts = 0;
+            autoRecoveryNotBeforeMs = 0L;
+        }
+    }
+''', 'manual start clears recovery backoff')
+
+writeUtf8049(recorderServiceFile049, recorderService049)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1049)
+            output.versionName.set('0.7.49-debug')
+        }
+    }
+}
+
+if (!recorderServiceFile049.text.contains('RECORDER_AUTO_RECOVERY_DEFERRED')) {
+    throw new GradleException('0.7.49 deferred recovery log missing')
+}
+if (!recorderServiceFile049.text.contains('autoRecoveryNotBeforeMs')) {
+    throw new GradleException('0.7.49 recovery backoff field missing')
+}
+if (recorderServiceFile049.text.contains('短時間に録音異常が繰り返されたため自動再試行を停止しました')) {
+    throw new GradleException('0.7.49 terminal burst-stop behavior still present')
+}
