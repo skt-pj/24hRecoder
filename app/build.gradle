@@ -35,6 +35,7 @@ apply from: rootProject.file('gradle/vad-diagnostics-presets-java-fix-0.7.47.gra
 apply from: rootProject.file('gradle/ai-hourly-resilience-0.7.48.gradle')
 apply from: rootProject.file('gradle/recorder-service-auto-recovery-0.7.49.gradle')
 apply from: rootProject.file('gradle/capture-silenced-retry-0.7.50.gradle')
+apply from: rootProject.file('gradle/ai-notebook-editorial-0.7.51.gradle')
 
 android {
     namespace 'com.sktpj.recorder24h'
