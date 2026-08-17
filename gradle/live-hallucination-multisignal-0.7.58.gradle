@@ -1,0 +1,315 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8058 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8058 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce058 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.58 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// Capture Silero probability evidence during the offline pass already used to compact each
+// realtime 30-second window. This does not add another VAD run.
+def vadFile058 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/StreamingVadStore.java')
+def vad058 = readUtf8058(vadFile058)
+vad058 = replaceOnce058(vad058,
+'''            long startedAt = System.currentTimeMillis();
+            long frameIndex = 0L;
+            int offset = 0;
+''',
+'''            long startedAt = System.currentTimeMillis();
+            long frameIndex = 0L;
+            double probabilitySum = 0.0;
+            double speechProbabilitySum = 0.0;
+            double maxSpeechProbability = 0.0;
+            long probabilityCount = 0L;
+            long speechProbabilityCount = 0L;
+            int offset = 0;
+''', 'VAD evidence counters')
+vad058 = replaceOnce058(vad058,
+'''                        for (int i = 0; i < probabilities.length(); i++) {
+                            long startUs = frameIndex * frameUs;
+                            localDetector.accept(probabilities.optDouble(i, 0.0), startUs, startUs + frameUs);
+                            frameIndex++;
+                        }
+''',
+'''                        for (int i = 0; i < probabilities.length(); i++) {
+                            long startUs = frameIndex * frameUs;
+                            double probability = probabilities.optDouble(i, 0.0);
+                            probabilitySum += probability;
+                            probabilityCount++;
+                            maxSpeechProbability = Math.max(maxSpeechProbability, probability);
+                            if (probability >= THRESHOLD) {
+                                speechProbabilitySum += probability;
+                                speechProbabilityCount++;
+                            }
+                            localDetector.accept(probability, startUs, startUs + frameUs);
+                            frameIndex++;
+                        }
+''', 'VAD evidence accumulation')
+vad058 = replaceOnce058(vad058,
+'''                return new Snapshot(true, false, true, "streaming-silero-offline",
+                        Math.max(0L, System.currentTimeMillis() - startedAt), ranges, null);
+''',
+'''                double meanSpeechProbability = probabilityCount > 0L
+                        ? probabilitySum / probabilityCount : 0.0;
+                double meanDetectedSpeechProbability = speechProbabilityCount > 0L
+                        ? speechProbabilitySum / speechProbabilityCount : 0.0;
+                double aboveThresholdFraction = probabilityCount > 0L
+                        ? speechProbabilityCount / (double) probabilityCount : 0.0;
+                return new Snapshot(true, false, true, "streaming-silero-offline",
+                        Math.max(0L, System.currentTimeMillis() - startedAt), ranges, null,
+                        meanSpeechProbability, meanDetectedSpeechProbability,
+                        maxSpeechProbability, aboveThresholdFraction);
+''', 'VAD evidence result')
+vad058 = replaceOnce058(vad058,
+'''        public final List<Range> ranges;
+        public final String error;
+
+        Snapshot(boolean available, boolean realtime, boolean complete, String source,
+                 long detectMs, List<Range> ranges, String error) {
+            this.available = available;
+            this.realtime = realtime;
+            this.complete = complete;
+            this.source = source;
+            this.detectMs = detectMs;
+            this.ranges = ranges;
+            this.error = error;
+        }
+''',
+'''        public final List<Range> ranges;
+        public final String error;
+        public final double meanSpeechProbability;
+        public final double meanDetectedSpeechProbability;
+        public final double maxSpeechProbability;
+        public final double aboveThresholdFraction;
+
+        Snapshot(boolean available, boolean realtime, boolean complete, String source,
+                 long detectMs, List<Range> ranges, String error) {
+            this(available, realtime, complete, source, detectMs, ranges, error,
+                    -1.0, -1.0, -1.0, -1.0);
+        }
+
+        Snapshot(boolean available, boolean realtime, boolean complete, String source,
+                 long detectMs, List<Range> ranges, String error,
+                 double meanSpeechProbability, double meanDetectedSpeechProbability,
+                 double maxSpeechProbability, double aboveThresholdFraction) {
+            this.available = available;
+            this.realtime = realtime;
+            this.complete = complete;
+            this.source = source;
+            this.detectMs = detectMs;
+            this.ranges = ranges;
+            this.error = error;
+            this.meanSpeechProbability = meanSpeechProbability;
+            this.meanDetectedSpeechProbability = meanDetectedSpeechProbability;
+            this.maxSpeechProbability = maxSpeechProbability;
+            this.aboveThresholdFraction = aboveThresholdFraction;
+        }
+''', 'Snapshot probability evidence')
+writeUtf8058(vadFile058, vad058)
+
+// Keep the 0.7.26 protection for quiet genuine speech, but add a second-stage decision that
+// combines pre-denoise acoustics, Silero evidence and Whisper confidence. Known outro phrases are
+// only a risk signal; phrase text by itself never causes suppression.
+def guardFile058 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/LiveWhisperNoSpeechGuard.java')
+def guard058 = readUtf8058(guardFile058)
+def guardMethod058 = '''    static Output filterWithEvidence(Context context, String route,
+                                     AudioPreprocessor.Result front,
+                                     StreamingVadStore.Snapshot vad,
+                                     String text, JSONArray segments) {
+        String safeText = text == null ? "" : text.trim();
+        JSONArray safeSegments = segments == null ? new JSONArray() : segments;
+        if (safeText.isEmpty() || safeSegments.length() == 0 || front == null || vad == null) {
+            return new Output(safeText, safeSegments);
+        }
+
+        long speechMs = 0L;
+        for (StreamingVadStore.Range range : vad.ranges) {
+            speechMs += Math.max(0L, range.endMs - range.startMs);
+        }
+        long sourceMs = Math.max(1L, front.samples.length * 1000L / 16_000L);
+        double speechFraction = Math.min(1.0, speechMs / (double) sourceMs);
+
+        double tokenProbabilitySum = 0.0;
+        int tokenProbabilityCount = 0;
+        double noSpeechSum = 0.0;
+        int noSpeechCount = 0;
+        double maxNoSpeech = 0.0;
+        for (int i = 0; i < safeSegments.length(); i++) {
+            JSONObject row = safeSegments.optJSONObject(i);
+            if (row == null || row.optString("text", "").trim().isEmpty()) continue;
+            if (row.has("avgTokenProbability")) {
+                double value = row.optDouble("avgTokenProbability", -1.0);
+                if (value >= 0.0) {
+                    tokenProbabilitySum += value;
+                    tokenProbabilityCount++;
+                }
+            }
+            if (row.has("noSpeechProbability")) {
+                double value = row.optDouble("noSpeechProbability", -1.0);
+                if (value >= 0.0) {
+                    noSpeechSum += value;
+                    noSpeechCount++;
+                    maxNoSpeech = Math.max(maxNoSpeech, value);
+                }
+            }
+        }
+        double meanTokenProbability = tokenProbabilityCount > 0
+                ? tokenProbabilitySum / tokenProbabilityCount : -1.0;
+        double meanNoSpeech = noSpeechCount > 0 ? noSpeechSum / noSpeechCount : -1.0;
+
+        boolean lowSnr = front.snrProxyDb < 6.0 || front.boostSuppressedForLowSnr;
+        boolean weakVad = vad.meanDetectedSpeechProbability >= 0.0
+                && vad.meanDetectedSpeechProbability < 0.68;
+        boolean sparseVad = vad.aboveThresholdFraction >= 0.0
+                && vad.aboveThresholdFraction < 0.055;
+        boolean shortSpeech = speechMs > 0L && speechMs < 1_500L;
+        boolean lowTokenConfidence = meanTokenProbability >= 0.0 && meanTokenProbability < 0.52;
+        boolean elevatedNoSpeech = meanNoSpeech >= 0.35 || maxNoSpeech >= 0.50;
+        boolean weakAcousticActivity = front.activeFrameFraction < 0.08;
+        boolean knownOutro = isKnownOutroHallucination(safeText);
+
+        int risk = 0;
+        if (lowSnr) risk++;
+        if (weakVad) risk++;
+        if (sparseVad) risk++;
+        if (shortSpeech) risk++;
+        if (lowTokenConfidence) risk++;
+        if (elevatedNoSpeech) risk++;
+        if (weakAcousticActivity) risk++;
+        if (knownOutro) risk += 2;
+
+        boolean suppressKnownOutro = knownOutro && risk >= 4
+                && (lowSnr || weakVad || sparseVad)
+                && (lowTokenConfidence || elevatedNoSpeech || weakAcousticActivity || shortSpeech);
+        boolean suppressGeneral = !knownOutro && risk >= 5
+                && (lowTokenConfidence || elevatedNoSpeech)
+                && (weakVad || sparseVad || lowSnr);
+        boolean suppress = suppressKnownOutro || suppressGeneral;
+
+        if (context != null) {
+            try {
+                JSONObject details = new JSONObject()
+                        .put("route", route)
+                        .put("suppressed", suppress)
+                        .put("knownOutroPattern", knownOutro)
+                        .put("riskScore", risk)
+                        .put("textChars", safeText.length())
+                        .put("sourceMs", sourceMs)
+                        .put("vadSpeechMs", speechMs)
+                        .put("vadSpeechFraction", speechFraction)
+                        .put("vadRangeCount", vad.ranges.size())
+                        .put("vadMeanProbability", vad.meanSpeechProbability)
+                        .put("vadMeanDetectedProbability", vad.meanDetectedSpeechProbability)
+                        .put("vadMaxProbability", vad.maxSpeechProbability)
+                        .put("vadAboveThresholdFraction", vad.aboveThresholdFraction)
+                        .put("inputRms", front.input.rms)
+                        .put("inputPeak", front.input.peak)
+                        .put("snrProxyDb", front.snrProxyDb)
+                        .put("activeFrameFraction", front.activeFrameFraction)
+                        .put("meanTokenProbability", meanTokenProbability)
+                        .put("meanNoSpeechProbability", meanNoSpeech)
+                        .put("maxNoSpeechProbability", maxNoSpeech)
+                        .put("automaticFallback", false);
+                AppLogger.event(context.getApplicationContext(),
+                        suppress ? "FULL_STREAMING_MULTISIGNAL_SUPPRESSED"
+                                : "FULL_STREAMING_MULTISIGNAL_ACCEPTED",
+                        details);
+            } catch (Exception ignored) {
+            }
+        }
+        return suppress ? new Output("", new JSONArray()) : new Output(safeText, safeSegments);
+    }
+
+    private static boolean isKnownOutroHallucination(String text) {
+        if (text == null || text.trim().isEmpty()) return false;
+        String compact = text.replaceAll("[\\s\\p{Punct}。、，．！？!？『』「」【】（）()〜～…]", "");
+        return compact.contains("ご視聴ありがとうございました")
+                || compact.contains("ご視聴ありがとう")
+                || compact.contains("チャンネル登録")
+                || compact.equals("ありがとうございました");
+    }
+
+'''
+guard058 = replaceOnce058(guard058,
+        '    private static void logSuppressed(Context context, String route, String reason,\n',
+        guardMethod058 + '    private static void logSuppressed(Context context, String route, String reason,\n',
+        'multi-signal guard insertion')
+writeUtf8058(guardFile058, guard058)
+
+// Feed the evidence from the existing 30-second VAD pass into the guard after Whisper. The
+// original 0.7.26 pre-ASR rule remains unchanged: only exact digital silence is dropped there.
+def streamFile058 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/StreamingTranscriptionService.java')
+def stream058 = readUtf8058(streamFile058)
+stream058 = replaceOnce058(stream058,
+'''        SpeechTimeMap.MapResult provisionalTimeMap = null;
+        if (partial || TranscriptionPipelineSettings.MODE_REALTIME_ONLY.equals(
+                accumulator.config.snapshot.executionMode)) {
+            StreamingVadStore.Snapshot previewVad = StreamingVadStore.analyzeOffline(this, asrSamples);
+''',
+'''        SpeechTimeMap.MapResult provisionalTimeMap = null;
+        StreamingVadStore.Snapshot hallucinationVadEvidence = null;
+        if (partial || TranscriptionPipelineSettings.MODE_REALTIME_ONLY.equals(
+                accumulator.config.snapshot.executionMode)) {
+            StreamingVadStore.Snapshot previewVad = StreamingVadStore.analyzeOffline(this, asrSamples);
+            hallucinationVadEvidence = previewVad;
+''', 'retain VAD evidence')
+stream058 = replaceOnce058(stream058,
+'''                    .put("vadRangeCount", previewVad.ranges.size())
+                    .put("vadDetectMs", previewVad.detectMs)
+                    .put("whisperInvoked", compacted.samples.length > 0)
+''',
+'''                    .put("vadRangeCount", previewVad.ranges.size())
+                    .put("vadDetectMs", previewVad.detectMs)
+                    .put("vadMeanProbability", previewVad.meanSpeechProbability)
+                    .put("vadMeanDetectedProbability", previewVad.meanDetectedSpeechProbability)
+                    .put("vadMaxProbability", previewVad.maxSpeechProbability)
+                    .put("vadAboveThresholdFraction", previewVad.aboveThresholdFraction)
+                    .put("whisperInvoked", compacted.samples.length > 0)
+''', 'log VAD probability evidence')
+stream058 = replaceOnce058(stream058,
+'''        if (provisionalTimeMap != null) {
+            segments = provisionalTimeMap.remapSegments(segments);
+        }
+        if (!partial && TranscriptionPipelineSettings.SPEAKER_SHERPA_CPU.equals(accumulator.config.speakerBackend)) {
+''',
+'''        if (provisionalTimeMap != null) {
+            segments = provisionalTimeMap.remapSegments(segments);
+        }
+        if (!TranscriptionPipelineSettings.ASR_ANDROID_ON_DEVICE.equals(accumulator.config.asrBackend)
+                && hallucinationVadEvidence != null) {
+            LiveWhisperNoSpeechGuard.Output guarded = LiveWhisperNoSpeechGuard.filterWithEvidence(
+                    this, accumulator.config.liveWhisperRoute, front,
+                    hallucinationVadEvidence, text, segments);
+            text = guarded.text;
+            segments = guarded.segments;
+        }
+        if (!partial && TranscriptionPipelineSettings.SPEAKER_SHERPA_CPU.equals(accumulator.config.speakerBackend)) {
+''', 'apply multi-signal guard')
+writeUtf8058(streamFile058, stream058)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1058)
+            output.versionName.set('0.7.58-debug')
+        }
+    }
+}
+
+if (!guardFile058.text.contains('FULL_STREAMING_MULTISIGNAL_SUPPRESSED')) {
+    throw new GradleException('0.7.58 multi-signal suppression missing')
+}
+if (!streamFile058.text.contains('hallucinationVadEvidence')) {
+    throw new GradleException('0.7.58 VAD evidence bridge missing')
+}
+if (!vadFile058.text.contains('meanDetectedSpeechProbability')) {
+    throw new GradleException('0.7.58 VAD probability metrics missing')
+}
+if (!guardFile058.text.contains('input.rms == 0.0 && input.peak == 0.0')) {
+    throw new GradleException('0.7.58 unexpectedly changed 0.7.26 quiet-speech protection')
+}
