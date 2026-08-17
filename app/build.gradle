@@ -41,7 +41,7 @@ apply from: rootProject.file('gradle/ai-notebook-visual-hour-detail-0.7.53.gradl
 apply from: rootProject.file('gradle/ai-notebook-restore-actions-0.7.54.gradle')
 apply from: rootProject.file('gradle/ai-notebook-mind-elixir-0.7.55.gradle')
 apply from: rootProject.file('gradle/ai-notebook-mind-elixir-assets-fix-0.7.55.gradle')
-apply from: rootProject.file('gradle/ai-notebook-mind-elixir-period-schema-0.7.55.gradle')
+apply from: rootProject.file('gradle/ai-notebook-mind-elixir-period-safe-0.7.55.gradle')
 
 android {
     namespace 'com.sktpj.recorder24h'
