@@ -1,0 +1,206 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8057s = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8057s = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOptional057s = { String source, String oldText, String newText ->
+    source.contains(oldText) ? source.replace(oldText, newText) : source
+}
+
+// Complete the user-facing copy audit across settings, queue and diagnostics.
+// Keep values/states/errors/destructive confirmations; remove narrative product/development notes.
+
+def backendFile057s = rootProject.file('app/src/main/java/com/sktpj/recorder24h/TranscriptionBackendSettingsCard.kt')
+def backend057s = readUtf8057s(backendFile057s)
+backend057s = replaceOptional057s(backend057s,
+'''            Text(
+                "各処理を明示的に選択します。選択した経路が利用できない・失敗した場合も、別のCPU/GPU/ASRへ自動切替はしません。",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+''', '')
+backend057s = replaceOptional057s(backend057s,
+'''            if (pipeline.executionMode == TranscriptionPipelineSettings.MODE_LIVE_STREAMING) {
+                Text(
+                    "録音中は30秒単位の暫定文字起こしだけを表示します。発話ごとのWhisper実行と5分ごとの確定Whisperは行いません。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+''', '')
+backend057s = replaceOptional057s(backend057s,
+'''            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("確定文字起こし", fontWeight = FontWeight.SemiBold)
+                Text(
+                    "前日分を端末のローカル時刻 ${NightlyHourlyTranscriptionScheduler.NIGHT_START_HOUR_LOCAL}:00 以降にまとめて処理し、履歴では1時間単位にまとめます。録音ファイルは安全性のため内部では5分分割のまま保持します。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+''',
+'''            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("確定文字起こし", fontWeight = FontWeight.SemiBold)
+                Text(
+                    "前日分  •  ${NightlyHourlyTranscriptionScheduler.NIGHT_START_HOUR_LOCAL}:00以降  •  1時間単位",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+''')
+backend057s = replaceOptional057s(backend057s,
+'''                Text(
+                    "30秒暫定表示には「Silero ストリーミング」を選択してください。自動変更はしません。",
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.SemiBold
+                )
+''',
+'''                Text(
+                    "30秒暫定: Silero ストリーミングが必要",
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.SemiBold
+                )
+''')
+backend057s = replaceOptional057s(backend057s,
+'''                Text(
+                    if (pipeline.liveWhisperRoute == TranscriptionPipelineSettings.LIVE_WHISPER_POSTPROCESS_NATIVE)
+                        "通常JNIは30秒の暫定窓ごとにモデルをロード・解放します。"
+                    else
+                        "モデル常駐は同じモデルを保持して30秒窓を順次処理します。どちらも選択backendのままで、自動フォールバックしません。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+''', '')
+backend057s = replaceOptional057s(backend057s,
+'''            Text(
+                "録音中PCMは専用ASRプロセスへ渡し、暫定表示は30秒窓で更新します。確定処理は前日分を夜間にまとめて実行します。内部5分M4Aは録音継続・障害復旧のための保存単位であり、5分ごとに確定文字起こしを出すための単位ではありません。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+''', '')
+writeUtf8057s(backendFile057s, backend057s)
+
+def whisperFile057s = rootProject.file('app/src/main/java/com/sktpj/recorder24h/WhisperModelSettingsCard.kt')
+def whisper057s = readUtf8057s(whisperFile057s)
+whisper057s = replaceOptional057s(whisper057s,
+'''                Text(
+                    "リアルタイムの発話ごとの認識に使うWhisperモデルです。5分後の確定・通常文字起こしモデルとは独立して選択します。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+''', '')
+whisper057s = replaceOptional057s(whisper057s,
+'''                Text(
+                    "録音中のモデル変更は次の5分セグメント境界からライブ処理へ反映します。モデルを分けても自動フォールバックは行いません。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+''', '')
+whisper057s = replaceOptional057s(whisper057s,
+'''                Text(
+                    "5分後の確定文字起こし、自動文字起こしと「この音声を再文字起こし」で使うモデルです。ライブモデル・モデル比較とは別です。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+''', '')
+whisper057s = replaceOptional057s(whisper057s,
+'''                Text(
+                    "変更後に開始する文字起こしから選択モデルを使用します。Android端末内ASR選択時はWhisperモデルをASRには使いません。すでに実推論中の1件は、開始時に確定した経路で完了します。モデル変更だけでは保存済み文字起こしを自動上書きしません。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+''', '')
+writeUtf8057s(whisperFile057s, whisper057s)
+
+def queueFile057s = rootProject.file('app/src/main/java/com/sktpj/recorder24h/UnifiedQueueScreen.kt')
+def queue057s = readUtf8057s(queueFile057s)
+queue057s = replaceOptional057s(queue057s,
+'''            Text(
+                if (paused) {
+                    "待機中の項目は保持します。実行中の通常文字起こしも中断して待機へ戻します。"
+                } else {
+                    "完全ストリーミング中に通常キューを止めたい場合は一時停止してください。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+''', '')
+queue057s = replaceOptional057s(queue057s,
+'''        Text(
+            if (selected) "上にある項目ほど優先" else "左の丸で項目を選択",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+''',
+'''        Text(
+            "優先度",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+''')
+writeUtf8057s(queueFile057s, queue057s)
+
+def resetFile057s = rootProject.file('app/src/main/java/com/sktpj/recorder24h/UserDataResetCard.kt')
+def reset057s = readUtf8057s(resetFile057s)
+reset057s = replaceOptional057s(reset057s,
+'''            Text(
+                "テストや再スタート用に、音声・文字起こし・履歴・処理キューをまとめて空にします。",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                "モデル、OpenAI APIキー、AIノート、本人声プロファイル、設定、診断ログは消しません。",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold
+            )
+''', '')
+writeUtf8057s(resetFile057s, reset057s)
+
+def vulkanFile057s = rootProject.file('app/src/main/java/com/sktpj/recorder24h/VulkanDiagnosticCard.kt')
+def vulkan057s = readUtf8057s(vulkanFile057s)
+vulkan057s = replaceOptional057s(vulkan057s,
+'''            Text(
+                "保存済みの同じ音声・同じWhisperモデル・同じ区間で比較します。通常の文字起こし設定は変更しません。Vulkanを先に測り、その後CPUを測ります。",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+''',
+'''            Text(
+                "同一音声  •  同一モデル",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+''')
+vulkan057s = replaceOptional057s(vulkan057s,
+'''                Text("操作は不要です。完了後にログも自動同期します。")
+''', '')
+vulkan057s = replaceOptional057s(vulkan057s,
+'''            Text(
+                "比較対象はモデル読込、2秒音声、10秒音声です。CPU試験が3分を超えた場合は診断側で終了し、『クラッシュ』ではなく『処理時間超過』として記録します。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+''', '')
+vulkan057s = replaceOptional057s(vulkan057s,
+'''                "RTF: CPU ${formatRtf(cpuMs, audioMs)} / Vulkan ${formatRtf(gpuMs, audioMs)}  （1.00未満なら音声時間より速い）",
+''',
+'''                "RTF: CPU ${formatRtf(cpuMs, audioMs)} / Vulkan ${formatRtf(gpuMs, audioMs)}",
+''')
+writeUtf8057s(vulkanFile057s, vulkan057s)
+
+// Final audit guards for the remaining permanent helper-copy patterns.
+def banned057s = [
+    '各処理を明示的に選択します',
+    '録音中は30秒単位の暫定文字起こしだけを表示します',
+    '録音中PCMは専用ASRプロセスへ渡し',
+    'リアルタイムの発話ごとの認識に使うWhisperモデルです',
+    '録音中のモデル変更は次の5分セグメント境界から',
+    '変更後に開始する文字起こしから選択モデルを使用します',
+    '完全ストリーミング中に通常キューを止めたい場合',
+    '左の丸で項目を選択',
+    'テストや再スタート用に',
+    '保存済みの同じ音声・同じWhisperモデル・同じ区間で比較します',
+    '操作は不要です。完了後にログも自動同期します',
+    'CPU試験が3分を超えた場合'
+]
+def audited057s = [backendFile057s, whisperFile057s, queueFile057s, resetFile057s, vulkanFile057s]
+banned057s.each { phrase ->
+    audited057s.each { file ->
+        if (readUtf8057s(file).contains(phrase)) {
+            throw new GradleException("0.7.57 UI copy sweep violation in ${file.name}: ${phrase}")
+        }
+    }
+}
