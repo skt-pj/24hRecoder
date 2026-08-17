@@ -1,0 +1,381 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8057 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8057 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOptional057 = { String source, String oldText, String newText ->
+    source.contains(oldText) ? source.replace(oldText, newText) : source
+}
+def replaceBlock057 = { String source, String startMarker, String endMarker, String replacement, String label ->
+    int start = source.indexOf(startMarker)
+    if (start < 0) {
+        throw new GradleException("0.7.57 ${label}: start marker missing")
+    }
+    int end = source.indexOf(endMarker, start + startMarker.length())
+    if (end < 0) {
+        throw new GradleException("0.7.57 ${label}: end marker missing")
+    }
+    source.substring(0, start) + replacement + source.substring(end)
+}
+
+// Product UI copy policy:
+// UI text is limited to actions, current state, user data, errors/warnings, results and
+// confirmations required to understand an operation. Development history and implementation
+// explanations are not rendered as permanent helper copy.
+
+def mainFile057 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+def main057 = readUtf8057(mainFile057)
+
+main057 = replaceOptional057(main057,
+'''                            if (section == AppSection.HOME && selected == null) {
+                                Text(
+                                    "端末内録音・ローカル文字起こし",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+''', '')
+
+main057 = replaceOptional057(main057,
+'''        item {
+            Text(
+                "録音処理はUI・文字起こしとは別プロセスです。後段処理が遅れても録音継続を優先します。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(4.dp)
+            )
+        }
+''', '')
+
+main057 = replaceOptional057(main057,
+'''                if (state == "OFF" && !TranscriptionPipelineSettings.isLiveStreaming(pipeline)) {
+                    Text("設定で「完全ストリーミング」を選ぶと、この画面に会話がリアルタイム表示されます。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+''', '')
+
+main057 = replaceOptional057(main057,
+'''            Text(
+                "録音セグメントが確定すると、時刻・音声状態・文字起こし結果が表示されます。",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+''', '')
+
+main057 = replaceOptional057(main057,
+'''            text = {
+                Text("保存済みの音声を現在のWhisper + VAD設定で再処理します。現在の文字起こしは、新しい結果の保存に成功するまで保持します。")
+            },
+''',
+'''            text = {
+                Text("保存済み音声を再処理します。現在の結果は新しい結果の保存に成功するまで保持します。")
+            },
+''')
+
+main057 = replaceOptional057(main057,
+'''                if (retranscriptionActive) {
+                    Text(
+                        "再文字起こし中も現在の結果を表示しています。新しい結果が正常保存された時点で置き換わります。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+''', '')
+
+main057 = replaceOptional057(main057,
+'''                    Text(
+                        "録音時刻ごとに区切って表示しています。長い無音がある場合は区間の間隔も表示します。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+''', '')
+
+main057 = replaceOptional057(main057,
+'''                    if (text.isNotBlank()) {
+                        Text(
+                            "この結果には時刻区間データがありません。0.4.9で再文字起こしした結果から時刻区切り表示になります。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+''', '')
+
+main057 = replaceOptional057(main057,
+'''                Text(
+                    if (record.hasTranscript) "元M4Aが残っていれば、現在の結果を保持したまま再度キューへ追加できます。"
+                    else "保存済みM4Aを文字起こしキューへ追加します。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+''', '')
+
+main057 = replaceOptional057(main057,
+'''                        Text(
+                            if (record.hasTranscript) "文字起こし結果を永続保存したため、元のM4A音声は削除済みです。" else "現在参照できる音声ファイルはありません。",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+''',
+'''                        Text(
+                            if (record.hasTranscript) "音声削除済み" else "音声なし",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+''')
+
+main057 = replaceBlock057(
+        main057,
+        'private fun transcriptionActivityMessage(record: SegmentRecord): String? {',
+        '\n\nprivate fun transcriptClipboardText',
+'''@Suppress("UNUSED_PARAMETER")
+private fun transcriptionActivityMessage(record: SegmentRecord): String? = null
+''',
+        'technical transcription activity message')
+
+main057 = replaceOptional057(main057,
+'''                    Text("マイク権限、通知権限、バッテリー設定などをAndroidのアプリ情報画面で確認できます。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+''', '')
+
+writeUtf8057(mainFile057, main057)
+
+// Audio input settings: show selection and actual routing state, not an implementation narrative.
+def audioInputFile057 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AudioInputSettingsCard.kt')
+def audioInput057 = readUtf8057(audioInputFile057)
+audioInput057 = replaceOptional057(audioInput057,
+'''            Text(
+                "Bluetoothマイクと端末マイクの使い方を選択します。録音中の接続・切断にも追従します。",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+''', '')
+audioInput057 = replaceOptional057(audioInput057,
+'''            if (settings.mode == AudioInputSettingsStore.MODE_AUTO) {
+                Text(
+                    if (bluetoothInputs.isEmpty())
+                        "現在はBluetoothマイクが見つからないため、端末マイクを使用します。"
+                    else
+                        "Bluetoothマイク検出: ${bluetoothInputs.joinToString { it.label }}。実際の録音ルートがBluetoothへ切り替わったことを確認して使用します。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+''',
+'''            if (settings.mode == AudioInputSettingsStore.MODE_AUTO) {
+            } else {
+''')
+audioInput057 = replaceOptional057(audioInput057,
+'''                if (settings.manualDeviceKey != AudioInputSettingsStore.BUILTIN_KEY && !selectedBluetoothConnected) {
+                    Text(
+                        "選択中: ${settings.manualDeviceLabel}（未接続）。接続されるまでは端末マイクへ戻します。再接続すると選択したBluetoothマイクへ戻ります。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                } else {
+                    Text(
+                        "手動でも選択したBluetoothマイクが使えない場合は端末マイクへフォールバックします。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+''',
+'''                if (settings.manualDeviceKey != AudioInputSettingsStore.BUILTIN_KEY && !selectedBluetoothConnected) {
+                    Text(
+                        "${settings.manualDeviceLabel}（未接続）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                }
+''')
+audioInput057 = replaceOptional057(audioInput057,
+'''            Text(
+                "設定変更は録音中でも反映します。Bluetoothは検出だけで成功扱いにせず、Androidの通信オーディオ経路を要求した後、実際の録音入力まで確認します。切替失敗時は録音を止めず端末マイクへ戻します。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+''', '')
+writeUtf8057(audioInputFile057, audioInput057)
+
+// AI settings: provider properties and state remain; descriptive subtitles are removed.
+def aiSettingsFile057 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiSettingsCard.kt')
+def aiSettings057 = readUtf8057(aiSettingsFile057)
+aiSettings057 = replaceOptional057(aiSettings057,
+'''            Text("1時間ごとの要約 / 1日ごとの統合分析")
+''', '')
+aiSettings057 = replaceOptional057(aiSettings057,
+'''                Text(
+                    "モデルサイズ: 2.59 GB / 保存後のAI分析はオフラインで実行できます。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+''',
+'''                Text(
+                    "モデルサイズ: 2.59 GB",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+''')
+writeUtf8057(aiSettingsFile057, aiSettings057)
+
+// Legacy AI rerun/queue target screens must follow the same copy policy.
+def rerunFile057 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiRerunActivity.kt')
+def rerun057 = readUtf8057(rerunFile057)
+rerun057 = replaceOptional057(rerun057,
+'''        item {
+            Text(
+                "対象日を選び、1時間単位または1日単位で分析・再分析します。時間別は24時間をすべて表示し、データが揃っている時間だけ実行できます。",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+''', '')
+rerun057 = replaceOptional057(rerun057,
+'''                    Text(
+                        "日次ノートをこの1日分の元データから生成または再生成します。データ待ちや既存結果の扱いはAI要約キューの既存仕様を維持します。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+''', '')
+writeUtf8057(rerunFile057, rerun057)
+
+def queueTargetFile057 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiQueueTargetActivity.kt')
+def queueTarget057 = readUtf8057(queueTargetFile057)
+queueTarget057 = replaceOptional057(queueTarget057,
+'''        } else {
+            item {
+                Text(
+                    "この集約期間のAI処理対象です。完了後はAIノートの週・月・年表示に保存されます。",
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+''',
+'''        }
+''')
+writeUtf8057(queueTargetFile057, queueTarget057)
+
+// Editing controls already expose free-form speaker input; do not repeat it as helper copy.
+def transcriptEditorFile057 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/TranscriptEditor.kt')
+def transcriptEditor057 = readUtf8057(transcriptEditorFile057)
+transcriptEditor057 = replaceOptional057(transcriptEditor057,
+'''                Text(
+                    "話者名は任意の名前に変更できます。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+''', '')
+writeUtf8057(transcriptEditorFile057, transcriptEditor057)
+
+def liveFinalFile057 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/LiveFinalEditor.kt')
+def liveFinal057 = readUtf8057(liveFinalFile057)
+liveFinal057 = replaceOptional057(liveFinal057,
+'''                    Text(
+                        "任意の名前も入力できます。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+''', '')
+writeUtf8057(liveFinalFile057, liveFinal057)
+
+def liveSegmentFile057 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/LiveSegmentEditor.kt')
+def liveSegment057 = readUtf8057(liveSegmentFile057)
+liveSegment057 = replaceOptional057(liveSegment057,
+'''                    Text(
+                        "任意の名前も入力できます。変更はこの時刻区間だけに適用します。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+''', '')
+writeUtf8057(liveSegmentFile057, liveSegment057)
+
+// Diagnostic cards keep measurements and current state, but remove narrative helper paragraphs.
+def processingFile057 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ModelComparisonCard.kt')
+def processing057 = readUtf8057(processingFile057)
+processing057 = replaceOptional057(processing057,
+'''            Text(
+                "処理時間は、実際に文字起こしを開始してから結果を保存するまでの最新の成功処理時間です。キュー待ち時間は含みません。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+''', '')
+writeUtf8057(processingFile057, processing057)
+
+def benchmarkFile057 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/Model30sBenchmarkCard.kt')
+def benchmark057 = readUtf8057(benchmarkFile057)
+benchmark057 = replaceOptional057(benchmark057,
+'''            Text(
+                "同じ保存済み音声の先頭30秒を、現在選択中のWhisper実行方式で各モデルへ順番に通します。VADは挟まず、モデルの処理速度だけを比較します。",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+''',
+'''            Text(
+                "入力 30秒  •  VADなし",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+''')
+benchmark057 = replaceOptional057(benchmark057,
+'''            Text(
+                if (backendSupported) {
+                    "30秒以上の保存済み音声が必要です。未取得モデルは測定せず「未取得」と表示します。処理時間はモデル読込 + whisper_full、RTFはその合計を30秒で割った値です。"
+                } else {
+                    "この比較はWhisper CPUまたはWhisper Vulkan選択時に実行できます。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+''',
+'''            if (!backendSupported) {
+                Text(
+                    "Whisper CPU / Vulkanで利用可能",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+''')
+writeUtf8057(benchmarkFile057, benchmark057)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1057)
+            output.versionName.set('0.7.57-debug')
+        }
+    }
+}
+
+// Regression checks: do not reintroduce developer-note copy in product UI.
+def banned057 = [
+    '録音処理はUI・文字起こしとは別プロセスです',
+    '後段処理が遅れても録音継続を優先します',
+    'この画面に会話がリアルタイム表示されます',
+    '録音セグメントが確定すると、時刻・音声状態・文字起こし結果が表示されます',
+    '0.4.9で再文字起こしした結果から',
+    'WorkManager登録済み・Worker未開始です',
+    'Worker起動済み。現在はWhisper実行枠を待っています',
+    'Bluetoothマイクと端末マイクの使い方を選択します',
+    '成功扱いにせず',
+    '対象日を選び、1時間単位または1日単位で分析・再分析します',
+    '既存仕様を維持します',
+    'この集約期間のAI処理対象です',
+    '話者名は任意の名前に変更できます',
+    '任意の名前も入力できます',
+    '処理時間は、実際に文字起こしを開始してから結果を保存するまで',
+    '同じ保存済み音声の先頭30秒を',
+    '30秒以上の保存済み音声が必要です'
+]
+def uiSources057 = [
+    mainFile057, audioInputFile057, aiSettingsFile057, rerunFile057, queueTargetFile057,
+    transcriptEditorFile057, liveFinalFile057, liveSegmentFile057, processingFile057, benchmarkFile057
+]
+banned057.each { phrase ->
+    uiSources057.each { file ->
+        if (readUtf8057(file).contains(phrase)) {
+            throw new GradleException("0.7.57 UI copy policy violation in ${file.name}: ${phrase}")
+        }
+    }
+}
+
+// Preserve the product behavior that was explicitly restored in recent versions.
+def finalAiScreen057 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiAnalysisScreen.kt')
+if (!readUtf8057(finalAiScreen057).contains('(0..23).forEach { hour ->')) {
+    throw new GradleException('0.7.57 24-hour AI notebook list changed')
+}
+if (!readUtf8057(finalAiScreen057).contains('kind = AiAnalysisScheduler.KIND_DAILY')) {
+    throw new GradleException('0.7.57 daily analysis/reanalysis action missing')
+}
+if (!readUtf8057(finalAiScreen057).contains('kind = AiAnalysisScheduler.KIND_HOURLY')) {
+    throw new GradleException('0.7.57 hourly analysis/rerun action missing')
+}
+if (!readUtf8057(finalAiScreen057).contains('AiMindMapCard(')) {
+    throw new GradleException('0.7.57 Mind Elixir integration missing')
+}
