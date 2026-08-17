@@ -35,13 +35,10 @@ endif()
 # whisper.cpp v1.9.1's Vulkan CMake explicitly requires a SPIRV-Headers CONFIG package even
 # though it does not link the package target. Android NDK does not ship that CMake package.
 # Fetch the Khronos header-only source at the revision used by SPIRV-Tools v2026.2 and expose a
-# minimal build-tree package config. Use git instead of GitHub archive downloads so hosted CI is
-# not dependent on codeload.github.com's shared anonymous archive rate limit.
+# minimal build-tree package config. This keeps the native build self-contained and reproducible.
 FetchContent_Declare(
         spirv_headers_source
-        GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Headers.git
-        GIT_TAG ad9184e76a66b1001c29db9b0a3e87f646c64de0
-        GIT_PROGRESS FALSE)
+        URL https://github.com/KhronosGroup/SPIRV-Headers/archive/ad9184e76a66b1001c29db9b0a3e87f646c64de0.tar.gz)
 FetchContent_GetProperties(spirv_headers_source)
 if(NOT spirv_headers_source_POPULATED)
     FetchContent_Populate(spirv_headers_source)
@@ -61,10 +58,7 @@ set("SPIRV-Headers_DIR" "${_spirv_headers_config_dir}" CACHE PATH "SPIRV-Headers
 # ggml-vulkan so the C and C++ header versions stay consistent while linking Android's libvulkan.
 FetchContent_Declare(
         vulkan_headers_source
-        GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
-        GIT_TAG v1.4.352
-        GIT_SHALLOW TRUE
-        GIT_PROGRESS FALSE)
+        URL https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.352.tar.gz)
 FetchContent_GetProperties(vulkan_headers_source)
 if(NOT vulkan_headers_source_POPULATED)
     FetchContent_Populate(vulkan_headers_source)
@@ -72,10 +66,7 @@ endif()
 
 FetchContent_Declare(
         whisper_cpp
-        GIT_REPOSITORY https://github.com/ggml-org/whisper.cpp.git
-        GIT_TAG v1.9.1
-        GIT_SHALLOW TRUE
-        GIT_PROGRESS FALSE)
+        URL https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.9.1.tar.gz)
 FetchContent_MakeAvailable(whisper_cpp)
 
 if(TARGET ggml-vulkan)
