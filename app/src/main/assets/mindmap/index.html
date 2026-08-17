@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'" />
+  <link rel="stylesheet" href="./style.css" />
+  <style>
+    :root {
+      --pcs-bg: #ffffff;
+      --pcs-surface: #ffffff;
+      --pcs-text: #1a1a1a;
+      --pcs-muted: #666666;
+      --pcs-primary: #46618a;
+      --pcs-outline: #808080;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--pcs-bg); color: var(--pcs-text); font-family: system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans JP", sans-serif; }
+    #frame { position: relative; width: 100%; height: 100%; overflow: hidden; background: var(--pcs-bg); }
+    #map { width: 100%; height: 100%; touch-action: none; }
+    #map tpc { max-width: 190px; white-space: normal !important; line-height: 1.35; overflow-wrap: anywhere; }
+    #map tags { font-size: 10px; }
+    #controls {
+      position: absolute; top: 10px; right: 10px; z-index: 20; display: flex; align-items: center; gap: 6px;
+      padding: 4px; border: 1px solid color-mix(in srgb, var(--pcs-outline) 40%, transparent);
+      border-radius: 14px; background: color-mix(in srgb, var(--pcs-surface) 92%, transparent);
+      box-shadow: 0 2px 12px rgba(0,0,0,.10); backdrop-filter: blur(10px);
+    }
+    #controls button {
+      min-width: 38px; height: 38px; padding: 0 10px; border: 0; border-radius: 10px;
+      background: transparent; color: var(--pcs-text); font: inherit; font-weight: 650;
+    }
+    #controls button:active { background: color-mix(in srgb, var(--pcs-primary) 16%, transparent); }
+    #detail {
+      position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 30;
+      border: 1px solid color-mix(in srgb, var(--pcs-outline) 45%, transparent); border-radius: 16px;
+      background: color-mix(in srgb, var(--pcs-surface) 96%, transparent); box-shadow: 0 6px 24px rgba(0,0,0,.16);
+      padding: 13px 44px 13px 14px; backdrop-filter: blur(12px);
+    }
+    #detail[hidden] { display: none; }
+    #detail-title { font-size: 15px; font-weight: 720; line-height: 1.35; }
+    #detail-meta { margin-top: 4px; font-size: 11px; font-weight: 650; color: var(--pcs-primary); }
+    #detail-body, #detail-evidence { margin-top: 6px; font-size: 12px; line-height: 1.45; color: var(--pcs-muted); white-space: pre-wrap; }
+    #detail-close { position: absolute; top: 6px; right: 7px; width: 34px; height: 34px; border: 0; border-radius: 17px; background: transparent; color: var(--pcs-muted); font-size: 20px; }
+  </style>
+</head>
+<body>
+  <div id="frame">
+    <div id="map" aria-label="AIマインドマップ"></div>
+    <div id="controls" aria-label="マインドマップ表示操作">
+      <button id="zoom-out" type="button" aria-label="縮小">−</button>
+      <button id="fit" type="button" aria-label="全体を表示">全体</button>
+      <button id="zoom-in" type="button" aria-label="拡大">＋</button>
+    </div>
+    <section id="detail" hidden aria-live="polite">
+      <button id="detail-close" type="button" aria-label="詳細を閉じる">×</button>
+      <div id="detail-title"></div>
+      <div id="detail-meta"></div>
+      <div id="detail-body"></div>
+      <div id="detail-evidence"></div>
+    </section>
+  </div>
+
+  <script type="module">
+    import MindElixir from './MindElixir.js'
+
+    let mind = null
+    const map = document.getElementById('map')
+    const detail = document.getElementById('detail')
+    const detailTitle = document.getElementById('detail-title')
+    const detailMeta = document.getElementById('detail-meta')
+    const detailBody = document.getElementById('detail-body')
+    const detailEvidence = document.getElementById('detail-evidence')
+
+    const typeLabel = type => ({
+      theme: '中心テーマ', topic: '話題', decision: '決定', action: '次にやる', todo: '次にやる',
+      question: '未解決', unresolved: '未解決', idea: 'アイデア', person: '人物', place: '場所', detail: '要点'
+    }[type] || '要点')
+
+    function applyUi(ui = {}) {
+      const root = document.documentElement.style
+      root.setProperty('--pcs-bg', ui.background || '#ffffff')
+      root.setProperty('--pcs-surface', ui.surface || '#ffffff')
+      root.setProperty('--pcs-text', ui.text || '#1a1a1a')
+      root.setProperty('--pcs-muted', ui.muted || '#666666')
+      root.setProperty('--pcs-primary', ui.primary || '#46618a')
+      root.setProperty('--pcs-outline', ui.outline || '#808080')
+    }
+
+    function showNode(node) {
+      if (!node) return
+      const metadata = node.metadata || {}
+      detailTitle.textContent = node.topic || ''
+      detailMeta.textContent = typeLabel(metadata.type) + (metadata.importance === 'high' ? '  •  重要' : '')
+      detailBody.textContent = metadata.detail || ''
+      detailBody.hidden = !metadata.detail
+      detailEvidence.textContent = metadata.evidence ? `根拠: ${metadata.evidence}` : ''
+      detailEvidence.hidden = !metadata.evidence
+      detail.hidden = false
+    }
+
+    function selectedNodeFromEvent(nodes) {
+      if (!Array.isArray(nodes) || nodes.length === 0) return null
+      const item = nodes[nodes.length - 1]
+      return item?.nodeObj || item || null
+    }
+
+    window.renderMindMap = payload => {
+      if (!payload?.data?.nodeData) return
+      applyUi(payload.ui)
+      detail.hidden = true
+      if (mind) {
+        try { mind.destroy() } catch (_) {}
+        mind = null
+      }
+      mind = new MindElixir({
+        el: '#map',
+        direction: MindElixir.SIDE,
+        editable: false,
+        contextMenu: false,
+        toolBar: false,
+        keypress: false,
+        allowUndo: false,
+        compact: true,
+        alignment: 'nodes',
+        overflowHidden: true,
+        scaleSensitivity: 0.08,
+        scaleMin: 0.35,
+        scaleMax: 2.0,
+        theme: payload.data.theme
+      })
+      mind.init(payload.data)
+      mind.bus.addListener('selectNodes', nodes => showNode(selectedNodeFromEvent(nodes)))
+      mind.bus.addListener('selectNewNode', node => showNode(node))
+      window.setTimeout(() => mind?.scaleFit(), 80)
+    }
+
+    map.addEventListener('click', event => {
+      const topic = event.target?.closest?.('tpc')
+      if (topic?.nodeObj) showNode(topic.nodeObj)
+    })
+    document.getElementById('zoom-in').addEventListener('click', () => {
+      if (mind) mind.scale(Math.min(mind.scaleMax, mind.scaleVal + 0.12))
+    })
+    document.getElementById('zoom-out').addEventListener('click', () => {
+      if (mind) mind.scale(Math.max(mind.scaleMin, mind.scaleVal - 0.12))
+    })
+    document.getElementById('fit').addEventListener('click', () => mind?.scaleFit())
+    document.getElementById('detail-close').addEventListener('click', () => { detail.hidden = true })
+  </script>
+</body>
+</html>
