@@ -44,6 +44,7 @@ apply from: rootProject.file('gradle/ai-notebook-mind-elixir-assets-fix-0.7.55.g
 apply from: rootProject.file('gradle/ai-notebook-clean-ui-0.7.56.gradle')
 apply from: rootProject.file('gradle/ui-copy-policy-0.7.57.gradle')
 apply from: rootProject.file('gradle/ui-copy-policy-sweep-0.7.57.gradle')
+apply from: rootProject.file('gradle/live-hallucination-multisignal-0.7.58.gradle')
 
 android {
     namespace 'com.sktpj.recorder24h'
