@@ -1,0 +1,297 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8055 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8055 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce055 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.55 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+def replaceCount055 = { String source, String oldText, String newText, int count, String label ->
+    int actual = 0
+    int cursor = 0
+    while (true) {
+        int found = source.indexOf(oldText, cursor)
+        if (found < 0) break
+        actual++
+        cursor = found + oldText.length()
+    }
+    if (actual != count) {
+        throw new GradleException("0.7.55 ${label}: expected ${count} matches, found ${actual}")
+    }
+    source.replace(oldText, newText)
+}
+def replaceBlock055 = { String source, String startMarker, String endMarker, String replacement, String label ->
+    int start = source.indexOf(startMarker)
+    if (start < 0 || source.lastIndexOf(startMarker) != start) {
+        throw new GradleException("0.7.55 ${label}: start marker missing or ambiguous")
+    }
+    int end = source.indexOf(endMarker, start + startMarker.length())
+    if (end < 0) {
+        throw new GradleException("0.7.55 ${label}: end marker missing")
+    }
+    source.substring(0, start) + replacement + source.substring(end)
+}
+
+// Mind Elixir本体はビルド時に5.14.0を固定取得し、APK assetsへ同梱する。
+// 実行時にCDNや外部ページへ接続しない。
+dependencies {
+    implementation 'androidx.webkit:webkit:1.16.0'
+}
+
+def mindElixirGeneratedAssets055 = layout.buildDirectory.dir('generated/mind-elixir-0.7.55/assets')
+android {
+    sourceSets {
+        main.assets.srcDir(mindElixirGeneratedAssets055)
+    }
+}
+
+def downloadPinnedMindElixir055 = { String url, File target ->
+    target.parentFile.mkdirs()
+    def connection = new URI(url).toURL().openConnection()
+    connection.setConnectTimeout(30_000)
+    connection.setReadTimeout(60_000)
+    connection.setRequestProperty('User-Agent', '24hRecoder-build/0.7.55')
+    connection.inputStream.withCloseable { input ->
+        target.withOutputStream { output -> input.transferTo(output) }
+    }
+    if (!target.isFile() || target.length() < 100L) {
+        throw new GradleException("0.7.55 Mind Elixir asset download failed: ${target.name}")
+    }
+}
+
+def prepareMindElixirAssets055 = tasks.register('prepareMindElixirAssets055') {
+    outputs.dir(mindElixirGeneratedAssets055)
+    doLast {
+        File root = mindElixirGeneratedAssets055.get().dir('mindmap').asFile
+        File js = new File(root, 'MindElixir.js')
+        File css = new File(root, 'style.css')
+        downloadPinnedMindElixir055(
+                'https://cdn.jsdelivr.net/npm/mind-elixir@5.14.0/dist/MindElixir.js', js)
+        downloadPinnedMindElixir055(
+                'https://cdn.jsdelivr.net/npm/mind-elixir@5.14.0/dist/style.css', css)
+        if (!js.getText('UTF-8').contains('MindElixir')) {
+            throw new GradleException('0.7.55 downloaded MindElixir.js is invalid')
+        }
+    }
+}
+tasks.configureEach { task ->
+    if (task.name == 'mergeDebugAssets' || task.name == 'mergeReleaseAssets') {
+        task.dependsOn(prepareMindElixirAssets055)
+    }
+}
+
+// 既存の日・週・月・年と1時間詳細の「手描き風インデント表示」を共有ライブラリ描画へ置換する。
+def screenFile055 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiAnalysisScreen.kt')
+def screen055 = readUtf8055(screenFile055)
+
+screen055 = replaceCount055(
+        screen055,
+        'MindMapCard(analysis.optJSONArray("mindMap"))',
+        'MindMapCard(analysis.optJSONArray("mindMap"), analysis.optJSONArray("mindMapLinks"))',
+        2,
+        'daily/rollup mind map links')
+
+screen055 = replaceOnce055(
+        screen055,
+'''            HourlyMindMapCard(
+                mindMap = analysis.optJSONArray("mindMap"),
+                topics = analysis.optJSONArray("topics")
+            )
+''',
+'''            HourlyMindMapCard(
+                mindMap = analysis.optJSONArray("mindMap"),
+                links = analysis.optJSONArray("mindMapLinks"),
+                topics = analysis.optJSONArray("topics")
+            )
+''',
+        'hourly mind map links')
+
+screen055 = replaceBlock055(
+        screen055,
+        '@Composable\nprivate fun MindMapCard(',
+        '\n@Composable\nprivate fun AnalysisSectionCard',
+'''@Composable
+private fun MindMapCard(
+    array: JSONArray?,
+    links: JSONArray? = null
+) {
+    AiMindMapCard(
+        mindMap = array,
+        links = links
+    )
+}
+''',
+        'shared notebook mind map renderer')
+
+screen055 = replaceBlock055(
+        screen055,
+        '@Composable\nprivate fun HourlyMindMapCard(',
+        '\n@Composable\nprivate fun HourlyContextChipsCard(',
+'''@Composable
+private fun HourlyMindMapCard(
+    mindMap: JSONArray?,
+    links: JSONArray?,
+    topics: JSONArray?
+) {
+    AiMindMapCard(
+        mindMap = mindMap,
+        links = links,
+        fallbackTopics = topics
+    )
+}
+''',
+        'Mind Elixir hourly renderer')
+
+writeUtf8055(screenFile055, screen055)
+
+// OpenAI時間分析: UIに必要な意味情報・根拠・cross-linkを構造化出力する。
+def lunaFile055 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/OpenAiLunaClient.java')
+def luna055 = readUtf8055(lunaFile055)
+
+def openAiHourlyPrompt055 = $/    private static String buildHourlyPrompt(AiAnalysisRepository.SourceWindow source) {
+        return "Analyze the following one-hour transcript window.\n" +
+                "The output MUST be JSON and MUST follow this JSON format exactly:\n" +
+                "{\"summary\":string,\"chapters\":[{\"startTime\":string,\"endTime\":string,\"title\":string,\"summary\":string}]," +
+                "\"mindMap\":[{\"id\":string,\"label\":string,\"parentId\":string,\"type\":string,\"importance\":string,\"detail\":string,\"evidence\":string,\"collapsedByDefault\":boolean}]," +
+                "\"mindMapLinks\":[{\"id\":string,\"fromId\":string,\"toId\":string,\"label\":string}]," +
+                "\"topics\":[string],\"keyEvents\":[{\"time\":string,\"event\":string}]," +
+                "\"ideas\":[string],\"decisions\":[string],\"todos\":[{\"task\":string,\"evidence\":string}]," +
+                "\"people\":[string],\"places\":[string],\"notableQuotes\":[{\"time\":string,\"text\":string}]," +
+                "\"unresolved\":[string]}\n" +
+                "For a content-rich hour, keep summary to 2-3 sentences. Normally keep at most 5 topics, 4 key events, 3 decisions, 5 TODOs, 3 ideas, and 3 unresolved items. " +
+                "Create at most 4 chapters only when the conversation meaningfully changes topic or goal; each chapter needs a short title and one-sentence summary with evidence-backed times. " +
+                "For mindMap, use exactly one root whose label names the actual central theme of the hour, normally 3-5 main branches, and at most 12 nodes total. Node labels must be short concepts, not copied paragraphs. " +
+                "For every mindMap node, type must be one of theme,topic,decision,action,question,idea,person,place,detail; importance must be high,medium,or low; detail is at most one concise sentence; evidence must be a transcript timestamp or timestamp range when supported, otherwise an empty string. " +
+                "Set collapsedByDefault true for low-importance or deep supporting detail and false for the root and core branches. " +
+                "Use mindMapLinks only for meaningful relationships that cannot be represented by parentId, at most 3 links, and never add decorative or speculative links. " +
+                "People, places, and quotes should be empty unless they materially help explain what happened. Keep at most 2 quotes. If there is no meaningful content, say so plainly without inventing significance. " +
+                "For quotes, only copy wording that is actually present in the transcript.\n\n" +
+                "TRANSCRIPT:\n" + AiAnalysisRepository.promptTranscript(source);
+    }
+/$
+luna055 = replaceBlock055(
+        luna055,
+        '    private static String buildHourlyPrompt(AiAnalysisRepository.SourceWindow source) {',
+        '\n\n    private static String buildDailyPrompt',
+        openAiHourlyPrompt055,
+        'OpenAI hourly semantic map prompt')
+
+def openAiHourlySchema055 = $/    private static JSONObject hourlySchema() throws Exception {
+        JSONObject properties = new JSONObject();
+        properties.put("summary", stringSchema());
+        properties.put("chapters", arraySchema(objectSchema(new JSONObject()
+                .put("startTime", stringSchema())
+                .put("endTime", stringSchema())
+                .put("title", stringSchema())
+                .put("summary", stringSchema()))));
+        properties.put("mindMap", arraySchema(objectSchema(new JSONObject()
+                .put("id", stringSchema())
+                .put("label", stringSchema())
+                .put("parentId", stringSchema())
+                .put("type", stringSchema())
+                .put("importance", stringSchema())
+                .put("detail", stringSchema())
+                .put("evidence", stringSchema())
+                .put("collapsedByDefault", new JSONObject().put("type", "boolean")))));
+        properties.put("mindMapLinks", arraySchema(objectSchema(new JSONObject()
+                .put("id", stringSchema())
+                .put("fromId", stringSchema())
+                .put("toId", stringSchema())
+                .put("label", stringSchema()))));
+        properties.put("topics", arraySchema(stringSchema()));
+        properties.put("keyEvents", arraySchema(objectSchema(new JSONObject()
+                .put("time", stringSchema())
+                .put("event", stringSchema()))));
+        properties.put("ideas", arraySchema(stringSchema()));
+        properties.put("decisions", arraySchema(stringSchema()));
+        properties.put("todos", arraySchema(objectSchema(new JSONObject()
+                .put("task", stringSchema())
+                .put("evidence", stringSchema()))));
+        properties.put("people", arraySchema(stringSchema()));
+        properties.put("places", arraySchema(stringSchema()));
+        properties.put("notableQuotes", arraySchema(objectSchema(new JSONObject()
+                .put("time", stringSchema())
+                .put("text", stringSchema()))));
+        properties.put("unresolved", arraySchema(stringSchema()));
+        return objectSchema(properties);
+    }
+/$
+luna055 = replaceBlock055(
+        luna055,
+        '    private static JSONObject hourlySchema() throws Exception {',
+        '\n\n    private static JSONObject dailySchema()',
+        openAiHourlySchema055,
+        'OpenAI hourly semantic map schema')
+writeUtf8055(lunaFile055, luna055)
+
+// Gemma時間分析も同じ構造へ合わせる。既存の階層抽出・reduction処理は変更しない。
+def gemmaHourlyFile055 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/GemmaHourlyConversationAnalyzer.kt')
+def gemmaHourly055 = readUtf8055(gemmaHourlyFile055)
+
+gemmaHourly055 = replaceBlock055(
+        gemmaHourly055,
+        '    private val hourlyKeys = listOf(',
+        '    private val evidenceKeys = listOf',
+'''    private val hourlyKeys = listOf(
+        "summary", "chapters", "mindMap", "mindMapLinks", "topics", "keyEvents", "ideas", "decisions", "todos",
+        "people", "places", "notableQuotes", "unresolved"
+    )
+''',
+        'Gemma hourly semantic keys')
+
+def gemmaHourlySchema055 = $/    private fun hourlySchemaPrefix(): String =
+        "The output MUST be JSON and MUST follow this JSON format exactly:\n" +
+            "{\"summary\":string,\"chapters\":[{\"startTime\":string,\"endTime\":string,\"title\":string,\"summary\":string}]," +
+            "\"mindMap\":[{\"id\":string,\"label\":string,\"parentId\":string,\"type\":string,\"importance\":string,\"detail\":string,\"evidence\":string,\"collapsedByDefault\":boolean}]," +
+            "\"mindMapLinks\":[{\"id\":string,\"fromId\":string,\"toId\":string,\"label\":string}]," +
+            "\"topics\":[string],\"keyEvents\":[{\"time\":string,\"event\":string}]," +
+            "\"ideas\":[string],\"decisions\":[string],\"todos\":[{\"task\":string,\"evidence\":string}]," +
+            "\"people\":[string],\"places\":[string],\"notableQuotes\":[{\"time\":string,\"text\":string}]," +
+            "\"unresolved\":[string]}\n" +
+            "Keep the summary to 2-3 sentences for a content-rich hour and keep structured lists selective. " +
+            "Create at most 4 evidence-backed chapters only for meaningful topic or goal changes. " +
+            "For mindMap, create exactly one root that names the actual central theme, normally 3-5 main branches, and at most 12 nodes. Keep node labels short. " +
+            "Node type must be one of theme,topic,decision,action,question,idea,person,place,detail; importance must be high,medium,or low; detail is at most one sentence; evidence is a source timestamp/range or empty. " +
+            "Set collapsedByDefault true for low-importance or deep detail, false for the root/core branches. " +
+            "Use at most 3 mindMapLinks and only when a supported semantic relationship cannot be represented by parentId. Never invent links. " +
+            "People, places, and quotes should be empty unless materially useful; keep at most 2 quotes.\n"
+/$
+gemmaHourly055 = replaceBlock055(
+        gemmaHourly055,
+        '    private fun hourlySchemaPrefix(): String =',
+        '\n\n    private fun normalizeEntries',
+        gemmaHourlySchema055,
+        'Gemma hourly semantic map schema/prompt')
+writeUtf8055(gemmaHourlyFile055, gemmaHourly055)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1055)
+            output.versionName.set('0.7.55-debug')
+        }
+    }
+}
+
+if (!screenFile055.text.contains('(0..23).forEach { hour ->')) {
+    throw new GradleException('0.7.55 24-hour list was changed unexpectedly')
+}
+if (!screenFile055.text.contains('kind = AiAnalysisScheduler.KIND_DAILY') ||
+        !screenFile055.text.contains('kind = AiAnalysisScheduler.KIND_HOURLY')) {
+    throw new GradleException('0.7.55 analysis/reanalysis controls were changed unexpectedly')
+}
+if (!screenFile055.text.contains('AiMindMapCard(')) {
+    throw new GradleException('0.7.55 shared Mind Elixir renderer is missing')
+}
+if (!lunaFile055.text.contains('"mindMapLinks"') ||
+        !lunaFile055.text.contains('collapsedByDefault')) {
+    throw new GradleException('0.7.55 OpenAI semantic mind map schema is missing')
+}
+if (!gemmaHourlyFile055.text.contains('"mindMapLinks"') ||
+        !gemmaHourlyFile055.text.contains('collapsedByDefault')) {
+    throw new GradleException('0.7.55 Gemma semantic mind map schema is missing')
+}
