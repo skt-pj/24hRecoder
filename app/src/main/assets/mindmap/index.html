@@ -17,7 +17,8 @@
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--pcs-bg); color: var(--pcs-text); font-family: system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans JP", sans-serif; }
     #frame { position: relative; width: 100%; height: 100%; overflow: hidden; background: var(--pcs-bg); }
-    #map { width: 100%; height: 100%; touch-action: none; }
+    #map { width: 100%; height: 100%; touch-action: none; overflow: hidden; }
+    #map .map-container { width: 100%; height: 100%; overflow: hidden; }
     #map tpc { max-width: 190px; white-space: normal !important; line-height: 1.35; overflow-wrap: anywhere; }
     #map tags { font-size: 10px; }
     #controls {
@@ -123,7 +124,7 @@
         allowUndo: false,
         compact: true,
         alignment: 'nodes',
-        overflowHidden: true,
+        overflowHidden: false,
         scaleSensitivity: 0.08,
         scaleMin: 0.35,
         scaleMax: 2.0,
