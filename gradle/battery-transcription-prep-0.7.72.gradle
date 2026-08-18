@@ -75,4 +75,35 @@ if (!patch072p.contains(oldPcmBlock072p)) {
     throw new GradleException('0.7.72 prep: original PCM patch block missing')
 }
 patch072p = patch072p.replace(oldPcmBlock072p, newPcmBlock072p)
+
+def oldAiTargetBlock072p = '''ai072 = replaceOnce072(ai072,
+''' + "'''" + '''                .setConstraints(analysisConstraints(app))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag("ai-analysis")
+''' + "'''" + ''',
+''' + "'''" + '''                .setConstraints(AiQueueStore.REQUEST_MANUAL.equals(effectiveRequestType)
+                        ? analysisConstraints(app) : scheduledAnalysisConstraints(app))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag("ai-analysis")
+''' + "'''" + ''', 'target AI scheduled/manual constraint split')'''
+
+def newAiTargetBlock072p = '''ai072 = replaceOnce072(ai072,
+''' + "'''" + '''                .setConstraints(analysisConstraints(app))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag("ai-analysis")
+                .addTag("ai-analysis-target")
+                .addTag(kindTag);
+''' + "'''" + ''',
+''' + "'''" + '''                .setConstraints(AiQueueStore.REQUEST_MANUAL.equals(effectiveRequestType)
+                        ? analysisConstraints(app) : scheduledAnalysisConstraints(app))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag("ai-analysis")
+                .addTag("ai-analysis-target")
+                .addTag(kindTag);
+''' + "'''" + ''', 'target AI scheduled/manual constraint split')'''
+
+if (!patch072p.contains(oldAiTargetBlock072p)) {
+    throw new GradleException('0.7.72 prep: original AI target patch block missing')
+}
+patch072p = patch072p.replace(oldAiTargetBlock072p, newAiTargetBlock072p)
 patchFile072p.setText(patch072p, 'UTF-8')
