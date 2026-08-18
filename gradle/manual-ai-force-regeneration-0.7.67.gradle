@@ -1,0 +1,104 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8067 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8067 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce067 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.67 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// A user-selected regenerate action must always regenerate. 0.7.66 made the button reachable,
+// but the worker still allowed a missing/false force bit to fall through to isCurrent() and skip.
+// Treat requestType=manual as authoritative, and log the received request fields for device proof.
+def workerFile067 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/AiAnalysisWorker.java')
+def worker067 = readUtf8067(workerFile067)
+
+worker067 = replaceOnce067(worker067,
+'''        boolean manualRequest = AiQueueStore.REQUEST_MANUAL.equals(requestType);
+        boolean force = getInputData().getBoolean(AiAnalysisScheduler.EXTRA_FORCE, false);
+        boolean daily = AiAnalysisScheduler.KIND_DAILY.equals(kind);
+
+        setQueueState(context, queueId, kind, periodStartMs, periodEndMs, requestType,
+''',
+'''        boolean manualRequest = AiQueueStore.REQUEST_MANUAL.equals(requestType);
+        boolean force = getInputData().getBoolean(AiAnalysisScheduler.EXTRA_FORCE, false);
+        boolean daily = AiAnalysisScheduler.KIND_DAILY.equals(kind);
+
+        try {
+            JSONObject requestDetails = new JSONObject();
+            requestDetails.put("kind", kind);
+            requestDetails.put("periodStartMs", periodStartMs);
+            requestDetails.put("periodEndMs", periodEndMs);
+            requestDetails.put("requestType", requestType);
+            requestDetails.put("manualRequest", manualRequest);
+            requestDetails.put("force", force);
+            requestDetails.put("runAttemptCount", getRunAttemptCount());
+            AppLogger.event(context, "AI_ANALYSIS_REQUEST_RECEIVED", requestDetails);
+        } catch (Exception ignored) {
+        }
+
+        setQueueState(context, queueId, kind, periodStartMs, periodEndMs, requestType,
+''', 'worker request diagnostics')
+
+worker067 = replaceOnce067(worker067,
+'''        if (!force && AiAnalysisRepository.isCurrent(target, source.sourceHash, modelId)) {
+''',
+'''        if (!manualRequest && !force
+                && AiAnalysisRepository.isCurrent(target, source.sourceHash, modelId)) {
+''', 'manual request must not skip current')
+
+writeUtf8067(workerFile067, worker067)
+
+// Log the enqueue boundary too. This distinguishes "button did not enqueue" from
+// "worker received the request but interpreted it incorrectly" in Drive diagnostics.
+def schedulerFile067 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/AiAnalysisScheduler.java')
+def scheduler067 = readUtf8067(schedulerFile067)
+
+scheduler067 = replaceOnce067(scheduler067,
+'''        AiQueueStore.upsert(
+                app,
+                queueId,
+''',
+'''        try {
+            org.json.JSONObject enqueueDetails = new org.json.JSONObject();
+            enqueueDetails.put("kind", kind);
+            enqueueDetails.put("periodStartMs", periodStartMs);
+            enqueueDetails.put("periodEndMs", periodEndMs);
+            enqueueDetails.put("requestType", effectiveRequestType);
+            enqueueDetails.put("manualRequest", AiQueueStore.REQUEST_MANUAL.equals(effectiveRequestType));
+            enqueueDetails.put("force", effectiveForce);
+            enqueueDetails.put("existingWorkPolicy", policy.name());
+            com.sktpj.recorder24h.util.AppLogger.event(
+                    app, "AI_ANALYSIS_TARGET_ENQUEUED", enqueueDetails);
+        } catch (Exception ignored) {
+        }
+
+        AiQueueStore.upsert(
+                app,
+                queueId,
+''', 'enqueue diagnostics')
+
+writeUtf8067(schedulerFile067, scheduler067)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1067)
+            output.versionName.set('0.7.67-debug')
+        }
+    }
+}
+
+if (!workerFile067.text.contains('AI_ANALYSIS_REQUEST_RECEIVED')) {
+    throw new GradleException('0.7.67 worker request diagnostics missing')
+}
+if (!workerFile067.text.contains('if (!manualRequest && !force')) {
+    throw new GradleException('0.7.67 manual regeneration guard missing')
+}
+if (!schedulerFile067.text.contains('AI_ANALYSIS_TARGET_ENQUEUED')) {
+    throw new GradleException('0.7.67 enqueue diagnostics missing')
+}
