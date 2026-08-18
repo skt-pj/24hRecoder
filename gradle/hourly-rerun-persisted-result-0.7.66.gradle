@@ -1,0 +1,119 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8066 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8066 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce066 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.66 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// The device can have a valid persisted hourly JSON even when the caller's in-memory AiAnalysisDocument
+// lookup says hasResult=false. Rerun eligibility must use the persisted file that the worker actually owns,
+// not a second UI mapping of the same result.
+def actionsFile066 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiNotebookAnalysisActions.kt')
+def actions066 = readUtf8066(actionsFile066)
+
+actions066 = replaceOnce066(actions066,
+'''private data class NotebookPeriodActionSnapshot(
+    val configured: Boolean,
+    val hasSource: Boolean,
+    val pendingTranscription: Boolean,
+    val queueState: String?,
+    val periodStarted: Boolean,
+    val periodFinished: Boolean
+)
+''',
+'''private data class NotebookPeriodActionSnapshot(
+    val configured: Boolean,
+    val persistedResult: Boolean,
+    val hasSource: Boolean,
+    val pendingTranscription: Boolean,
+    val queueState: String?,
+    val periodStarted: Boolean,
+    val periodFinished: Boolean
+)
+''', 'period snapshot persisted result')
+
+actions066 = replaceOnce066(actions066,
+'''            NotebookPeriodActionSnapshot(
+                configured = AiProviderStore.isConfigured(context),
+                hasSource = false,
+                pendingTranscription = false,
+''',
+'''            NotebookPeriodActionSnapshot(
+                configured = AiProviderStore.isConfigured(context),
+                persistedResult = hasResult,
+                hasSource = false,
+                pendingTranscription = false,
+''', 'initial persisted result')
+
+actions066 = replaceOnce066(actions066,
+'''                val directSource = notebookHasTranscriptSource(records, periodStartMs, periodEndMs)
+                val savedSource = hasResult && AiAnalysisRepository.hasSavedSourceAvailable(
+                    context.applicationContext, targetFile, periodStartMs, periodEndMs
+                )
+                val retainedLifecycleSource = hasResult &&
+                    kind == AiAnalysisScheduler.KIND_HOURLY &&
+                    !AiAnalysisRepository.isDailySourceFinalized(
+                        context.applicationContext, periodStartMs
+                    )
+                NotebookPeriodActionSnapshot(
+                    configured = AiProviderStore.isConfigured(context.applicationContext),
+                    hasSource = directSource || savedSource || retainedLifecycleSource,
+''',
+'''                val persistedResult = targetFile.isFile
+                val directSource = notebookHasTranscriptSource(records, periodStartMs, periodEndMs)
+                val savedSource = persistedResult && AiAnalysisRepository.hasSavedSourceAvailable(
+                    context.applicationContext, targetFile, periodStartMs, periodEndMs
+                )
+                val retainedLifecycleSource = persistedResult &&
+                    kind == AiAnalysisScheduler.KIND_HOURLY &&
+                    !AiAnalysisRepository.isDailySourceFinalized(
+                        context.applicationContext, periodStartMs
+                    )
+                NotebookPeriodActionSnapshot(
+                    configured = AiProviderStore.isConfigured(context.applicationContext),
+                    persistedResult = persistedResult,
+                    hasSource = directSource || savedSource || retainedLifecycleSource,
+''', 'persisted result source of truth')
+
+actions066 = replaceOnce066(actions066,
+'''    val isHourly = kind == AiAnalysisScheduler.KIND_HOURLY
+    val activeQueue = when (snapshot.queueState) {
+''',
+'''    val isHourly = kind == AiAnalysisScheduler.KIND_HOURLY
+    val effectiveHasResult = snapshot.persistedResult || hasResult
+    val activeQueue = when (snapshot.queueState) {
+''', 'effective persisted result')
+
+actions066 = replaceOnce066(actions066,
+'''        hasResult && snapshot.hasSource ->
+            if (isHourly) "再実行" else "1日のノートを再生成"
+        hasResult -> if (isHourly) "再実行不可" else "再生成不可"
+''',
+'''        effectiveHasResult && snapshot.hasSource ->
+            if (isHourly) "再実行" else "1日のノートを再生成"
+        effectiveHasResult -> if (isHourly) "再実行不可" else "再生成不可"
+''', 'result label uses persisted state')
+
+writeUtf8066(actionsFile066, actions066)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1066)
+            output.versionName.set('0.7.66-debug')
+        }
+    }
+}
+
+if (!actionsFile066.text.contains('val persistedResult = targetFile.isFile')) {
+    throw new GradleException('0.7.66 persisted hourly result lookup missing')
+}
+if (!actionsFile066.text.contains('effectiveHasResult = snapshot.persistedResult || hasResult')) {
+    throw new GradleException('0.7.66 persisted result UI state missing')
+}
