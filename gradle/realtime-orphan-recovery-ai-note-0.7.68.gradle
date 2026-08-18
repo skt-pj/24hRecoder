@@ -1,0 +1,163 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8068 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8068 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce068 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.68 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// -----------------------------------------------------------------------------
+// Root cause from Pixel 10a Drive diagnostics:
+// realtime-only canonical finalization can fail or disappear before transcript persistence.
+// 0.7.29 recovery correctly classifies these retained-M4A rows as FAILED
+// (LIVE_CANONICAL_TRANSCRIPT_MISSING / FULL_STREAMING_ASR_FAILED:*), but 0.7.46 deliberately
+// excludes realtime-only ownership from the ordinary nightly canonical queue. The result is a
+// permanent AUDIO_ONLY + FAILED + queue NONE orphan, which keeps daily AI pending forever.
+//
+// Recover only those original live-canonical failures from the retained M4A. This is a failure
+// fallback, not a return to normal five-minute automatic final transcription. A fallback that
+// itself reaches LOCAL_SINGLE_RUNNER_FAILED is left FAILED for inspection rather than requeued on
+// every app start.
+// -----------------------------------------------------------------------------
+def schedulerFile068 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionScheduler.java')
+def scheduler068 = readUtf8068(schedulerFile068)
+
+scheduler068 = replaceOnce068(scheduler068,
+'''    private static final long LIVE_ORPHAN_STALE_MS = 30L * 60L * 1000L;
+''',
+'''    private static final long LIVE_ORPHAN_STALE_MS = 30L * 60L * 1000L;
+    private static final String REALTIME_ONLY_RECOVERY_REASON =
+            "REALTIME_ONLY_ORPHAN_RECOVERY_WORK_ENQUEUED";
+''', 'realtime orphan recovery reason')
+
+scheduler068 = replaceOnce068(scheduler068,
+'''                int liveOrphansReconciled = reconcileStaleLiveOrphans(app);
+
+                JSONObject details = new JSONObject();
+''',
+'''                int liveOrphansReconciled = reconcileStaleLiveOrphans(app);
+                int realtimeOnlyOrphansQueued = enqueueRealtimeOnlyOrphanRecovery(app);
+
+                JSONObject details = new JSONObject();
+''', 'queue realtime orphans after reconciliation')
+
+scheduler068 = replaceOnce068(scheduler068,
+'''                details.put("liveOrphansReconciled", liveOrphansReconciled);
+                details.put("queuePaused", isQueuePaused(app));
+''',
+'''                details.put("liveOrphansReconciled", liveOrphansReconciled);
+                details.put("realtimeOnlyOrphansQueued", realtimeOnlyOrphansQueued);
+                details.put("queuePaused", isQueuePaused(app));
+''', 'recovery diagnostics count')
+
+scheduler068 = replaceOnce068(scheduler068,
+'''    static boolean isAutomaticLiveFinalDisabled(Context context, SegmentRecord record) {
+''',
+'''    private static int enqueueRealtimeOnlyOrphanRecovery(Context context) {
+        int queued = 0;
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (!record.getAudioAvailable() || record.getHasTranscript()) continue;
+            if (!"FAILED".equals(record.getStatus())) continue;
+            if (!FullStreamingStateStore.isRealtimeOnlyOwned(context, record.getSegmentId())) continue;
+
+            String previousReason = record.getReason();
+            boolean recoverable = "LIVE_CANONICAL_TRANSCRIPT_MISSING".equals(previousReason)
+                    || "FULL_STREAMING_ASR_FAILED".equals(previousReason)
+                    || (previousReason != null
+                        && previousReason.startsWith("FULL_STREAMING_ASR_FAILED:"));
+            if (!recoverable) continue;
+
+            String audioPath = record.getAudioPath();
+            File audioFile = audioPath == null || audioPath.isEmpty() ? null : new File(audioPath);
+            if (audioFile == null || !audioFile.isFile()) continue;
+
+            SegmentRepository.appendWithoutNotify(
+                    context,
+                    record.getSegmentId(),
+                    audioFile,
+                    audioFile.lastModified(),
+                    System.currentTimeMillis(),
+                    "QUEUED",
+                    REALTIME_ONLY_RECOVERY_REASON);
+            queued++;
+            try {
+                AppLogger.event(context, "REALTIME_ONLY_ORPHAN_RECOVERY_ENQUEUED", new JSONObject()
+                        .put("segmentId", record.getSegmentId())
+                        .put("audioFile", audioFile.getName())
+                        .put("previousReason", previousReason == null ? JSONObject.NULL : previousReason)
+                        .put("fallback", "retained-m4a-postprocess")
+                        .put("normalRealtimeOnlyFiveMinuteFinal", false));
+            } catch (Exception ignored) {
+            }
+        }
+        return queued;
+    }
+
+    private static boolean isRealtimeOnlyRecoveryQueueItem(
+            Context context, SegmentRecord record) {
+        if (record == null || record.getSegmentId() == null) return false;
+        if (!FullStreamingStateStore.isRealtimeOnlyOwned(context, record.getSegmentId())) return false;
+        String reason = record.getReason();
+        if (REALTIME_ONLY_RECOVERY_REASON.equals(reason)) return true;
+        // If the process dies after this fallback has started, the existing single-runner recovery
+        // rewrites the reason. Preserve the bypass only for realtime-only-owned retained audio.
+        return "RECOVERED_INTERRUPTED_TRANSCRIPTION".equals(reason)
+                || "RECOVERED_POSTPROCESS_PROCESS_RESTART_WORK_ENQUEUED".equals(reason);
+    }
+
+    static boolean isAutomaticLiveFinalDisabled(Context context, SegmentRecord record) {
+''', 'realtime orphan recovery methods')
+
+// 0.7.44 has already inserted the nightly exception at this point in the build patch chain.
+scheduler068 = replaceOnce068(scheduler068,
+'''        if (NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(record)) return false;
+''',
+'''        if (NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(record)) return false;
+        if (isRealtimeOnlyRecoveryQueueItem(context, record)) return false;
+''', 'realtime recovery bypass of normal five-minute-final disable')
+
+writeUtf8068(schedulerFile068, scheduler068)
+
+// -----------------------------------------------------------------------------
+// Daily AI action has a second, older queue-state implementation that was not covered by the
+// 0.7.65/0.7.66 shared/hourly fixes. Once the missing transcripts are recovered, a stale scheduled
+// WAITING_DATA/RETRY_WAIT row must not keep the explicit daily action disabled. Daily still remains
+// strict about pending transcription below, so this does not allow incomplete-day generation.
+// -----------------------------------------------------------------------------
+def actionsFile068 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiNotebookAnalysisActions.kt')
+def actions068 = readUtf8068(actionsFile068)
+actions068 = replaceOnce068(actions068,
+'''    val dailyActiveQueue = snapshot.dailyQueueState != null &&
+        snapshot.dailyQueueState != AiQueueStore.STATE_FAILED
+''',
+'''    val dailyActiveQueue = when (snapshot.dailyQueueState) {
+        AiQueueStore.STATE_RUNNING, AiQueueStore.STATE_QUEUED -> true
+        AiQueueStore.STATE_WAITING_DATA, AiQueueStore.STATE_RETRY_WAIT -> !snapshot.dailyHasSource
+        else -> false
+    }
+''', 'daily stale queue manual override')
+writeUtf8068(actionsFile068, actions068)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1068)
+            output.versionName.set('0.7.68-debug')
+        }
+    }
+}
+
+if (!schedulerFile068.text.contains('REALTIME_ONLY_ORPHAN_RECOVERY_ENQUEUED')) {
+    throw new GradleException('0.7.68 realtime orphan recovery diagnostics missing')
+}
+if (!schedulerFile068.text.contains('isRealtimeOnlyRecoveryQueueItem')) {
+    throw new GradleException('0.7.68 realtime orphan recovery bypass missing')
+}
+if (!actionsFile068.text.contains('AiQueueStore.STATE_WAITING_DATA, AiQueueStore.STATE_RETRY_WAIT -> !snapshot.dailyHasSource')) {
+    throw new GradleException('0.7.68 daily stale queue override missing')
+}
