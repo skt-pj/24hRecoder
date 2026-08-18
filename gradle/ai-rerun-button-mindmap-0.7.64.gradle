@@ -1,0 +1,177 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8064 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8064 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce064 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.64 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// A transcript-bearing 5-minute record is valid source for an overlapping hour even when
+// decoder chunk offsets are inconsistent. The source still exists until daily cleanup completes.
+def actionsFile064 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiNotebookAnalysisActions.kt')
+def actions064 = readUtf8064(actionsFile064)
+def oldSourceCheck064 = '''private fun notebookHasTranscriptSource(
+    records: List<SegmentRecord>,
+    periodStartMs: Long,
+    periodEndMs: Long
+): Boolean {
+    for (record in records) {
+        val transcript = record.transcriptText?.trim().orEmpty()
+        if (transcript.isEmpty()) continue
+
+        val chunks = record.transcriptChunks
+        if (chunks.isNotEmpty() && record.startedAtMs > 0L) {
+            for (chunk in chunks) {
+                if (chunk.text.isBlank()) continue
+                val absoluteStart = record.startedAtMs + chunk.startMs
+                val absoluteEnd = record.startedAtMs + chunk.endMs
+                if (absoluteEnd > periodStartMs && absoluteStart < periodEndMs) {
+                    return true
+                }
+            }
+        } else if (notebookRecordOverlaps(record, periodStartMs, periodEndMs)) {
+            return true
+        }
+    }
+    return false
+}
+'''
+def newSourceCheck064 = '''private fun notebookHasTranscriptSource(
+    records: List<SegmentRecord>,
+    periodStartMs: Long,
+    periodEndMs: Long
+): Boolean {
+    for (record in records) {
+        val transcript = record.transcriptText?.trim().orEmpty()
+        if (transcript.isEmpty()) continue
+
+        val chunks = record.transcriptChunks
+        if (chunks.isNotEmpty() && record.startedAtMs > 0L) {
+            for (chunk in chunks) {
+                if (chunk.text.isBlank()) continue
+                val absoluteStart = record.startedAtMs + chunk.startMs
+                val absoluteEnd = record.startedAtMs + chunk.endMs
+                if (absoluteEnd > periodStartMs && absoluteStart < periodEndMs) {
+                    return true
+                }
+            }
+            // Some realtime/canonical transcript chunks can carry offsets that no longer map
+            // cleanly to the parent record. If the retained record itself overlaps this hour and
+            // has non-empty transcript text, the source is still available for manual rerun.
+            if (notebookRecordOverlaps(record, periodStartMs, periodEndMs)) {
+                return true
+            }
+        } else if (notebookRecordOverlaps(record, periodStartMs, periodEndMs)) {
+            return true
+        }
+    }
+    return false
+}
+'''
+actions064 = replaceOnce064(actions064, oldSourceCheck064, newSourceCheck064,
+        'hourly rerun source availability fallback')
+writeUtf8064(actionsFile064, actions064)
+
+// Give the AndroidView itself an explicit Compose height. The previous version constrained only
+// its Surface parent, while the WebView document still observed a zero-height viewport.
+def mapFile064 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MindElixirMindMap.kt')
+def map064 = readUtf8064(mapFile064)
+def oldMapSurface064 = '''            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(mapHeight)
+                    .clip(MaterialTheme.shapes.medium),
+                shape = MaterialTheme.shapes.medium,
+                tonalElevation = 1.dp
+            ) {
+                MindElixirWebView(
+                    payload = payload,
+                    background = colorScheme.surfaceContainer,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+'''
+def newMapSurface064 = '''            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(MaterialTheme.shapes.medium),
+                shape = MaterialTheme.shapes.medium,
+                tonalElevation = 1.dp
+            ) {
+                MindElixirWebView(
+                    payload = payload,
+                    background = colorScheme.surfaceContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(mapHeight)
+                )
+            }
+'''
+map064 = replaceOnce064(map064, oldMapSurface064, newMapSurface064,
+        'explicit WebView height')
+writeUtf8064(mapFile064, map064)
+
+// Mind Elixir's documented integration expects a concrete map height. Avoid a percentage-height
+// chain inside Android WebView and pin the map to a non-zero viewport before init().
+def htmlFile064 = rootProject.file('app/src/main/assets/mindmap/index.html')
+def html064 = readUtf8064(htmlFile064)
+html064 = replaceOnce064(
+        html064,
+        '''    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--pcs-bg); color: var(--pcs-text); font-family: system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans JP", sans-serif; }
+    #frame { position: relative; width: 100%; height: 100%; overflow: hidden; background: var(--pcs-bg); }
+    #map { width: 100%; height: 100%; touch-action: none; overflow: hidden; }
+''',
+        '''    html { width: 100%; height: 100%; min-height: 320px; margin: 0; overflow: hidden; background: var(--pcs-bg); }
+    body { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 320px; margin: 0; overflow: hidden; background: var(--pcs-bg); color: var(--pcs-text); font-family: system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans JP", sans-serif; }
+    #frame { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 320px; overflow: hidden; background: var(--pcs-bg); }
+    #map { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 320px; touch-action: none; overflow: hidden; }
+''',
+        'non-zero WebView map CSS')
+html064 = replaceOnce064(
+        html064,
+        '''        if (mind) {
+          try { mind.destroy() } catch (_) {}
+          mind = null
+        }
+        mind = new MindElixir({
+''',
+        '''        if (mind) {
+          try { mind.destroy() } catch (_) {}
+          mind = null
+        }
+        const viewportHeight = Math.max(
+          320,
+          Number(window.innerHeight || 0),
+          Number(document.documentElement?.clientHeight || 0),
+          Number(document.body?.clientHeight || 0)
+        )
+        map.style.height = `${viewportHeight}px`
+        map.style.minHeight = `${viewportHeight}px`
+        mind = new MindElixir({
+''',
+        'Mind Elixir concrete viewport before init')
+writeUtf8064(htmlFile064, html064)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1064)
+            output.versionName.set('0.7.64-debug')
+        }
+    }
+}
+
+if (!actionsFile064.text.contains('the source is still available for manual rerun')) {
+    throw new GradleException('0.7.64 hourly rerun button fallback missing')
+}
+if (!mapFile064.text.contains('.height(mapHeight)')) {
+    throw new GradleException('0.7.64 explicit WebView height missing')
+}
+if (!htmlFile064.text.contains('viewportHeight = Math.max')) {
+    throw new GradleException('0.7.64 Mind Elixir viewport guard missing')
+}
