@@ -57,6 +57,7 @@ apply from: rootProject.file('gradle/mindmap-layout-sync-status-0.7.62.gradle')
 apply from: rootProject.file('gradle/ai-hourly-rerun-source-0.7.63.gradle')
 apply from: rootProject.file('gradle/ai-rerun-button-mindmap-0.7.64.gradle')
 apply from: rootProject.file('gradle/manual-ai-period-actions-0.7.65.gradle')
+apply from: rootProject.file('gradle/hourly-rerun-persisted-result-0.7.66.gradle')
 
 android {
     namespace 'com.sktpj.recorder24h'
