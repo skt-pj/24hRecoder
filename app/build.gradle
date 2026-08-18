@@ -53,6 +53,7 @@ apply from: rootProject.file('gradle/native-fetch-transport-0.7.59.gradle')
 apply from: rootProject.file('gradle/diagnostic-log-levels-mindmap-0.7.60.gradle')
 apply from: rootProject.file('gradle/manual-drive-sync-0.7.61.gradle')
 apply from: rootProject.file('gradle/manual-drive-sync-ui-fix-0.7.61.gradle')
+apply from: rootProject.file('gradle/mindmap-layout-sync-status-0.7.62.gradle')
 
 android {
     namespace 'com.sktpj.recorder24h'
