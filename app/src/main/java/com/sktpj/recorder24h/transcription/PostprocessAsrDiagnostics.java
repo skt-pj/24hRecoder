@@ -6,6 +6,7 @@ import android.os.Build;
 import android.os.PowerManager;
 
 import com.sktpj.recorder24h.util.AppLogger;
+import com.sktpj.recorder24h.util.DiagnosticLogSettings;
 
 import org.json.JSONObject;
 
@@ -17,6 +18,9 @@ public final class PostprocessAsrDiagnostics {
     private PostprocessAsrDiagnostics() {}
 
     public static String nativeBreadcrumbPath(Context context, String scope) {
+        // Native breadcrumbs fsync every stage and are intentionally high-volume. Keep them
+        // completely disabled unless the user has enabled detailed diagnostics.
+        if (!DiagnosticLogSettings.isDetailedEnabled(context)) return "";
         File dir = new File(context.getFilesDir(), "logs");
         if (!dir.exists()) dir.mkdirs();
         String safe = scope == null || scope.isEmpty() ? "asr" : scope.replaceAll("[^A-Za-z0-9._-]", "_");
