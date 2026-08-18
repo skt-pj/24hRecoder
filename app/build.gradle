@@ -63,6 +63,7 @@ apply from: rootProject.file('gradle/realtime-orphan-recovery-ai-note-0.7.68.gra
 apply from: rootProject.file('gradle/state-transition-tracing-0.7.69.gradle')
 apply from: rootProject.file('gradle/full-streaming-ownership-tracing-0.7.69.gradle')
 apply from: rootProject.file('gradle/state-transition-tracing-java-fix-0.7.69.gradle')
+apply from: rootProject.file('gradle/realtime-only-terminal-gap-ai-0.7.70.gradle')
 
 android {
     namespace 'com.sktpj.recorder24h'
