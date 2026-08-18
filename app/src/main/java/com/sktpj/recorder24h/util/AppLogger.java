@@ -19,8 +19,9 @@ public final class AppLogger {
     }
 
     public static void event(Context context, String event, JSONObject details) {
-        if (isDetailedOnlyEvent(event) && !DiagnosticLogSettings.isDetailedEnabled(context)) return;
-        write(context, event, details, isDetailedOnlyEvent(event) ? "diagnostic" : "core");
+        boolean detailed = isDetailedOnlyEvent(event);
+        if (detailed && !DiagnosticLogSettings.isDetailedEnabled(context)) return;
+        write(context, event, details, detailed ? "diagnostic" : "core");
     }
 
     public static void event(Context context, String event) {
@@ -70,7 +71,7 @@ public final class AppLogger {
         if (event == null || event.isEmpty()) return false;
         String value = event.toUpperCase(Locale.ROOT);
 
-        // Failures and destructive/state-changing events must remain available even when
+        // Failures and destructive/state-changing events remain available even when
         // detailed diagnostics are disabled.
         if (value.contains("FAILED") || value.contains("ERROR") || value.contains("EXCEPTION")
                 || value.contains("CORRUPT") || value.contains("UNAVAILABLE")
@@ -85,7 +86,8 @@ public final class AppLogger {
         // High-frequency tracing and successful polling/housekeeping are diagnostic-only.
         if (value.startsWith("FULL_STREAMING_") || value.startsWith("STREAMING_VAD_")
                 || value.startsWith("DEEPFILTERNET_")) return true;
-        if (value.equals("DRIVE_LOG_SYNC_SUCCEEDED") || value.equals("MAIN_ACTIVITY_CREATED")
+        if (value.equals("POSTPROCESS_ASR_STAGE")
+                || value.equals("DRIVE_LOG_SYNC_SUCCEEDED") || value.equals("MAIN_ACTIVITY_CREATED")
                 || value.equals("TRANSCRIPTION_BACKEND_CAPABILITIES")
                 || value.equals("REALTIME_ONLY_SEGMENT_NOT_STAGED_NIGHTLY")
                 || value.equals("TRANSCRIPTION_SINGLE_RUNNER_RECOVERY_COMPLETED")) return true;
