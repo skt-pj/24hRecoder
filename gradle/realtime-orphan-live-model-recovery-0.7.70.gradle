@@ -53,23 +53,11 @@ def workerFile070r = rootProject.file(
 def worker070r = readUtf8070r(workerFile070r)
 
 worker070r = replaceOnce070r(worker070r,
-'''        boolean forceRetranscribe = record.getReason() != null && record.getReason().startsWith("MANUAL_");
-        int generation = TranscriptionResetManager.currentGeneration(context);
-''',
-'''        boolean forceRetranscribe = record.getReason() != null && record.getReason().startsWith("MANUAL_");
-        boolean realtimeOnlyRecovery =
-                TranscriptionScheduler.isRealtimeOnlyRecoveryQueueItem(context, record);
-        int generation = TranscriptionResetManager.currentGeneration(context);
-''', 'worker recovery classification')
-
-worker070r = replaceOnce070r(worker070r,
 '''            String selectedModelId = WhisperModelManager.selectedModelId(context);
-            TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
-            String selectedEngineId = LocalWhisperEngine.engineId(context, selectedModelId, pipeline);
 ''',
 '''            String normalSelectedModelId = WhisperModelManager.selectedModelId(context);
             String selectedModelId = normalSelectedModelId;
-            if (realtimeOnlyRecovery) {
+            if (TranscriptionScheduler.isRealtimeOnlyRecoveryQueueItem(context, record)) {
                 String liveModelId = record.getLiveModelId();
                 if (WhisperModelManager.modelSpec(liveModelId) != null) {
                     selectedModelId = liveModelId;
@@ -102,8 +90,6 @@ worker070r = replaceOnce070r(worker070r,
                     return;
                 }
             }
-            TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
-            String selectedEngineId = LocalWhisperEngine.engineId(context, selectedModelId, pipeline);
 ''', 'select original live model for orphan recovery')
 
 writeUtf8070r(workerFile070r, worker070r)
