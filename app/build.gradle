@@ -66,6 +66,7 @@ apply from: rootProject.file('gradle/state-transition-tracing-java-fix-0.7.69.gr
 apply from: rootProject.file('gradle/realtime-orphan-live-model-recovery-0.7.70.gradle')
 apply from: rootProject.file('gradle/storage-retention-headroom-0.7.70.gradle')
 apply from: rootProject.file('gradle/ai-action-mode-0.7.71.gradle')
+apply from: rootProject.file('gradle/battery-transcription-0.7.72.gradle')
 
 android {
     namespace 'com.sktpj.recorder24h'
