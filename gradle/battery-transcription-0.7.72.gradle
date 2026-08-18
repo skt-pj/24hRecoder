@@ -1,0 +1,480 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8072 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8072 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce072 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.72 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+def replaceBetween072 = { String source, String startMarker, String endMarker, String replacement, String label ->
+    int start = source.indexOf(startMarker)
+    if (start < 0) throw new GradleException("0.7.72 ${label}: start marker missing")
+    int end = source.indexOf(endMarker, start)
+    if (end < 0) throw new GradleException("0.7.72 ${label}: end marker missing")
+    source.substring(0, start) + replacement + source.substring(end)
+}
+
+// Reuse the Silero pass that already runs on AudioRecord PCM. The previous 30-second live path
+// performed StreamingVadStore.analyzeOffline() again before every Whisper call, which duplicated
+// VAD work and was visible as long FULL_STREAMING_PROVISIONAL_VAD_COMPACTED vadDetectMs values.
+def vadFile072 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/StreamingVadStore.java')
+def vad072 = readUtf8072(vadFile072)
+
+vad072 = replaceOnce072(vad072,
+'''                try {
+                    String raw = nativeStreamingVadProcess(samples);
+''',
+'''                double probabilitySum = 0.0;
+                double speechProbabilitySum = 0.0;
+                double maxSpeechProbability = 0.0;
+                long probabilityCount = 0L;
+                long speechProbabilityCount = 0L;
+                try {
+                    String raw = nativeStreamingVadProcess(samples);
+''', 'online VAD evidence counters')
+
+vad072 = replaceOnce072(vad072,
+'''                        for (int i = 0; i < probabilities.length(); i++) {
+                            long frameStartUs = streamBasePtsUs + processedFrameCount * frameUs;
+                            detector.accept(probabilities.optDouble(i, 0.0), frameStartUs, frameStartUs + frameUs);
+                            processedFrameCount++;
+                        }
+''',
+'''                        for (int i = 0; i < probabilities.length(); i++) {
+                            long frameStartUs = streamBasePtsUs + processedFrameCount * frameUs;
+                            double probability = probabilities.optDouble(i, 0.0);
+                            probabilitySum += probability;
+                            probabilityCount++;
+                            maxSpeechProbability = Math.max(maxSpeechProbability, probability);
+                            if (probability >= THRESHOLD) {
+                                speechProbabilitySum += probability;
+                                speechProbabilityCount++;
+                            }
+                            detector.accept(probability, frameStartUs, frameStartUs + frameUs);
+                            processedFrameCount++;
+                        }
+''', 'online VAD evidence accumulation')
+
+vad072 = replaceOnce072(vad072,
+'''                    observation = new LiveObservation(true, detector.activeStartUs(), currentEndUs, starts, ends);
+''',
+'''                    observation = new LiveObservation(
+                            true, detector.activeStartUs(), currentEndUs, starts, ends,
+                            probabilitySum, probabilityCount,
+                            speechProbabilitySum, speechProbabilityCount,
+                            maxSpeechProbability);
+''', 'online VAD evidence observation')
+
+vad072 = replaceOnce072(vad072,
+'''    public static final class LiveObservation {
+        public final boolean available;
+        public final long activeSpeechStartUs;
+        public final long currentEndUs;
+        public final long[] closedStartsUs;
+        public final long[] closedEndsUs;
+
+        LiveObservation(boolean available, long activeSpeechStartUs, long currentEndUs,
+                        long[] closedStartsUs, long[] closedEndsUs) {
+            this.available = available;
+            this.activeSpeechStartUs = activeSpeechStartUs;
+            this.currentEndUs = currentEndUs;
+            this.closedStartsUs = closedStartsUs == null ? new long[0] : closedStartsUs;
+            this.closedEndsUs = closedEndsUs == null ? new long[0] : closedEndsUs;
+        }
+    }
+''',
+'''    public static final class LiveObservation {
+        public final boolean available;
+        public final long activeSpeechStartUs;
+        public final long currentEndUs;
+        public final long[] closedStartsUs;
+        public final long[] closedEndsUs;
+        public final double probabilitySum;
+        public final long probabilityCount;
+        public final double speechProbabilitySum;
+        public final long speechProbabilityCount;
+        public final double maxSpeechProbability;
+
+        LiveObservation(boolean available, long activeSpeechStartUs, long currentEndUs,
+                        long[] closedStartsUs, long[] closedEndsUs) {
+            this(available, activeSpeechStartUs, currentEndUs, closedStartsUs, closedEndsUs,
+                    0.0, 0L, 0.0, 0L, 0.0);
+        }
+
+        LiveObservation(boolean available, long activeSpeechStartUs, long currentEndUs,
+                        long[] closedStartsUs, long[] closedEndsUs,
+                        double probabilitySum, long probabilityCount,
+                        double speechProbabilitySum, long speechProbabilityCount,
+                        double maxSpeechProbability) {
+            this.available = available;
+            this.activeSpeechStartUs = activeSpeechStartUs;
+            this.currentEndUs = currentEndUs;
+            this.closedStartsUs = closedStartsUs == null ? new long[0] : closedStartsUs;
+            this.closedEndsUs = closedEndsUs == null ? new long[0] : closedEndsUs;
+            this.probabilitySum = probabilitySum;
+            this.probabilityCount = Math.max(0L, probabilityCount);
+            this.speechProbabilitySum = speechProbabilitySum;
+            this.speechProbabilityCount = Math.max(0L, speechProbabilityCount);
+            this.maxSpeechProbability = Math.max(0.0, maxSpeechProbability);
+        }
+    }
+''', 'live observation evidence fields')
+writeUtf8072(vadFile072, vad072)
+
+// Forward the already-computed VAD evidence to :streaming_asr with the existing PCM/VAD message.
+def coordinatorFile072 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/FullStreamingTranscriptionCoordinator.java')
+def coordinator072 = readUtf8072(coordinatorFile072)
+coordinator072 = replaceOnce072(coordinator072,
+'''            data.putLongArray("closedStartsUs", observation.closedStartsUs);
+            data.putLongArray("closedEndsUs", observation.closedEndsUs);
+''',
+'''            data.putLongArray("closedStartsUs", observation.closedStartsUs);
+            data.putLongArray("closedEndsUs", observation.closedEndsUs);
+            data.putDouble("vadProbabilitySum", observation.probabilitySum);
+            data.putLong("vadProbabilityCount", observation.probabilityCount);
+            data.putDouble("vadSpeechProbabilitySum", observation.speechProbabilitySum);
+            data.putLong("vadSpeechProbabilityCount", observation.speechProbabilityCount);
+            data.putDouble("vadMaxSpeechProbability", observation.maxSpeechProbability);
+''', 'forward online VAD evidence')
+writeUtf8072(coordinatorFile072, coordinator072)
+
+// The streaming service now compacts each 30-second window using ranges already emitted by the
+// live Silero detector, and reuses the same probability evidence for hallucination filtering.
+def streamFile072 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/StreamingTranscriptionService.java')
+def stream072 = readUtf8072(streamFile072)
+stream072 = replaceOnce072(stream072,
+'''import java.util.Arrays;
+import java.util.List;
+''',
+'''import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+''', 'ArrayList import')
+
+stream072 = replaceOnce072(stream072,
+'''    private boolean provisionalWindowHasSpeech;
+''',
+'''    private boolean provisionalWindowHasSpeech;
+    private final List<long[]> provisionalClosedRangesUs = new ArrayList<>();
+    private double provisionalVadProbabilitySum;
+    private long provisionalVadProbabilityCount;
+    private double provisionalVadSpeechProbabilitySum;
+    private long provisionalVadSpeechProbabilityCount;
+    private double provisionalVadMaxSpeechProbability;
+''', 'reused VAD window state')
+
+stream072 = replaceOnce072(stream072,
+'''        lastScheduledFinalEndUs = basePtsUs;
+        provisionalWindowHasSpeech = false;
+        enqueueConfigure(current);
+''',
+'''        lastScheduledFinalEndUs = basePtsUs;
+        provisionalWindowHasSpeech = false;
+        provisionalClosedRangesUs.clear();
+        resetProvisionalVadEvidence();
+        enqueueConfigure(current);
+''', 'reset reused VAD state')
+
+stream072 = replaceOnce072(stream072,
+'''        long[] starts = data.getLongArray("closedStartsUs");
+        long[] ends = data.getLongArray("closedEndsUs");
+
+        // Finish elapsed fixed windows first.
+''',
+'''        long[] starts = data.getLongArray("closedStartsUs");
+        long[] ends = data.getLongArray("closedEndsUs");
+        rememberClosedVadRanges(starts, ends);
+        accumulateProvisionalVadEvidence(data);
+
+        // Finish elapsed fixed windows first.
+''', 'reuse VAD evidence in PCM path')
+
+stream072 = replaceOnce072(stream072,
+'''            lastPartialRequestedEndUs = windowEndUs;
+            provisionalWindowHasSpeech = false;
+''',
+'''            lastPartialRequestedEndUs = windowEndUs;
+            provisionalWindowHasSpeech = false;
+            pruneClosedVadRanges(windowEndUs);
+            resetProvisionalVadEvidence();
+''', 'advance reused VAD window')
+
+stream072 = replaceOnce072(stream072,
+'''        lastPartialRequestedEndUs = endPtsUs;
+        provisionalWindowHasSpeech = false;
+
+        if (nextConfig.isLive()) {
+''',
+'''        lastPartialRequestedEndUs = endPtsUs;
+        provisionalWindowHasSpeech = false;
+        provisionalClosedRangesUs.clear();
+        resetProvisionalVadEvidence();
+
+        if (nextConfig.isLive()) {
+''', 'clear reused VAD at segment boundary')
+
+def newProvisionalRunner072 = '''    private void rememberClosedVadRanges(long[] startsUs, long[] endsUs) {
+        if (startsUs == null || endsUs == null) return;
+        int count = Math.min(startsUs.length, endsUs.length);
+        for (int i = 0; i < count; i++) {
+            if (endsUs[i] > startsUs[i]) {
+                provisionalClosedRangesUs.add(new long[]{startsUs[i], endsUs[i]});
+            }
+        }
+    }
+
+    private void pruneClosedVadRanges(long cutoffUs) {
+        for (int i = provisionalClosedRangesUs.size() - 1; i >= 0; i--) {
+            if (provisionalClosedRangesUs.get(i)[1] <= cutoffUs) {
+                provisionalClosedRangesUs.remove(i);
+            }
+        }
+    }
+
+    private void accumulateProvisionalVadEvidence(Bundle data) {
+        long count = Math.max(0L, data.getLong("vadProbabilityCount", 0L));
+        long speechCount = Math.max(0L, data.getLong("vadSpeechProbabilityCount", 0L));
+        provisionalVadProbabilitySum += data.getDouble("vadProbabilitySum", 0.0);
+        provisionalVadProbabilityCount += count;
+        provisionalVadSpeechProbabilitySum += data.getDouble("vadSpeechProbabilitySum", 0.0);
+        provisionalVadSpeechProbabilityCount += speechCount;
+        provisionalVadMaxSpeechProbability = Math.max(
+                provisionalVadMaxSpeechProbability,
+                data.getDouble("vadMaxSpeechProbability", 0.0));
+    }
+
+    private void resetProvisionalVadEvidence() {
+        provisionalVadProbabilitySum = 0.0;
+        provisionalVadProbabilityCount = 0L;
+        provisionalVadSpeechProbabilitySum = 0.0;
+        provisionalVadSpeechProbabilityCount = 0L;
+        provisionalVadMaxSpeechProbability = 0.0;
+    }
+
+    private List<StreamingVadStore.Range> provisionalVadRanges(
+            long windowStartUs, long windowEndUs) {
+        List<StreamingVadStore.Range> ranges = new ArrayList<>();
+        for (long[] source : provisionalClosedRangesUs) {
+            long startUs = Math.max(windowStartUs, source[0]);
+            long endUs = Math.min(windowEndUs, source[1]);
+            addVadRange(ranges, startUs, endUs, windowStartUs);
+        }
+        if (latestActiveSpeechStartUs >= 0L && latestActiveSpeechStartUs < windowEndUs) {
+            long startUs = Math.max(windowStartUs, latestActiveSpeechStartUs);
+            addVadRange(ranges, startUs, windowEndUs, windowStartUs);
+        }
+        return ranges;
+    }
+
+    private static void addVadRange(List<StreamingVadStore.Range> ranges,
+                                    long startUs, long endUs, long windowStartUs) {
+        if (endUs <= startUs) return;
+        long startMs = Math.max(0L, (startUs - windowStartUs) / 1000L);
+        long endMs = Math.max(startMs, (endUs - windowStartUs) / 1000L);
+        if (endMs <= startMs) return;
+        if (!ranges.isEmpty()) {
+            StreamingVadStore.Range previous = ranges.get(ranges.size() - 1);
+            if (startMs <= previous.endMs) {
+                ranges.set(ranges.size() - 1,
+                        new StreamingVadStore.Range(previous.startMs, Math.max(previous.endMs, endMs)));
+                return;
+            }
+        }
+        ranges.add(new StreamingVadStore.Range(startMs, endMs));
+    }
+
+    private StreamingVadStore.Snapshot provisionalVadSnapshot(
+            List<StreamingVadStore.Range> ranges) {
+        double meanProbability = provisionalVadProbabilityCount > 0L
+                ? provisionalVadProbabilitySum / provisionalVadProbabilityCount : 0.0;
+        double meanDetectedProbability = provisionalVadSpeechProbabilityCount > 0L
+                ? provisionalVadSpeechProbabilitySum / provisionalVadSpeechProbabilityCount : 0.0;
+        double aboveThresholdFraction = provisionalVadProbabilityCount > 0L
+                ? provisionalVadSpeechProbabilityCount / (double) provisionalVadProbabilityCount : 0.0;
+        return new StreamingVadStore.Snapshot(
+                true, true, true, "whisper-silero-streaming-reused", 0L,
+                ranges, null, meanProbability, meanDetectedProbability,
+                provisionalVadMaxSpeechProbability, aboveThresholdFraction);
+    }
+
+    private void scheduleProvisionalWindow(long windowStartUs, long windowEndUs,
+                                             SegmentAccumulator accumulator) {
+        if (windowEndUs <= windowStartUs || accumulator == null || accumulator.failed) return;
+        float[] sourceSamples = pcmBuffer.sliceFloat(windowStartUs, windowEndUs);
+        if (sourceSamples.length == 0) return;
+        List<StreamingVadStore.Range> ranges = provisionalVadRanges(windowStartUs, windowEndUs);
+        long windowDurationMs = Math.max(0L, (windowEndUs - windowStartUs) / 1000L);
+        SpeechTimeMap.Compaction compacted = SpeechTimeMap.compactSingle(
+                sourceSamples, ranges, windowDurationMs);
+        StreamingVadStore.Snapshot reusedVad = provisionalVadSnapshot(ranges);
+        try {
+            log("FULL_STREAMING_PROVISIONAL_VAD_REUSED", new JSONObject()
+                    .put("sourceDurationMs", compacted.originalDurationMs)
+                    .put("speechInputMs", compacted.speechDurationMs)
+                    .put("removedSilenceMs", compacted.removedSilenceMs)
+                    .put("vadRangeCount", ranges.size())
+                    .put("vadDetectMs", 0L)
+                    .put("vadSource", reusedVad.source)
+                    .put("vadMeanProbability", reusedVad.meanSpeechProbability)
+                    .put("vadMeanDetectedProbability", reusedVad.meanDetectedSpeechProbability)
+                    .put("vadMaxProbability", reusedVad.maxSpeechProbability)
+                    .put("vadAboveThresholdFraction", reusedVad.aboveThresholdFraction)
+                    .put("whisperInvoked", compacted.samples.length > 0)
+                    .put("timestampMapRetained", true));
+        } catch (Exception ignored) {}
+        if (compacted.samples.length == 0) return;
+
+        final long queuedAtMs = System.currentTimeMillis();
+        final boolean realtimeOnly = TranscriptionPipelineSettings.MODE_REALTIME_ONLY.equals(
+                accumulator.config.snapshot.executionMode);
+        submit("provisional-30s", () -> {
+            try {
+                Recognition result = recognize(
+                        compacted.samples, accumulator, !realtimeOnly, compacted.map, reusedVad);
+                if (realtimeOnly) {
+                    accumulator.addFinal(result, windowStartUs, windowEndUs);
+                }
+                long endAtMs = queuedAtMs;
+                long startAtMs = Math.max(0L, endAtMs - windowDurationMs);
+                FullStreamingStateStore.appendRecentFinal(
+                        this, startAtMs, endAtMs, windowStartUs, windowEndUs,
+                        result.text, accumulator.config.asrBackend, result.segments);
+                accumulator.latestFinalText = result.text;
+                writeState("FINAL", "", accumulator.latestFinalText, accumulator, null);
+                log("FULL_STREAMING_PROVISIONAL_30S", new JSONObject()
+                        .put("startPtsUs", windowStartUs)
+                        .put("endPtsUs", windowEndUs)
+                        .put("windowDurationMs", windowDurationMs)
+                        .put("sampleCount", sourceSamples.length)
+                        .put("speechSampleCount", compacted.samples.length)
+                        .put("textChars", result.text.length())
+                        .put("inferenceMs", result.inferenceMs)
+                        .put("whisperFullMs", result.whisperFullMs)
+                        .put("liveWhisperRoute", accumulator.config.liveWhisperRoute)
+                        .put("queueDepth", pendingInference.get())
+                        .put("canonical", realtimeOnly)
+                        .put("streamingVadReused", true));
+            } catch (Throwable error) {
+                if (realtimeOnly) {
+                    markAccumulatorFailed(accumulator, "REALTIME_ONLY_WINDOW_ASR_FAILED", error);
+                } else {
+                    writeState("WAITING", "", accumulator.latestFinalText, accumulator, null);
+                }
+                log("FULL_STREAMING_PROVISIONAL_30S_FAILED", details(
+                        "startPtsUs", windowStartUs,
+                        "endPtsUs", windowEndUs,
+                        "error", error.getClass().getSimpleName(),
+                        "message", safeMessage(error),
+                        "nightlyCanonicalStillRequired", !realtimeOnly,
+                        "automaticFallback", false));
+            }
+        });
+    }
+
+'''
+stream072 = replaceBetween072(stream072,
+        '    private void scheduleProvisionalWindow(long windowStartUs, long windowEndUs,',
+        '    private void schedulePartial(long globalStartUs, long globalEndUs, SegmentAccumulator accumulator) {',
+        newProvisionalRunner072,
+        'replace duplicate offline VAD provisional runner')
+
+stream072 = replaceOnce072(stream072,
+'''    private Recognition recognize(float[] rawSamples, SegmentAccumulator accumulator, boolean partial)
+            throws Exception {
+''',
+'''    private Recognition recognize(float[] rawSamples, SegmentAccumulator accumulator, boolean partial)
+            throws Exception {
+        return recognize(rawSamples, accumulator, partial, null, null);
+    }
+
+    private Recognition recognize(float[] rawSamples, SegmentAccumulator accumulator, boolean partial,
+                                  SpeechTimeMap.MapResult reusedProvisionalTimeMap,
+                                  StreamingVadStore.Snapshot reusedVadEvidence)
+            throws Exception {
+''', 'recognize VAD reuse overload')
+
+stream072 = replaceOnce072(stream072,
+'''        SpeechTimeMap.MapResult provisionalTimeMap = null;
+        StreamingVadStore.Snapshot hallucinationVadEvidence = null;
+        if (partial || TranscriptionPipelineSettings.MODE_REALTIME_ONLY.equals(
+                accumulator.config.snapshot.executionMode)) {
+''',
+'''        SpeechTimeMap.MapResult provisionalTimeMap = reusedProvisionalTimeMap;
+        StreamingVadStore.Snapshot hallucinationVadEvidence = reusedVadEvidence;
+        if (provisionalTimeMap == null
+                && (partial || TranscriptionPipelineSettings.MODE_REALTIME_ONLY.equals(
+                accumulator.config.snapshot.executionMode))) {
+''', 'skip duplicate VAD when live evidence exists')
+writeUtf8072(streamFile072, stream072)
+
+// Automatic AI analysis is deferrable. Run scheduled hourly/daily/rollup work only while charging;
+// explicit user-triggered re-analysis keeps the existing immediate constraints.
+def aiFile072 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/AiAnalysisScheduler.java')
+def ai072 = readUtf8072(aiFile072)
+ai072 = replaceOnce072(ai072,
+'''        Constraints constraints = analysisConstraints(app);
+''',
+'''        Constraints constraints = scheduledAnalysisConstraints(app);
+''', 'scheduled AI charging constraints')
+ai072 = replaceOnce072(ai072,
+'''                .setConstraints(analysisConstraints(app))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag("ai-analysis")
+''',
+'''                .setConstraints(AiQueueStore.REQUEST_MANUAL.equals(effectiveRequestType)
+                        ? analysisConstraints(app) : scheduledAnalysisConstraints(app))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag("ai-analysis")
+''', 'target AI scheduled/manual constraint split')
+ai072 = replaceOnce072(ai072,
+'''    private static Constraints analysisConstraints(Context context) {
+        NetworkType networkType = AiInferenceClient.requiresNetwork(context)
+                ? NetworkType.CONNECTED : NetworkType.NOT_REQUIRED;
+        return new Constraints.Builder()
+                .setRequiredNetworkType(networkType)
+                .build();
+    }
+
+''',
+'''    private static Constraints analysisConstraints(Context context) {
+        NetworkType networkType = AiInferenceClient.requiresNetwork(context)
+                ? NetworkType.CONNECTED : NetworkType.NOT_REQUIRED;
+        return new Constraints.Builder()
+                .setRequiredNetworkType(networkType)
+                .build();
+    }
+
+    private static Constraints scheduledAnalysisConstraints(Context context) {
+        NetworkType networkType = AiInferenceClient.requiresNetwork(context)
+                ? NetworkType.CONNECTED : NetworkType.NOT_REQUIRED;
+        return new Constraints.Builder()
+                .setRequiredNetworkType(networkType)
+                .setRequiresCharging(true)
+                .build();
+    }
+
+''', 'scheduled AI constraint helper')
+writeUtf8072(aiFile072, ai072)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1072)
+            output.versionName.set('0.7.72-debug')
+        }
+    }
+}
+
+if (!streamFile072.text.contains('FULL_STREAMING_PROVISIONAL_VAD_REUSED')) {
+    throw new GradleException('0.7.72 reused live VAD logging missing')
+}
+if (!coordinatorFile072.text.contains('vadProbabilitySum')) {
+    throw new GradleException('0.7.72 online VAD evidence transport missing')
+}
+if (!aiFile072.text.contains('.setRequiresCharging(true)')) {
+    throw new GradleException('0.7.72 scheduled AI charging constraint missing')
+}
