@@ -106,13 +106,13 @@ def card062 = readUtf8062(cardFile062)
 card062 = replaceOnce062(
         card062,
 '''                    if (!started) {
-                        syncing = DriveLogSync.isDirectSyncRunning()
-                        syncStatus = if (syncing) "同期中" else driveSyncStatus(context)
+                        syncing = false
+                        syncStatus = if (DriveLogSync.isDirectSyncRunning()) "同期中" else driveSyncStatus(context)
                     }
 ''',
 '''                    if (!started) {
-                        syncing = DriveLogSync.isDirectSyncRunning()
-                        syncStatus = if (syncing) "同期中" else driveSyncStatus(context)
+                        syncing = false
+                        syncStatus = if (DriveLogSync.isDirectSyncRunning()) "同期中" else driveSyncStatus(context)
                     }
                     Handler(Looper.getMainLooper()).postDelayed({
                         if (syncing) {
