@@ -65,6 +65,7 @@ apply from: rootProject.file('gradle/full-streaming-ownership-tracing-0.7.69.gra
 apply from: rootProject.file('gradle/state-transition-tracing-java-fix-0.7.69.gradle')
 apply from: rootProject.file('gradle/realtime-orphan-live-model-recovery-0.7.70.gradle')
 apply from: rootProject.file('gradle/storage-retention-headroom-0.7.70.gradle')
+apply from: rootProject.file('gradle/ai-action-mode-0.7.71.gradle')
 
 android {
     namespace 'com.sktpj.recorder24h'
