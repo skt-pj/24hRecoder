@@ -1,0 +1,179 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8070s = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8070s = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce070s = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.70 storage ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+def replaceBetween070s = { String source, String startMarker, String endMarker, String replacement, String label ->
+    int start = source.indexOf(startMarker)
+    int secondStart = source.indexOf(startMarker, start + 1)
+    if (start < 0 || secondStart >= 0) {
+        throw new GradleException("0.7.70 storage ${label}: start marker must match exactly once")
+    }
+    int end = source.indexOf(endMarker, start)
+    if (end < 0) {
+        throw new GradleException("0.7.70 storage ${label}: end marker missing")
+    }
+    source.substring(0, start) + replacement + source.substring(end)
+}
+
+def storageFile070s = rootProject.file(
+        'app/src/main/java/com/sktpj/recorder24h/storage/StoragePolicy.java')
+def storage070s = readUtf8070s(storageFile070s)
+
+storage070s = replaceOnce070s(storage070s,
+'''    public static final long AUDIO_LIMIT_BYTES = 600L * 1024L * 1024L;
+    public static final long LOGICAL_APP_LIMIT_BYTES = 1024L * 1024L * 1024L;
+    public static final long EMERGENCY_RESERVE_BYTES = 150L * 1024L * 1024L;
+    private static final long AUDIO_CLEANUP_TARGET_BYTES = 570L * 1024L * 1024L;
+    private static final long DEVICE_FREE_TARGET_BYTES = 250L * 1024L * 1024L;
+''',
+'''    public static final long AUDIO_LIMIT_BYTES = 600L * 1024L * 1024L;
+    public static final long LOGICAL_APP_LIMIT_BYTES = 1024L * 1024L * 1024L;
+    public static final long EMERGENCY_RESERVE_BYTES = 150L * 1024L * 1024L;
+    // Do not run day-to-day at the emergency edge. Once retained M4A exceeds 450 MiB, evict only
+    // the oldest audio that already has a durable transcript and return to a 400 MiB working set.
+    // The 600 MiB hard limit is retained for the Wiki-defined emergency rolling policy, where
+    // untranscribed audio may be removed only after safer candidates are exhausted.
+    private static final long AUDIO_SOFT_LIMIT_BYTES = 450L * 1024L * 1024L;
+    private static final long AUDIO_SOFT_CLEANUP_TARGET_BYTES = 400L * 1024L * 1024L;
+    private static final long AUDIO_HARD_CLEANUP_TARGET_BYTES = 570L * 1024L * 1024L;
+    private static final long DEVICE_FREE_TARGET_BYTES = 250L * 1024L * 1024L;
+''', 'storage thresholds')
+
+def newEnforce070s = '''    public static void enforce(Context context) {
+        List<File> files = finalizedAudioFiles(context);
+        long audioBytes = files.stream().mapToLong(File::length).sum();
+        long appBytes = appDataBytes(context);
+        long usable = context.getFilesDir().getUsableSpace();
+
+        long audioBytesBefore = audioBytes;
+        long appBytesBefore = appBytes;
+        long usableBefore = usable;
+        boolean hardPressure = audioBytes > AUDIO_LIMIT_BYTES
+                || appBytes > (LOGICAL_APP_LIMIT_BYTES - EMERGENCY_RESERVE_BYTES)
+                || usable < EMERGENCY_RESERVE_BYTES;
+        boolean softAudioPressure = audioBytes > AUDIO_SOFT_LIMIT_BYTES;
+        if (!hardPressure && !softAudioPressure) {
+            return;
+        }
+
+        long targetAudioBytes = hardPressure
+                ? AUDIO_HARD_CLEANUP_TARGET_BYTES : AUDIO_SOFT_CLEANUP_TARGET_BYTES;
+        logCleanupCycle(context, "STORAGE_RETENTION_CLEANUP_STARTED",
+                hardPressure, softAudioPressure,
+                audioBytesBefore, audioBytes, appBytesBefore, appBytes,
+                usableBefore, usable, targetAudioBytes, 0, 0, 0L);
+
+        // Wiki order: transcribed audio first. Soft cleanup is deliberately conservative and never
+        // removes audio without a durable transcript. Only hard capacity pressure is allowed to
+        // progress to the existing data-loss rolling-delete tier.
+        files.sort(Comparator
+                .comparingInt((File file) -> isTranscribed(context, file) ? 0 : 1)
+                .thenComparingLong(File::lastModified));
+
+        int deletedTranscribedCount = 0;
+        int deletedUntranscribedCount = 0;
+        long deletedBytes = 0L;
+        for (File file : files) {
+            boolean audioTargetMet = audioBytes <= targetAudioBytes;
+            boolean appTargetMet = appBytes <= (LOGICAL_APP_LIMIT_BYTES - EMERGENCY_RESERVE_BYTES);
+            boolean freeTargetMet = usable >= DEVICE_FREE_TARGET_BYTES;
+            if (audioTargetMet && (!hardPressure || (appTargetMet && freeTargetMet))) {
+                break;
+            }
+
+            String segmentId = extractSegmentId(file.getName());
+            boolean transcribed = TranscriptionRepository.exists(context, segmentId);
+            if (!hardPressure && !transcribed) {
+                // Every transcribed file sorts before this row, so no safe soft-cleanup candidate
+                // remains. Leave the rest intact until hard pressure or a transcript is produced.
+                break;
+            }
+
+            long size = file.length();
+            long modified = file.lastModified();
+            if (file.delete()) {
+                audioBytes -= size;
+                appBytes -= size;
+                deletedBytes += size;
+                usable = context.getFilesDir().getUsableSpace();
+                if (transcribed) {
+                    deletedTranscribedCount++;
+                    SegmentRepository.append(context, segmentId, file, modified,
+                            System.currentTimeMillis(), "DELETED",
+                            hardPressure
+                                    ? "STORAGE_PRESSURE_TRANSCRIBED_RETENTION"
+                                    : "STORAGE_HEADROOM_TRANSCRIBED_RETENTION");
+                    logTranscribedEviction(context, file, segmentId, size,
+                            audioBytes, appBytes, usable);
+                } else {
+                    deletedUntranscribedCount++;
+                    logDataLoss(context, file, segmentId, size, audioBytes, appBytes, usable);
+                }
+            }
+        }
+
+        logCleanupCycle(context, "STORAGE_RETENTION_CLEANUP_FINISHED",
+                hardPressure, softAudioPressure,
+                audioBytesBefore, audioBytes, appBytesBefore, appBytes,
+                usableBefore, usable, targetAudioBytes,
+                deletedTranscribedCount, deletedUntranscribedCount, deletedBytes);
+    }
+
+'''
+storage070s = replaceBetween070s(storage070s,
+        '    public static void enforce(Context context) {\n',
+        '    public static void recoverOrphanParts(Context context) {\n',
+        newEnforce070s,
+        'proactive retention enforcement')
+
+storage070s = replaceOnce070s(storage070s,
+'''    private static void logTranscribedEviction(Context context, File file, String segmentId,
+''',
+'''    private static void logCleanupCycle(
+            Context context, String event,
+            boolean hardPressure, boolean softAudioPressure,
+            long audioBytesBefore, long audioBytesAfter,
+            long appBytesBefore, long appBytesAfter,
+            long usableBytesBefore, long usableBytesAfter,
+            long targetAudioBytes,
+            int deletedTranscribedCount, int deletedUntranscribedCount, long deletedBytes) {
+        try {
+            JSONObject d = new JSONObject();
+            d.put("hardPressure", hardPressure);
+            d.put("softAudioPressure", softAudioPressure);
+            d.put("audioSoftLimitBytes", AUDIO_SOFT_LIMIT_BYTES);
+            d.put("audioHardLimitBytes", AUDIO_LIMIT_BYTES);
+            d.put("targetAudioBytes", targetAudioBytes);
+            d.put("audioBytesBefore", audioBytesBefore);
+            d.put("audioBytesAfter", audioBytesAfter);
+            d.put("appBytesBefore", appBytesBefore);
+            d.put("appBytesAfter", appBytesAfter);
+            d.put("usableBytesBefore", usableBytesBefore);
+            d.put("usableBytesAfter", usableBytesAfter);
+            d.put("deletedTranscribedCount", deletedTranscribedCount);
+            d.put("deletedUntranscribedCount", deletedUntranscribedCount);
+            d.put("deletedBytes", deletedBytes);
+            AppLogger.event(context, event, d);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static void logTranscribedEviction(Context context, File file, String segmentId,
+''', 'storage cleanup cycle logging')
+
+writeUtf8070s(storageFile070s, storage070s)
+
+if (!storageFile070s.text.contains('AUDIO_SOFT_LIMIT_BYTES = 450L * 1024L * 1024L')) {
+    throw new GradleException('0.7.70 storage soft limit missing')
+}
+if (!storageFile070s.text.contains('STORAGE_RETENTION_CLEANUP_FINISHED')) {
+    throw new GradleException('0.7.70 storage cleanup diagnostics missing')
+}
