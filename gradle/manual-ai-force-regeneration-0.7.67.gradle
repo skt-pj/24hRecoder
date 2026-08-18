@@ -59,11 +59,31 @@ def schedulerFile067 = rootProject.file('app/src/main/java/com/sktpj/recorder24h
 def scheduler067 = readUtf8067(schedulerFile067)
 
 scheduler067 = replaceOnce067(scheduler067,
-'''        AiQueueStore.upsert(
-                app,
-                queueId,
+'''        String effectiveRequestType = requestType;
+        boolean effectiveForce = force;
+        for (AiQueueStore.Entry existing : AiQueueStore.load(app)) {
+            if (queueId.equals(existing.id)
+                    && AiQueueStore.REQUEST_MANUAL.equals(existing.requestType)) {
+                effectiveRequestType = AiQueueStore.REQUEST_MANUAL;
+                effectiveForce = true;
+                break;
+            }
+        }
+
+        AiQueueStore.upsert(
 ''',
-'''        try {
+'''        String effectiveRequestType = requestType;
+        boolean effectiveForce = force;
+        for (AiQueueStore.Entry existing : AiQueueStore.load(app)) {
+            if (queueId.equals(existing.id)
+                    && AiQueueStore.REQUEST_MANUAL.equals(existing.requestType)) {
+                effectiveRequestType = AiQueueStore.REQUEST_MANUAL;
+                effectiveForce = true;
+                break;
+            }
+        }
+
+        try {
             org.json.JSONObject enqueueDetails = new org.json.JSONObject();
             enqueueDetails.put("kind", kind);
             enqueueDetails.put("periodStartMs", periodStartMs);
@@ -78,8 +98,6 @@ scheduler067 = replaceOnce067(scheduler067,
         }
 
         AiQueueStore.upsert(
-                app,
-                queueId,
 ''', 'enqueue diagnostics')
 
 writeUtf8067(schedulerFile067, scheduler067)
