@@ -1,0 +1,273 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8071 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8071 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce071 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.71 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// The AI notebook action is selected from source data, not from a previous AI result and not from
+// retained audio. If transcript text exists, the action is always "再要約". If transcript text is
+// absent, the same location becomes "再文字起こし" and targets only overlapping audio that can
+// actually be retranscribed. With neither transcript nor audio, the button stays actionable and
+// reports the data error instead of becoming an unexplained disabled control.
+def actionsFile071 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiNotebookAnalysisActions.kt')
+def actions071 = readUtf8071(actionsFile071)
+
+actions071 = replaceOnce071(actions071,
+'''import com.sktpj.recorder24h.ai.AiQueueStore
+''',
+'''import com.sktpj.recorder24h.ai.AiQueueStore
+import com.sktpj.recorder24h.transcription.TranscriptionScheduler
+''', 'transcription scheduler import')
+
+actions071 = replaceOnce071(actions071,
+'''import java.time.LocalDate
+''',
+'''import java.io.File
+import java.time.LocalDate
+''', 'file import')
+
+actions071 = replaceOnce071(actions071,
+'''private data class NotebookPeriodActionSnapshot(
+    val configured: Boolean,
+    val persistedResult: Boolean,
+    val hasSource: Boolean,
+    val pendingTranscription: Boolean,
+    val queueState: String?,
+    val periodStarted: Boolean,
+    val periodFinished: Boolean
+)
+''',
+'''private data class NotebookPeriodActionSnapshot(
+    val configured: Boolean,
+    val persistedResult: Boolean,
+    val hasSource: Boolean,
+    val hasRetranscribableAudio: Boolean,
+    val pendingTranscription: Boolean,
+    val queueState: String?,
+    val periodStarted: Boolean,
+    val periodFinished: Boolean
+)
+''', 'period action audio state')
+
+int buttonStart071 = actions071.indexOf('''@Composable
+internal fun AiNotebookPeriodAnalysisButton(''')
+int buttonEnd071 = actions071.indexOf('''private fun loadNotebookDayActionSnapshot(''', buttonStart071)
+if (buttonStart071 < 0 || buttonEnd071 <= buttonStart071) {
+    throw new GradleException('0.7.71 shared AI notebook action block not found')
+}
+String button071 = '''@Composable
+internal fun AiNotebookPeriodAnalysisButton(
+    kind: String,
+    periodStartMs: Long,
+    periodEndMs: Long,
+    hasResult: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var refreshToken by remember { mutableIntStateOf(0) }
+    var snapshot by remember(kind, periodStartMs, periodEndMs) {
+        mutableStateOf(
+            NotebookPeriodActionSnapshot(
+                configured = AiProviderStore.isConfigured(context),
+                persistedResult = hasResult,
+                hasSource = false,
+                hasRetranscribableAudio = false,
+                pendingTranscription = false,
+                queueState = null,
+                periodStarted = periodStartMs <= System.currentTimeMillis(),
+                periodFinished = periodEndMs <= System.currentTimeMillis()
+            )
+        )
+    }
+
+    LaunchedEffect(kind, periodStartMs, periodEndMs, refreshToken) {
+        while (true) {
+            snapshot = withContext(Dispatchers.IO) {
+                val records = SegmentHistoryRepository.load(context.applicationContext)
+                val queueState = AiQueueStore.load(context.applicationContext).firstOrNull {
+                    it.kind == kind && it.periodStartMs == periodStartMs && it.periodEndMs == periodEndMs
+                }?.state
+                val nowMs = System.currentTimeMillis()
+                NotebookPeriodActionSnapshot(
+                    configured = AiProviderStore.isConfigured(context.applicationContext),
+                    persistedResult = hasResult,
+                    hasSource = notebookHasTranscriptSource(records, periodStartMs, periodEndMs),
+                    hasRetranscribableAudio = notebookHasRetranscribableAudio(
+                        records, periodStartMs, periodEndMs
+                    ),
+                    pendingTranscription = notebookHasPendingTranscription(
+                        records, periodStartMs, periodEndMs
+                    ),
+                    queueState = queueState,
+                    periodStarted = periodStartMs <= nowMs,
+                    periodFinished = periodEndMs <= nowMs
+                )
+            }
+            delay(1_000L)
+        }
+    }
+
+    val actionLabel = if (snapshot.hasSource) "再要約" else "再文字起こし"
+
+    Button(
+        onClick = {
+            if (snapshot.hasSource) {
+                if (!snapshot.configured) {
+                    Toast.makeText(
+                        context,
+                        "AI要約を実行するにはAI設定が必要です",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                } else {
+                    val queued = AiAnalysisScheduler.enqueuePeriod(
+                        context,
+                        kind,
+                        periodStartMs,
+                        periodEndMs
+                    )
+                    val message = when {
+                        !queued -> "AI要約を登録できませんでした"
+                        kind == AiAnalysisScheduler.KIND_HOURLY ->
+                            "この時間帯を再要約キューに追加しました"
+                        else -> "この1日を再要約キューに追加しました"
+                    }
+                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                    if (queued) refreshToken++
+                }
+            } else {
+                val queuedCount = enqueueNotebookRetranscription(
+                    context.applicationContext,
+                    periodStartMs,
+                    periodEndMs
+                )
+                val message = if (queuedCount > 0) {
+                    "${queuedCount}件を再文字起こしキューに追加しました"
+                } else {
+                    "文字起こしデータがなく、再文字起こしできる音声ファイルもありません"
+                }
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                if (queuedCount > 0) refreshToken++
+            }
+        },
+        enabled = true,
+        modifier = modifier
+    ) {
+        Text(actionLabel)
+    }
+}
+
+private fun notebookHasRetranscribableAudio(
+    records: List<SegmentRecord>,
+    periodStartMs: Long,
+    periodEndMs: Long
+): Boolean {
+    for (record in records) {
+        if (!notebookRecordOverlaps(record, periodStartMs, periodEndMs)) continue
+        if (record.status == "CORRUPT") continue
+        if (!record.audioAvailable) continue
+        if (record.transcriptText?.trim().orEmpty().isNotEmpty()) continue
+        val audioPath = record.audioPath
+        if (audioPath.isNullOrBlank()) continue
+        if (File(audioPath).isFile) return true
+    }
+    return false
+}
+
+private fun enqueueNotebookRetranscription(
+    context: Context,
+    periodStartMs: Long,
+    periodEndMs: Long
+): Int {
+    var queued = 0
+    for (record in SegmentHistoryRepository.load(context)) {
+        if (!notebookRecordOverlaps(record, periodStartMs, periodEndMs)) continue
+        if (record.status == "CORRUPT") continue
+        if (!record.audioAvailable) continue
+        if (record.transcriptText?.trim().orEmpty().isNotEmpty()) continue
+        val audioPath = record.audioPath
+        if (audioPath.isNullOrBlank()) continue
+        val audioFile = File(audioPath)
+        if (!audioFile.isFile) continue
+        if (TranscriptionScheduler.enqueueForceRetranscription(
+                context,
+                record.segmentId,
+                audioFile
+            )) {
+            queued++
+        }
+    }
+    return queued
+}
+
+'''
+actions071 = actions071.substring(0, buttonStart071) + button071 + actions071.substring(buttonEnd071)
+writeUtf8071(actionsFile071, actions071)
+
+// Manual re-summary is explicitly source-driven. Pending audio/transcription rows do not block a
+// user request when at least one transcript is already available. Scheduled daily generation keeps
+// the strict completion gate.
+def workerFile071 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/AiAnalysisWorker.java')
+def worker071 = readUtf8071(workerFile071)
+worker071 = replaceOnce071(worker071,
+'''            if (System.currentTimeMillis() < periodEndMs + DAILY_FINALIZATION_GRACE_MS) {
+''',
+'''            if (!manualRequest
+                    && System.currentTimeMillis() < periodEndMs + DAILY_FINALIZATION_GRACE_MS) {
+''', 'manual daily day-close override')
+worker071 = replaceOnce071(worker071,
+'''        if ((daily || !manualRequest)
+                && hasPendingScheduledTranscription(context, periodStartMs, periodEndMs)) {
+''',
+'''        if (!manualRequest
+                && hasPendingScheduledTranscription(context, periodStartMs, periodEndMs)) {
+''', 'manual transcript partial-source override')
+writeUtf8071(workerFile071, worker071)
+
+// A manual daily request should execute immediately from the transcripts that already exist rather
+// than being delayed until the scheduled daily-finalization boundary.
+def schedulerFile071 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/AiAnalysisScheduler.java')
+def scheduler071 = readUtf8071(schedulerFile071)
+scheduler071 = replaceOnce071(scheduler071,
+'''        long notBeforeMs = KIND_DAILY.equals(kind)
+                ? periodEndMs + DAILY_READY_GRACE_MS : periodEndMs;
+''',
+'''        long notBeforeMs = KIND_DAILY.equals(kind)
+                && !AiQueueStore.REQUEST_MANUAL.equals(effectiveRequestType)
+                ? periodEndMs + DAILY_READY_GRACE_MS : System.currentTimeMillis();
+''', 'manual daily immediate execution')
+writeUtf8071(schedulerFile071, scheduler071)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1071)
+            output.versionName.set('0.7.71-debug')
+        }
+    }
+}
+
+if (!actionsFile071.text.contains('val actionLabel = if (snapshot.hasSource) "再要約" else "再文字起こし"')) {
+    throw new GradleException('0.7.71 source-driven action label missing')
+}
+if (!actionsFile071.text.contains('enabled = true')) {
+    throw new GradleException('0.7.71 action button is not always enabled')
+}
+if (!actionsFile071.text.contains('enqueueNotebookRetranscription')) {
+    throw new GradleException('0.7.71 retranscription action missing')
+}
+if (actionsFile071.text.contains('hasSource = directSource || savedSource || retainedLifecycleSource')) {
+    throw new GradleException('0.7.71 AI-result-dependent source eligibility still present')
+}
+if (!workerFile071.text.contains('if (!manualRequest\n                && hasPendingScheduledTranscription')) {
+    throw new GradleException('0.7.71 manual re-summary is still blocked by pending transcription')
+}
+if (!schedulerFile071.text.contains('!AiQueueStore.REQUEST_MANUAL.equals(effectiveRequestType)')) {
+    throw new GradleException('0.7.71 manual daily request still has scheduled delay')
+}
