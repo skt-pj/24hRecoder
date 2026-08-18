@@ -1,0 +1,141 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8062 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8062 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce062 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.62 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// Mind Elixir was loading and renderMindMap was called, but AndroidView was measured with zero height.
+// Fill the fixed-height Compose Surface instead of only filling its width.
+def mapFile062 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MindElixirMindMap.kt')
+def map062 = readUtf8062(mapFile062)
+map062 = replaceOnce062(
+        map062,
+        'import androidx.compose.foundation.layout.fillMaxWidth\n',
+        'import androidx.compose.foundation.layout.fillMaxSize\nimport androidx.compose.foundation.layout.fillMaxWidth\n',
+        'fillMaxSize import')
+map062 = replaceOnce062(
+        map062,
+'''                MindElixirWebView(
+                    payload = payload,
+                    background = colorScheme.surfaceContainer,
+                    modifier = Modifier.fillMaxWidth()
+                )
+''',
+'''                MindElixirWebView(
+                    payload = payload,
+                    background = colorScheme.surfaceContainer,
+                    modifier = Modifier.fillMaxSize()
+                )
+''',
+        'WebView fills map surface')
+writeUtf8062(mapFile062, map062)
+
+// If a manual request arrives while an automatic/direct sync is already running, join that
+// in-flight sync and deliver its completion to the UI instead of leaving the UI at "同期中" forever.
+def syncFile062 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/util/DriveLogSync.java')
+def sync062 = readUtf8062(syncFile062)
+def oldGate062 = '''        long now = System.currentTimeMillis();
+        if (DIRECT_RUNNING.get() || (!force && now - lastDirectStartMs < DIRECT_SYNC_MIN_INTERVAL_MS)) {
+            return false;
+        }
+        if (!DIRECT_RUNNING.compareAndSet(false, true)) {
+            return false;
+        }
+'''
+def newGate062 = '''        long now = System.currentTimeMillis();
+        if (DIRECT_RUNNING.get()) {
+            if (callback != null) {
+                final long observedStartMs = lastDirectStartMs;
+                DIRECT_EXECUTOR.execute(() -> completeAfterExistingSync(app, observedStartMs, callback));
+                return true;
+            }
+            return false;
+        }
+        if (!force && now - lastDirectStartMs < DIRECT_SYNC_MIN_INTERVAL_MS) {
+            return false;
+        }
+        if (!DIRECT_RUNNING.compareAndSet(false, true)) {
+            if (callback != null) {
+                final long observedStartMs = lastDirectStartMs;
+                DIRECT_EXECUTOR.execute(() -> completeAfterExistingSync(app, observedStartMs, callback));
+                return true;
+            }
+            return false;
+        }
+'''
+sync062 = replaceOnce062(sync062, oldGate062, newGate062, 'join in-flight direct sync')
+def callbackHelperAnchor062 = '''        return true;
+    }
+
+    public static void sync(Context context) throws Exception {
+'''
+def callbackHelper062 = '''        return true;
+    }
+
+    private static void completeAfterExistingSync(
+            Context app,
+            long observedStartMs,
+            DirectSyncCallback callback) {
+        boolean success = DriveLogTarget.getLastSuccessAtMs(app) >= observedStartMs
+                && DriveLogTarget.getLastError(app) == null;
+        String error = success ? null : DriveLogTarget.getLastError(app);
+        if (!success && (error == null || error.trim().isEmpty())) {
+            error = "同期完了を確認できませんでした";
+        }
+        try {
+            callback.onComplete(success, error);
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    public static void sync(Context context) throws Exception {
+'''
+sync062 = replaceOnce062(sync062, callbackHelperAnchor062, callbackHelper062, 'existing sync completion helper')
+writeUtf8062(syncFile062, sync062)
+
+// Add a UI watchdog so a provider-level stall cannot pin the button in a permanent busy state.
+def cardFile062 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/DiagnosticLoggingSettingsCard.kt')
+def card062 = readUtf8062(cardFile062)
+card062 = replaceOnce062(
+        card062,
+'''                    if (!started) {
+                        syncing = DriveLogSync.isDirectSyncRunning()
+                        syncStatus = if (syncing) "同期中" else driveSyncStatus(context)
+                    }
+''',
+'''                    if (!started) {
+                        syncing = DriveLogSync.isDirectSyncRunning()
+                        syncStatus = if (syncing) "同期中" else driveSyncStatus(context)
+                    }
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        if (syncing) {
+                            syncing = false
+                            syncStatus = "同期に時間がかかっています"
+                        }
+                    }, 90_000L)
+''',
+        'manual sync UI watchdog')
+writeUtf8062(cardFile062, card062)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1062)
+            output.versionName.set('0.7.62-debug')
+        }
+    }
+}
+
+if (!mapFile062.text.contains('modifier = Modifier.fillMaxSize()')) {
+    throw new GradleException('0.7.62 mind-map WebView height fix missing')
+}
+if (!syncFile062.text.contains('completeAfterExistingSync') || !cardFile062.text.contains('90_000L')) {
+    throw new GradleException('0.7.62 Drive sync completion fix missing')
+}
