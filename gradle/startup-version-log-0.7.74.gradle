@@ -24,9 +24,7 @@ if (processFirst074 < 0 || processFirst074 != processLast074) {
     throw new GradleException('0.7.74 process startup version call: expected one processName line')
 }
 int processInsert074 = processFirst074 + processLine074.length()
-app074 = app074.substring(0, processInsert074)
-        + '        logStartupVersion(processName);\n'
-        + app074.substring(processInsert074)
+app074 = app074.substring(0, processInsert074) + '        logStartupVersion(processName);\n' + app074.substring(processInsert074)
 
 app074 = replaceOnce074(app074,
 '''    @Override
