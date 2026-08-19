@@ -2,21 +2,16 @@ import java.nio.charset.StandardCharsets
 
 def readUtf8073 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
 def writeUtf8073 = { File file, String text -> file.setText(text, 'UTF-8') }
-def replaceOnce073 = { String source, String oldText, String newText, String label ->
-    int first = source.indexOf(oldText)
-    int last = source.lastIndexOf(oldText)
-    if (first < 0 || first != last) {
-        throw new GradleException("0.7.73 ${label}: expected exactly one match")
-    }
-    source.substring(0, first) + newText + source.substring(first + oldText.length())
+def replaceFirst073 = { String source, String oldText, String newText, String label ->
+    int at = source.indexOf(oldText)
+    if (at < 0) throw new GradleException("0.7.73 ${label}: match not found")
+    source.substring(0, at) + newText + source.substring(at + oldText.length())
 }
 
-// Correct hierarchy:
 // audio -> transcript -> hourly AI note -> daily AI note -> higher rollups.
-// Daily generation must never rebuild from raw transcript/audio when hourly AI notes are missing.
 def repoFile073 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/AiAnalysisRepository.java')
 def repo073 = readUtf8073(repoFile073)
-repo073 = replaceOnce073(repo073,
+repo073 = replaceFirst073(repo073,
 '''    public static File hourlyFile(Context context, long periodStartMs) {
 ''',
 '''    public static SourceWindow buildDailySourceFromHourlyAnalyses(
@@ -45,27 +40,17 @@ repo073 = replaceOnce073(repo073,
                         note.put("analysis", new JSONObject(analysis.toString()));
                         String sourceId = "hourly-ai:" + hourStartMs;
                         entries.add(new SourceEntry(
-                                hourStartMs,
-                                hourEndMs,
-                                sourceId,
-                                "1時間AI要約",
-                                note.toString()));
+                                hourStartMs, hourEndMs, sourceId, "1時間AI要約", note.toString()));
                         sourceIds.add(sourceId);
                     }
                 } catch (Exception ignored) {
-                    // Invalid hourly result is not evidence for the daily note.
                 }
             }
             cursor = cursor.plusHours(1);
         }
-
         return new SourceWindow(
-                periodStartMs,
-                periodEndMs,
-                entries,
-                sourceIds,
-                entries.size(),
-                hash(entries));
+                periodStartMs, periodEndMs, entries, sourceIds,
+                entries.size(), hash(entries));
     }
 
     public static boolean hasHourlyAnalysisSource(
@@ -84,8 +69,8 @@ repo073 = replaceOnce073(repo073,
             long hourStartMs = cursor.toInstant().toEpochMilli();
             long hourEndMs = Math.min(periodEndMs, cursor.plusHours(1).toInstant().toEpochMilli());
             if (hourEndMs > nowMs) break;
-            SourceWindow transcriptSource = buildSource(context, hourStartMs, hourEndMs);
-            if (!transcriptSource.isEmpty() && !hourlyFile(context, hourStartMs).isFile()) {
+            if (!buildSource(context, hourStartMs, hourEndMs).isEmpty()
+                    && !hourlyFile(context, hourStartMs).isFile()) {
                 return true;
             }
             cursor = cursor.plusHours(1);
@@ -106,9 +91,8 @@ repo073 = replaceOnce073(repo073,
     }
 
     public static File hourlyFile(Context context, long periodStartMs) {
-''', 'daily hourly-note source repository')
-
-repo073 = replaceOnce073(repo073,
+''', 'daily source builder')
+repo073 = replaceFirst073(repo073,
 '''            row.put("sourceEntryCount", source.entries.size());
             row.put("responseId", response.responseId == null ? JSONObject.NULL : response.responseId);
 ''',
@@ -119,21 +103,19 @@ repo073 = replaceOnce073(repo073,
                 row.put("sourceHourlyAnalysisIds", new JSONArray(source.segmentIds));
             }
             row.put("responseId", response.responseId == null ? JSONObject.NULL : response.responseId);
-''', 'persist daily source type')
+''', 'daily source metadata')
 writeUtf8073(repoFile073, repo073)
 
-// OpenAI daily prompt must consume hourly AI notes, never the original transcript.
+// OpenAI daily input is hourly AI notes only.
 def openAiFile073 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/OpenAiLunaClient.java')
 def openAi073 = readUtf8073(openAiFile073)
-int openDailyStart073 = openAi073.indexOf('''    private static String buildDailyPrompt(AiAnalysisRepository.SourceWindow source) {''')
-int openDailyEnd073 = openAi073.indexOf('''    private static String buildRollupPrompt(''', openDailyStart073)
-if (openDailyStart073 < 0 || openDailyEnd073 <= openDailyStart073) {
-    throw new GradleException('0.7.73 OpenAI daily prompt block not found')
-}
-String openDaily073 = '''    private static String buildDailyPrompt(AiAnalysisRepository.SourceWindow source) {
+int openStart073 = openAi073.indexOf('''    private static String buildDailyPrompt(AiAnalysisRepository.SourceWindow source) {''')
+int openEnd073 = openAi073.indexOf('''    private static String buildRollupPrompt(''', openStart073)
+if (openStart073 < 0 || openEnd073 <= openStart073) throw new GradleException('0.7.73 OpenAI daily prompt not found')
+String openPrompt073 = '''    private static String buildDailyPrompt(AiAnalysisRepository.SourceWindow source) {
         return "Create the daily notebook by aggregating the supplied hourly AI notes. " +
                 "These hourly AI notes are the only source evidence for this daily result. " +
-                "Do not use, infer, or assume raw audio/transcript evidence that is not present in the hourly notes.\\n" +
+                "Do not use, infer, or assume raw audio or transcript evidence that is not present in the hourly notes.\\n" +
                 "The output MUST be JSON and MUST follow this JSON format exactly:\\n" +
                 "{\\\"summary\\\":string,\\\"mindMap\\\":[{\\\"id\\\":string,\\\"label\\\":string,\\\"parentId\\\":string}]," +
                 "\\\"timeline\\\":[{\\\"time\\\":string,\\\"event\\\":string}],\\\"topics\\\":[{\\\"name\\\":string,\\\"summary\\\":string}]," +
@@ -142,29 +124,26 @@ String openDaily073 = '''    private static String buildDailyPrompt(AiAnalysisRe
                 "\\\"places\\\":[{\\\"name\\\":string,\\\"summary\\\":string}]," +
                 "\\\"timeAllocation\\\":[{\\\"category\\\":string,\\\"minutes\\\":integer,\\\"evidence\\\":string}]," +
                 "\\\"recurringTopics\\\":[{\\\"topic\\\":string,\\\"count\\\":integer,\\\"summary\\\":string}],\\\"searchIndex\\\":[string]}\\n" +
-                "Mind map rules: create one root node with parentId as an empty string, use unique stable ids inside this response, " +
-                "and connect all other nodes through parentId. " +
+                "Mind map rules: create one root node with parentId as an empty string and connect all other nodes. " +
                 "Time allocation may only aggregate evidence-backed time already present in the hourly notes; do not force 24 hours. " +
-                "Recurring topic counts must represent supporting hourly notes, not invented transcript occurrences.\\n\\n" +
+                "Recurring topic counts must represent supporting hourly notes.\\n\\n" +
                 "HOURLY AI NOTES:\\n" + AiAnalysisRepository.promptHourlyAnalyses(source);
     }
 
 '''
-openAi073 = openAi073.substring(0, openDailyStart073) + openDaily073 + openAi073.substring(openDailyEnd073)
+openAi073 = openAi073.substring(0, openStart073) + openPrompt073 + openAi073.substring(openEnd073)
 writeUtf8073(openAiFile073, openAi073)
 
-// Local Gemma must use the exact same hierarchy.
+// Local Gemma follows the same hierarchy.
 def gemmaFile073 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/Gemma4LocalClient.kt')
 def gemma073 = readUtf8073(gemmaFile073)
-int gemmaDailyStart073 = gemma073.indexOf('''    private fun buildDailyPrompt(source: AiAnalysisRepository.SourceWindow): String =''')
-int gemmaDailyEnd073 = gemma073.indexOf('''    private fun buildRollupPrompt(''', gemmaDailyStart073)
-if (gemmaDailyStart073 < 0 || gemmaDailyEnd073 <= gemmaDailyStart073) {
-    throw new GradleException('0.7.73 Gemma daily prompt block not found')
-}
-String gemmaDaily073 = '''    private fun buildDailyPrompt(source: AiAnalysisRepository.SourceWindow): String =
+int gemmaStart073 = gemma073.indexOf('''    private fun buildDailyPrompt(source: AiAnalysisRepository.SourceWindow): String =''')
+int gemmaEnd073 = gemma073.indexOf('''    private fun buildRollupPrompt(''', gemmaStart073)
+if (gemmaStart073 < 0 || gemmaEnd073 <= gemmaStart073) throw new GradleException('0.7.73 Gemma daily prompt not found')
+String gemmaPrompt073 = '''    private fun buildDailyPrompt(source: AiAnalysisRepository.SourceWindow): String =
         "Create the daily notebook by aggregating the supplied hourly AI notes. " +
             "These hourly AI notes are the only source evidence for this daily result. " +
-            "Do not use, infer, or assume raw audio/transcript evidence that is not present in the hourly notes.\\n" +
+            "Do not use, infer, or assume raw audio or transcript evidence that is not present in the hourly notes.\\n" +
             "The output MUST be JSON and MUST follow this JSON format exactly:\\n" +
             "{\\\"summary\\\":string,\\\"mindMap\\\":[{\\\"id\\\":string,\\\"label\\\":string,\\\"parentId\\\":string}]," +
             "\\\"timeline\\\":[{\\\"time\\\":string,\\\"event\\\":string}],\\\"topics\\\":[{\\\"name\\\":string,\\\"summary\\\":string}]," +
@@ -175,29 +154,29 @@ String gemmaDaily073 = '''    private fun buildDailyPrompt(source: AiAnalysisRep
             "\\\"recurringTopics\\\":[{\\\"topic\\\":string,\\\"count\\\":integer,\\\"summary\\\":string}],\\\"searchIndex\\\":[string]}\\n" +
             "Mind map rules: create one root node with parentId as an empty string and connect all other nodes. " +
             "Time allocation may only aggregate evidence-backed time already present in the hourly notes; do not force 24 hours. " +
-            "Recurring topic counts must represent supporting hourly notes, not invented transcript occurrences.\\n\\n" +
+            "Recurring topic counts must represent supporting hourly notes.\\n\\n" +
             "HOURLY AI NOTES:\\n" + AiAnalysisRepository.promptHourlyAnalyses(source)
 
 '''
-gemma073 = gemma073.substring(0, gemmaDailyStart073) + gemmaDaily073 + gemma073.substring(gemmaDailyEnd073)
+gemma073 = gemma073.substring(0, gemmaStart073) + gemmaPrompt073 + gemma073.substring(gemmaEnd073)
 writeUtf8073(gemmaFile073, gemma073)
 
-// Worker: hourly uses transcript source; daily uses hourly AI-note source.
+// Worker source and gating hierarchy.
 def workerFile073 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/AiAnalysisWorker.java')
 def worker073 = readUtf8073(workerFile073)
-worker073 = replaceOnce073(worker073,
+worker073 = replaceFirst073(worker073,
 '''        if (!manualRequest
                 && hasPendingScheduledTranscription(context, periodStartMs, periodEndMs)) {
 ''',
 '''        if (!daily && !manualRequest
                 && hasPendingScheduledTranscription(context, periodStartMs, periodEndMs)) {
-''', 'raw transcript wait only for hourly')
-worker073 = replaceOnce073(worker073,
+''', 'raw wait hourly only')
+worker073 = replaceFirst073(worker073,
 '''        if (force && sourceWasPurged(context, periodStartMs, periodEndMs)) {
 ''',
 '''        if (!daily && force && sourceWasPurged(context, periodStartMs, periodEndMs)) {
-''', 'raw source purge does not block daily rerun')
-worker073 = replaceOnce073(worker073,
+''', 'raw purge hourly only')
+worker073 = replaceFirst073(worker073,
 '''        AiAnalysisRepository.SourceWindow source = force
                 ? AiAnalysisRepository.buildSourceForRerun(
                         context, periodStartMs, periodEndMs, target)
@@ -220,8 +199,8 @@ worker073 = replaceOnce073(worker073,
                     ? AiAnalysisRepository.buildSourceForRerun(
                             context, periodStartMs, periodEndMs, target)
                     : AiAnalysisRepository.buildSource(context, periodStartMs, periodEndMs));
-''', 'daily source from hourly AI notes')
-worker073 = replaceOnce073(worker073,
+''', 'daily source switch')
+worker073 = replaceFirst073(worker073,
 '''        if (source.isEmpty()) {
             if (hasAnyRecording(context, periodStartMs, periodEndMs)) {
 ''',
@@ -235,8 +214,8 @@ worker073 = replaceOnce073(worker073,
                 return Result.success();
             }
             if (hasAnyRecording(context, periodStartMs, periodEndMs)) {
-''', 'daily no-source error')
-worker073 = replaceOnce073(worker073,
+''', 'daily no-source')
+worker073 = replaceFirst073(worker073,
 '''            if (daily) {
                 return finishDailyCleanup(
                         context, target, periodStartMs, periodEndMs, source,
@@ -255,19 +234,16 @@ worker073 = replaceOnce073(worker073,
                         queueId, kind, requestType);
             }
             AiQueueStore.remove(context, queueId);
-''', 'do not purge raw data for early manual daily summary')
+''', 'early daily does not cleanup')
 writeUtf8073(workerFile073, worker073)
 
-// AI notebook shared action: hourly can become retranscription; daily is always a daily-summary
-// action whose source is hourly AI notes, never raw audio/transcript.
+// Shared notebook button: only hourly can turn into retranscription.
 def actionsFile073 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiNotebookAnalysisActions.kt')
 def actions073 = readUtf8073(actionsFile073)
 int buttonStart073 = actions073.indexOf('''@Composable
 internal fun AiNotebookPeriodAnalysisButton(''')
 int buttonEnd073 = actions073.indexOf('''private fun notebookHasRetranscribableAudio(''', buttonStart073)
-if (buttonStart073 < 0 || buttonEnd073 <= buttonStart073) {
-    throw new GradleException('0.7.73 shared notebook action block not found')
-}
+if (buttonStart073 < 0 || buttonEnd073 <= buttonStart073) throw new GradleException('0.7.73 shared action block not found')
 String button073 = '''@Composable
 internal fun AiNotebookPeriodAnalysisButton(
     kind: String,
@@ -338,96 +314,91 @@ internal fun AiNotebookPeriodAnalysisButton(
 
     Button(
         onClick = {
-            if (hourly && !snapshot.hasSource) {
-                val queuedCount = enqueueNotebookRetranscription(
-                    context.applicationContext,
-                    periodStartMs,
-                    periodEndMs
-                )
-                Toast.makeText(
-                    context,
-                    if (queuedCount > 0) {
-                        "${queuedCount}件を再文字起こしキューに追加しました"
-                    } else {
-                        "文字起こしデータがなく、再文字起こしできる音声ファイルもありません"
-                    },
-                    Toast.LENGTH_SHORT
+            when {
+                hourly && !snapshot.hasSource -> {
+                    val queuedCount = enqueueNotebookRetranscription(
+                        context.applicationContext, periodStartMs, periodEndMs
+                    )
+                    Toast.makeText(
+                        context,
+                        if (queuedCount > 0) "${queuedCount}件を再文字起こしキューに追加しました"
+                        else "文字起こしデータがなく、再文字起こしできる音声ファイルもありません",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    if (queuedCount > 0) refreshToken++
+                }
+                !snapshot.hasSource -> Toast.makeText(
+                    context, "この日の時間別要約データがありません", Toast.LENGTH_SHORT
                 ).show()
-                if (queuedCount > 0) refreshToken++
-            } else if (!snapshot.hasSource) {
-                Toast.makeText(
-                    context,
-                    "この日の時間別要約データがありません",
-                    Toast.LENGTH_SHORT
+                !snapshot.configured -> Toast.makeText(
+                    context, "AI要約を実行するにはAI設定が必要です", Toast.LENGTH_SHORT
                 ).show()
-            } else if (!snapshot.configured) {
-                Toast.makeText(
-                    context,
-                    "AI要約を実行するにはAI設定が必要です",
-                    Toast.LENGTH_SHORT
-                ).show()
-            } else {
-                val queued = AiAnalysisScheduler.enqueuePeriod(
-                    context,
-                    kind,
-                    periodStartMs,
-                    periodEndMs
-                )
-                Toast.makeText(
-                    context,
-                    if (queued) {
-                        if (hourly) "この時間帯を再要約キューに追加しました"
-                        else "この1日を要約キューに追加しました"
-                    } else {
-                        "AI要約を登録できませんでした"
-                    },
-                    Toast.LENGTH_SHORT
-                ).show()
-                if (queued) refreshToken++
+                else -> {
+                    val queued = AiAnalysisScheduler.enqueuePeriod(
+                        context, kind, periodStartMs, periodEndMs
+                    )
+                    Toast.makeText(
+                        context,
+                        if (queued) {
+                            if (hourly) "この時間帯を再要約キューに追加しました"
+                            else "この1日を要約キューに追加しました"
+                        } else "AI要約を登録できませんでした",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    if (queued) refreshToken++
+                }
             }
         },
         enabled = true,
         modifier = modifier
-    ) {
-        Text(actionLabel)
-    }
+    ) { Text(actionLabel) }
 }
 
 '''
 actions073 = actions073.substring(0, buttonStart073) + button073 + actions073.substring(buttonEnd073)
 
-actions073 = replaceOnce073(actions073,
-'''        dailyHasSource = notebookHasTranscriptSource(records, dailyStartMs, dailyEndMs),
+String tracedSourceOld073 = '''    val dailyHasSource = notebookHasTranscriptSource(records, dailyStartMs, dailyEndMs)
+    val dailyPendingTranscription = notebookHasPendingTranscription(records, dailyStartMs, dailyEndMs)
+'''
+String directSourceOld073 = '''        dailyHasSource = notebookHasTranscriptSource(records, dailyStartMs, dailyEndMs),
         dailyPendingTranscription = notebookHasPendingTranscription(records, dailyStartMs, dailyEndMs),
-''',
+'''
+if (actions073.contains(tracedSourceOld073)) {
+    actions073 = replaceFirst073(actions073, tracedSourceOld073,
+'''    val dailyHasSource = AiAnalysisRepository.hasHourlyAnalysisSource(
+        context, dailyStartMs, dailyEndMs
+    )
+    val dailyPendingTranscription = AiAnalysisRepository.hasPendingHourlyAnalysisSource(
+        context, dailyStartMs, dailyEndMs
+    )
+''', 'traced day source')
+} else if (actions073.contains(directSourceOld073)) {
+    actions073 = replaceFirst073(actions073, directSourceOld073,
 '''        dailyHasSource = AiAnalysisRepository.hasHourlyAnalysisSource(
             context, dailyStartMs, dailyEndMs
         ),
         dailyPendingTranscription = AiAnalysisRepository.hasPendingHourlyAnalysisSource(
             context, dailyStartMs, dailyEndMs
         ),
-''', 'day card hourly-note source')
+''', 'direct day source')
+} else {
+    throw new GradleException('0.7.73 daily source assignment not found')
+}
 
 int dailyLogicStart073 = actions073.indexOf('''    val dailyActionLabel = when {''')
 int dailyLogicEnd073 = actions073.indexOf('''    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {''', dailyLogicStart073)
-if (dailyLogicStart073 < 0 || dailyLogicEnd073 <= dailyLogicStart073) {
-    throw new GradleException('0.7.73 top daily action logic not found')
-}
-String dailyLogic073 = '''    val dailyActionLabel = if (dailyHasResult) "再要約" else "要約"
+if (dailyLogicStart073 >= 0 && dailyLogicEnd073 > dailyLogicStart073) {
+    actions073 = actions073.substring(0, dailyLogicStart073) +
+'''    val dailyActionLabel = if (dailyHasResult) "再要約" else "要約"
     val dailyCanRun = date <= LocalDate.now(zone) && !dailyActiveQueue
 
-'''
-actions073 = actions073.substring(0, dailyLogicStart073) + dailyLogic073 + actions073.substring(dailyLogicEnd073)
+''' + actions073.substring(dailyLogicEnd073)
+}
+actions073 = actions073.replace("生成済み・文字起こし待ち", "生成済み・時間別要約待ち")
+actions073 = actions073.replace("生成済み・元データなし", "生成済み・時間別要約なし")
+actions073 = actions073.replace("日次ノート未生成・分析可能", "日次ノート未生成・時間別要約から生成可能")
 
-actions073 = actions073.replace('''snapshot.dailyPendingTranscription && dailyHasResult ->
-                            "生成済み・文字起こし待ち"''', '''snapshot.dailyPendingTranscription && dailyHasResult ->
-                            "生成済み・時間別要約待ち"''')
-actions073 = actions073.replace('''snapshot.dailyPendingTranscription -> "文字起こし待ち"''', '''snapshot.dailyPendingTranscription -> "時間別要約待ち"''')
-actions073 = actions073.replace('''dailyHasResult -> "生成済み・元データなし"''', '''dailyHasResult -> "生成済み・時間別要約なし"''')
-actions073 = actions073.replace('''snapshot.dailyHasSource -> "日次ノート未生成・分析可能"''', '''snapshot.dailyHasSource -> "日次ノート未生成・時間別要約から生成可能"''')
-
-actions073 = replaceOnce073(actions073,
-'''                    onClick = {
+String dailyClickOld073 = '''                    onClick = {
                         val queued = AiAnalysisScheduler.enqueuePeriod(
                             context,
                             AiAnalysisScheduler.KIND_DAILY,
@@ -442,25 +413,21 @@ actions073 = replaceOnce073(actions073,
                         if (queued) refreshToken++
                     },
                     enabled = dailyCanRun,
-''',
+'''
+if (actions073.contains(dailyClickOld073)) {
+    actions073 = replaceFirst073(actions073, dailyClickOld073,
 '''                    onClick = {
                         when {
                             !snapshot.dailyHasSource -> Toast.makeText(
-                                context,
-                                "この日の時間別要約データがありません",
-                                Toast.LENGTH_SHORT
+                                context, "この日の時間別要約データがありません", Toast.LENGTH_SHORT
                             ).show()
                             !snapshot.configured -> Toast.makeText(
-                                context,
-                                "AI要約を実行するにはAI設定が必要です",
-                                Toast.LENGTH_SHORT
+                                context, "AI要約を実行するにはAI設定が必要です", Toast.LENGTH_SHORT
                             ).show()
                             else -> {
                                 val queued = AiAnalysisScheduler.enqueuePeriod(
-                                    context,
-                                    AiAnalysisScheduler.KIND_DAILY,
-                                    dailyStartMs,
-                                    dailyEndMs
+                                    context, AiAnalysisScheduler.KIND_DAILY,
+                                    dailyStartMs, dailyEndMs
                                 )
                                 Toast.makeText(
                                     context,
@@ -472,7 +439,8 @@ actions073 = replaceOnce073(actions073,
                         }
                     },
                     enabled = dailyCanRun,
-''', 'top daily button error/source behavior')
+''', 'top daily click')
+}
 writeUtf8073(actionsFile073, actions073)
 
 androidComponents {
@@ -484,18 +452,8 @@ androidComponents {
     }
 }
 
-if (!repoFile073.text.contains('buildDailySourceFromHourlyAnalyses')) {
-    throw new GradleException('0.7.73 daily hourly-note source builder missing')
-}
-if (!workerFile073.text.contains('AI_DAILY_ANALYSIS_NO_HOURLY_SOURCE')) {
-    throw new GradleException('0.7.73 daily no-hourly-source behavior missing')
-}
-if (!openAiFile073.text.contains('HOURLY AI NOTES:')) {
-    throw new GradleException('0.7.73 OpenAI daily hierarchy missing')
-}
-if (!gemmaFile073.text.contains('HOURLY AI NOTES:')) {
-    throw new GradleException('0.7.73 Gemma daily hierarchy missing')
-}
-if (!actionsFile073.text.contains('"この日の時間別要約データがありません"')) {
-    throw new GradleException('0.7.73 daily UI hourly-source error missing')
-}
+if (!repoFile073.text.contains('buildDailySourceFromHourlyAnalyses')) throw new GradleException('0.7.73 source builder missing')
+if (!workerFile073.text.contains('AI_DAILY_ANALYSIS_NO_HOURLY_SOURCE')) throw new GradleException('0.7.73 daily source guard missing')
+if (!openAiFile073.text.contains('HOURLY AI NOTES:')) throw new GradleException('0.7.73 OpenAI hierarchy missing')
+if (!gemmaFile073.text.contains('HOURLY AI NOTES:')) throw new GradleException('0.7.73 Gemma hierarchy missing')
+if (!actionsFile073.text.contains('この日の時間別要約データがありません')) throw new GradleException('0.7.73 daily UI source error missing')
