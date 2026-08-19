@@ -69,6 +69,7 @@ apply from: rootProject.file('gradle/ai-action-mode-0.7.71.gradle')
 apply from: rootProject.file('gradle/battery-transcription-prep-0.7.72.gradle')
 apply from: rootProject.file('gradle/battery-transcription-0.7.72.gradle')
 apply from: rootProject.file('gradle/ai-hierarchy-0.7.73.gradle')
+apply from: rootProject.file('gradle/startup-version-log-0.7.74.gradle')
 
 android {
     namespace 'com.sktpj.recorder24h'
