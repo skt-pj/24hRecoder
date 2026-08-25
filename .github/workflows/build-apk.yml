@@ -3,11 +3,13 @@ name: Build APK
 on:
   push:
     branches: ["main", "agent/**", "work/**"]
+    paths-ignore:
+      - 'dist/**'
   pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -15,6 +17,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -85,9 +89,19 @@ jobs:
             "$UNSIGNED_APK"
           "$APKSIGNER" verify --verbose --print-certs "$SIGNED_APK"
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: 24hRecoder-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+      - name: Publish latest APK into repository
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/24hRecoder-debug.apk
+          sha256sum dist/24hRecoder-debug.apk > dist/24hRecoder-debug.apk.sha256
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A dist
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Update latest debug APK"
+          git pull --rebase origin main
+          git push origin HEAD:main
