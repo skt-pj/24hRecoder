@@ -28,7 +28,11 @@ public final class MemoketTestStore {
         if (result == null) return;
         JSONArray old = history(context);
         JSONArray next = new JSONArray();
-        next.put(new JSONObject(result.toString()));
+        try {
+            next.put(new JSONObject(result.toString()));
+        } catch (Exception ignored) {
+            next.put(result);
+        }
         for (int i = 0; i < old.length() && i < 99; i++) {
             JSONObject row = old.optJSONObject(i);
             if (row != null) next.put(row);
