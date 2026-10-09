@@ -33,11 +33,8 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "ndk;27.0.12077973" "cmake;3.22.1" "build-tools;36.0.0"
 
-      - name: Test Memoket transfer protocol
-        run: gradle --stacktrace :app:testDebugUnitTest
-
-      - name: Build unsigned debug APK
-        run: gradle --stacktrace :app:assembleDebug
+      - name: Test and build unsigned debug APK
+        run: gradle --stacktrace :app:testDebugUnitTest :app:assembleDebug
 
       - name: Verify optimized Whisper native build
         run: |
