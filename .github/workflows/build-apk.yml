@@ -97,7 +97,7 @@ jobs:
           APK="app/build/outputs/apk/debug/app-debug.apk"
           "$AAPT" dump badging "$APK" | tee app/build/outputs/apk/debug/badging.txt
           grep -F "versionCode='1078'" app/build/outputs/apk/debug/badging.txt
-          grep -F "versionName='0.7.78-debug'" app/build/outputs/apk/debug/badging.txt
+          grep -F "versionName='0.7.78'" app/build/outputs/apk/debug/badging.txt
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
