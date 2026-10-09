@@ -37,12 +37,13 @@ public class MemoketTransferTest {
     }
 
     private static byte[] block(int seq, byte[] bytes) {
+        long value = seq & 0xffffffffL;
         byte[] packet = new byte[5 + bytes.length];
-        packet[0] = (byte) (seq >>> 32);
-        packet[1] = (byte) (seq >>> 24);
-        packet[2] = (byte) (seq >>> 16);
-        packet[3] = (byte) (seq >>> 8);
-        packet[4] = (byte) seq;
+        packet[0] = (byte) (value >>> 32);
+        packet[1] = (byte) (value >>> 24);
+        packet[2] = (byte) (value >>> 16);
+        packet[3] = (byte) (value >>> 8);
+        packet[4] = (byte) value;
         System.arraycopy(bytes, 0, packet, 5, bytes.length);
         return packet;
     }
@@ -79,7 +80,7 @@ public class MemoketTransferTest {
 
     @Test(expected = IllegalStateException.class)
     public void refusesAcknowledgmentForIncompleteTransfer() throws Exception {
-        byte[] audio = new byte[480];
+        byte[] audio = new byte[960];
         MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> fail("no save"));
         transfer.onControl(listResult());
         transfer.onData(block(0,new byte[480]));
