@@ -640,7 +640,20 @@ public final class MemoketTestEngine {
             }
 
             void onChanged(UUID uuid, byte[] value) {
-                addTrace("NOTIFY", uuid + ":" + hex(value));
+                if (MemoketGattSync.DATA.equals(uuid)) {
+                    String sequence = "";
+                    if (value != null && value.length >= 5) {
+                        long seq = ((long)(value[0] & 0xff) << 32)
+                                | ((long)(value[1] & 0xff) << 24)
+                                | ((long)(value[2] & 0xff) << 16)
+                                | ((long)(value[3] & 0xff) << 8)
+                                | (value[4] & 0xff);
+                        sequence = " seq=" + seq;
+                    }
+                    addTrace("DATA", "bytes=" + (value == null ? 0 : value.length) + sequence);
+                } else {
+                    addTrace("NOTIFY", uuid + ":" + hex(value));
+                }
                 notifications.offer(new Event(uuid, value));
             }
         };
