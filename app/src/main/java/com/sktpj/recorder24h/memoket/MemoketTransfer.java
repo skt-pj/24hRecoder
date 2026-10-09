@@ -2,7 +2,6 @@ package com.sktpj.recorder24h.memoket;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.regex.Pattern;
 import java.util.zip.CRC32;
 
@@ -12,8 +11,8 @@ public final class MemoketTransfer {
 
     private enum State {
         WAIT_LIST,
-        WAIT_METADATA,
-        WAIT_TRANSFER_DONE,
+        RECEIVING_DATA,
+        WAIT_FINALIZE,
         WAIT_ACK,
         DONE
     }
@@ -24,13 +23,12 @@ public final class MemoketTransfer {
 
     private final CompletedFile save;
     private String name;
-    private long expectedSize;
-    private long expectedCrc;
+    private long expectedSize = -1;
+    private long expectedCrc = -1;
     private final CRC32 crc = new CRC32();
     private ByteArrayOutputStream buffer;
-    private int nextSequence;
+    private long nextSequence;
     private int completedCount;
-    private boolean streaming;
     private State state = State.WAIT_LIST;
 
     public MemoketTransfer(CompletedFile save) {
@@ -45,8 +43,13 @@ public final class MemoketTransfer {
         return new byte[] {2, 0};
     }
 
-    public static byte[] downloadCommand() {
+    public static byte[] finalizeCommand() {
         return new byte[] {3};
+    }
+
+    /** Kept for source compatibility with older callers. */
+    public static byte[] downloadCommand() {
+        return finalizeCommand();
     }
 
     public synchronized byte[] onControl(byte[] payload) throws Exception {
@@ -62,55 +65,62 @@ public final class MemoketTransfer {
             String incoming = new String(payload, 3, payload.length - 3, StandardCharsets.US_ASCII);
             requireName(incoming);
             name = incoming;
-            state = State.WAIT_METADATA;
-            return metadataCommand();
-        }
-
-        if (state == State.WAIT_METADATA) {
-            if (code != 2) return null;
-            byte[] nameBytes = name.getBytes(StandardCharsets.US_ASCII);
-            int nameOffset = indexOf(payload, nameBytes);
-            if (nameOffset < 0) {
-                throw new IllegalStateException("Memoket metadata filename missing payload=" + hex(payload));
-            }
-            int valuesOffset = nameOffset + nameBytes.length;
-            if (payload.length < valuesOffset + 8) {
-                throw new IllegalStateException("Memoket metadata missing size/CRC payload=" + hex(payload));
-            }
-            expectedSize = u32(payload, valuesOffset);
-            expectedCrc = u32(payload, valuesOffset + 4);
-            if (expectedSize == 0 || expectedSize > MAX_BYTES) {
-                throw new IllegalStateException("Memoket file size invalid size=" + expectedSize + " payload=" + hex(payload));
-            }
-            buffer = new ByteArrayOutputStream((int) expectedSize);
+            expectedSize = -1;
+            expectedCrc = -1;
+            buffer = new ByteArrayOutputStream();
             crc.reset();
             nextSequence = 0;
-            streaming = true;
-            state = State.WAIT_TRANSFER_DONE;
-            return downloadCommand();
+            state = State.RECEIVING_DATA;
+            // Official Memoket flow: 01 list response is followed by automatic DATA notifications.
+            // Do not send 02 metadata until the DATA stream becomes quiet.
+            return null;
         }
 
-        if (state == State.WAIT_TRANSFER_DONE) {
-            if (code != 3 || payload.length < 2 || (payload[1] & 0xff) != 0xff) return null;
-            if (!streaming || buffer == null || buffer.size() != expectedSize || crc.getValue() != expectedCrc) {
-                throw new IllegalStateException(
-                        "Memoket transfer incomplete expectedSize=" + expectedSize
-                                + " actualSize=" + (buffer == null ? -1 : buffer.size())
-                                + " expectedCrc=" + Long.toHexString(expectedCrc)
-                                + " actualCrc=" + Long.toHexString(crc.getValue()));
+        if (state == State.RECEIVING_DATA || state == State.WAIT_FINALIZE) {
+            if (code == 2) {
+                byte[] nameBytes = name == null ? null : name.getBytes(StandardCharsets.US_ASCII);
+                int nameOffset = nameBytes == null ? -1 : indexOf(payload, nameBytes);
+                if (nameOffset < 0) {
+                    // 02 00 02 is a short device status seen when metadata is requested too early.
+                    if (payload.length <= 4) return null;
+                    throw new IllegalStateException("Memoket metadata filename missing payload=" + hex(payload));
+                }
+                int valuesOffset = nameOffset + nameBytes.length;
+                if (payload.length < valuesOffset + 8) {
+                    throw new IllegalStateException("Memoket metadata missing size/CRC payload=" + hex(payload));
+                }
+                expectedSize = u32(payload, valuesOffset);
+                expectedCrc = u32(payload, valuesOffset + 4);
+                if (expectedSize <= 0 || expectedSize > MAX_BYTES) {
+                    throw new IllegalStateException("Memoket file size invalid size=" + expectedSize + " payload=" + hex(payload));
+                }
+                if (buffer == null) throw new IllegalStateException("Memoket data buffer missing");
+                if (buffer.size() > expectedSize) {
+                    throw new IllegalStateException("Memoket file length exceeded expected=" + expectedSize + " actual=" + buffer.size());
+                }
+                state = State.WAIT_FINALIZE;
+                return finalizeIfComplete();
             }
-            byte[] data = buffer.toByteArray();
-            save.persist(name, data, expectedCrc);
-            completedCount++;
-            streaming = false;
-            buffer = null;
-            byte[] n = name.getBytes(StandardCharsets.US_ASCII);
-            byte[] ack = new byte[n.length + 2];
-            ack[0] = 5;
-            ack[1] = (byte) n.length;
-            System.arraycopy(n, 0, ack, 2, n.length);
-            state = State.WAIT_ACK;
-            return ack;
+
+            if (code == 3 && state == State.WAIT_FINALIZE) {
+                if (payload.length < 2 || (payload[1] & 0xff) != 0xff) {
+                    // Official app receives a 03 01 ... status before the final 03 ff.
+                    return null;
+                }
+                verifyComplete();
+                byte[] data = buffer.toByteArray();
+                save.persist(name, data, expectedCrc);
+                completedCount++;
+                buffer = null;
+                byte[] n = name.getBytes(StandardCharsets.US_ASCII);
+                byte[] ack = new byte[n.length + 2];
+                ack[0] = 5;
+                ack[1] = (byte) n.length;
+                System.arraycopy(n, 0, ack, 2, n.length);
+                state = State.WAIT_ACK;
+                return ack;
+            }
+            return null;
         }
 
         if (state == State.WAIT_ACK) {
@@ -120,15 +130,17 @@ public final class MemoketTransfer {
                 return null;
             }
             name = null;
+            expectedSize = -1;
+            expectedCrc = -1;
             state = State.WAIT_LIST;
             return initialCommand();
         }
         return null;
     }
 
-    public synchronized void onData(byte[] payload) {
-        if (state != State.WAIT_TRANSFER_DONE || !streaming || buffer == null
-                || payload == null || payload.length < 6) return;
+    public synchronized byte[] onData(byte[] payload) {
+        if ((state != State.RECEIVING_DATA && state != State.WAIT_FINALIZE)
+                || buffer == null || payload == null || payload.length < 6) return null;
         long sequence = ((long) (payload[0] & 0xff) << 32)
                 | ((long) (payload[1] & 0xff) << 24)
                 | ((long) (payload[2] & 0xff) << 16)
@@ -138,16 +150,48 @@ public final class MemoketTransfer {
             throw new IllegalStateException("Memoket block order mismatch expected=" + nextSequence + " actual=" + sequence);
         }
         int size = payload.length - 5;
-        if ((long) buffer.size() + size > expectedSize) {
-            throw new IllegalStateException("Memoket file length exceeded");
+        if (expectedSize > 0 && (long) buffer.size() + size > expectedSize) {
+            throw new IllegalStateException("Memoket file length exceeded expected=" + expectedSize
+                    + " actualAfterBlock=" + ((long) buffer.size() + size));
         }
         buffer.write(payload, 5, size);
         crc.update(payload, 5, size);
         nextSequence++;
+        if (state == State.WAIT_FINALIZE) return finalizeIfComplete();
+        return null;
+    }
+
+    public synchronized boolean shouldRequestMetadata() {
+        return state == State.RECEIVING_DATA && buffer != null && buffer.size() > 0;
+    }
+
+    public synchronized int bufferedBytes() {
+        return buffer == null ? 0 : buffer.size();
+    }
+
+    public synchronized long dataBlockCount() {
+        return nextSequence;
     }
 
     public synchronized boolean isDone() { return state == State.DONE; }
     public synchronized int completedCount() { return completedCount; }
+
+    private byte[] finalizeIfComplete() {
+        if (expectedSize <= 0 || buffer == null || buffer.size() < expectedSize) return null;
+        verifyComplete();
+        return finalizeCommand();
+    }
+
+    private void verifyComplete() {
+        if (buffer == null || expectedSize <= 0 || expectedCrc < 0
+                || buffer.size() != expectedSize || crc.getValue() != expectedCrc) {
+            throw new IllegalStateException(
+                    "Memoket transfer incomplete expectedSize=" + expectedSize
+                            + " actualSize=" + (buffer == null ? -1 : buffer.size())
+                            + " expectedCrc=" + Long.toHexString(expectedCrc)
+                            + " actualCrc=" + Long.toHexString(crc.getValue()));
+        }
+    }
 
     private static void requireName(String value) {
         if (value == null || value.length() > 100 || !SAFE_NAME.matcher(value).matches()
