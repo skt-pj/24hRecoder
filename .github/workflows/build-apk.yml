@@ -66,12 +66,12 @@ jobs:
           print(f'Verified -O3 on {len(whisper_commands)} whisper.cpp/ggml compile commands')
           PY
 
-      - name: Apply stable development signature
+      - name: Apply common stable signature
         run: |
           set -euo pipefail
           mkdir -p .ci-signing
-          curl -fsSL "https://android.googlesource.com/platform/build/+/ddec2f0/target/product/security/testkey.pk8?format=TEXT" | base64 --decode > .ci-signing/testkey.pk8
-          curl -fsSL "https://android.googlesource.com/platform/build/+/ddec2f0/target/product/security/testkey.x509.pem?format=TEXT" | base64 --decode > .ci-signing/testkey.x509.pem
+          curl -fsSL "https://raw.githubusercontent.com/skt-pj/pointCloudSplating/main/ci/pointcloud-dev.jks.b64" -o .ci-signing/common.jks.b64
+          base64 --decode .ci-signing/common.jks.b64 > .ci-signing/common.jks
 
           APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
           UNSIGNED_APK="app/build/outputs/apk/debug/app-debug-unsigned.apk"
@@ -79,11 +79,16 @@ jobs:
 
           test -f "$UNSIGNED_APK"
           "$APKSIGNER" sign \
-            --key .ci-signing/testkey.pk8 \
-            --cert .ci-signing/testkey.x509.pem \
+            --ks .ci-signing/common.jks \
+            --ks-key-alias pointclouddev \
+            --ks-pass pass:pointclouddev \
+            --key-pass pass:pointclouddev \
             --out "$SIGNED_APK" \
             "$UNSIGNED_APK"
-          "$APKSIGNER" verify --verbose --print-certs "$SIGNED_APK"
+
+          VERIFY_OUT="$("$APKSIGNER" verify --verbose --print-certs "$SIGNED_APK")"
+          printf '%s\n' "$VERIFY_OUT"
+          printf '%s\n' "$VERIFY_OUT" | grep -F "Signer #1 certificate SHA-256 digest: e648320071b8ab0de038f76790064b99461b67d7dbe7ce7506d12a5f4fa884d8"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
