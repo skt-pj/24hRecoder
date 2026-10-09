@@ -10,6 +10,14 @@ public final class MemoketTransfer {
     private static final Pattern SAFE_NAME = Pattern.compile("[A-Za-z0-9._-]+\\.opus");
     private static final int MAX_BYTES = 64 * 1024 * 1024;
 
+    private enum State {
+        WAIT_LIST,
+        WAIT_METADATA,
+        WAIT_TRANSFER_DONE,
+        WAIT_ACK,
+        DONE
+    }
+
     public interface CompletedFile {
         void persist(String name, byte[] payload, long expectedCrc) throws Exception;
     }
@@ -22,8 +30,8 @@ public final class MemoketTransfer {
     private ByteArrayOutputStream buffer;
     private int nextSequence;
     private int completedCount;
-    private boolean done;
     private boolean streaming;
+    private State state = State.WAIT_LIST;
 
     public MemoketTransfer(CompletedFile save) {
         this.save = save;
@@ -42,36 +50,54 @@ public final class MemoketTransfer {
     }
 
     public synchronized byte[] onControl(byte[] payload) throws Exception {
-        if (done || payload == null || payload.length == 0) return null;
+        if (state == State.DONE || payload == null || payload.length == 0) return null;
         int code = payload[0] & 0xff;
-        if (code == 1) {
+
+        if (state == State.WAIT_LIST) {
+            if (code != 1) return null;
             if (payload.length < 4 || payload[1] != 1 || payload[2] != 1) {
-                done = true;
+                state = State.DONE;
                 return null;
             }
             String incoming = new String(payload, 3, payload.length - 3, StandardCharsets.US_ASCII);
             requireName(incoming);
             name = incoming;
+            state = State.WAIT_METADATA;
             return metadataCommand();
         }
-        if (code == 2) {
-            int ext = indexOf(payload, ".opus".getBytes(StandardCharsets.US_ASCII));
-            if (ext < 0 || payload.length < ext + 13) throw new IllegalStateException("Memoket metadata missing size/CRC");
-            String metadataName = new String(payload, 5, ext + 5 - 5, StandardCharsets.US_ASCII);
-            requireName(metadataName);
-            if (!metadataName.equals(name)) throw new IllegalStateException("Memoket filename changed during sync");
-            expectedSize = u32(payload, ext + 5);
-            expectedCrc = u32(payload, ext + 9);
-            if (expectedSize == 0 || expectedSize > MAX_BYTES) throw new IllegalStateException("Memoket file exceeds safe limit");
+
+        if (state == State.WAIT_METADATA) {
+            if (code != 2) return null;
+            byte[] nameBytes = name.getBytes(StandardCharsets.US_ASCII);
+            int nameOffset = indexOf(payload, nameBytes);
+            if (nameOffset < 0) {
+                throw new IllegalStateException("Memoket metadata filename missing payload=" + hex(payload));
+            }
+            int valuesOffset = nameOffset + nameBytes.length;
+            if (payload.length < valuesOffset + 8) {
+                throw new IllegalStateException("Memoket metadata missing size/CRC payload=" + hex(payload));
+            }
+            expectedSize = u32(payload, valuesOffset);
+            expectedCrc = u32(payload, valuesOffset + 4);
+            if (expectedSize == 0 || expectedSize > MAX_BYTES) {
+                throw new IllegalStateException("Memoket file size invalid size=" + expectedSize + " payload=" + hex(payload));
+            }
             buffer = new ByteArrayOutputStream((int) expectedSize);
             crc.reset();
             nextSequence = 0;
             streaming = true;
+            state = State.WAIT_TRANSFER_DONE;
             return downloadCommand();
         }
-        if (code == 3 && payload.length >= 2 && (payload[1] & 0xff) == 0xff) {
+
+        if (state == State.WAIT_TRANSFER_DONE) {
+            if (code != 3 || payload.length < 2 || (payload[1] & 0xff) != 0xff) return null;
             if (!streaming || buffer == null || buffer.size() != expectedSize || crc.getValue() != expectedCrc) {
-                throw new IllegalStateException("Memoket transfer incomplete or CRC mismatch");
+                throw new IllegalStateException(
+                        "Memoket transfer incomplete expectedSize=" + expectedSize
+                                + " actualSize=" + (buffer == null ? -1 : buffer.size())
+                                + " expectedCrc=" + Long.toHexString(expectedCrc)
+                                + " actualCrc=" + Long.toHexString(crc.getValue()));
             }
             byte[] data = buffer.toByteArray();
             save.persist(name, data, expectedCrc);
@@ -83,35 +109,44 @@ public final class MemoketTransfer {
             ack[0] = 5;
             ack[1] = (byte) n.length;
             System.arraycopy(n, 0, ack, 2, n.length);
+            state = State.WAIT_ACK;
             return ack;
         }
-        if (code == 5 && payload.length >= 2 && payload[1] == 1) {
+
+        if (state == State.WAIT_ACK) {
+            if (code != 5 || payload.length < 2 || payload[1] != 1) return null;
             if (completedCount >= 50) {
-                done = true;
+                state = State.DONE;
                 return null;
             }
             name = null;
+            state = State.WAIT_LIST;
             return initialCommand();
         }
         return null;
     }
 
     public synchronized void onData(byte[] payload) {
-        if (!streaming || buffer == null || payload == null || payload.length < 6) return;
+        if (state != State.WAIT_TRANSFER_DONE || !streaming || buffer == null
+                || payload == null || payload.length < 6) return;
         long sequence = ((long) (payload[0] & 0xff) << 32)
                 | ((long) (payload[1] & 0xff) << 24)
                 | ((long) (payload[2] & 0xff) << 16)
                 | ((long) (payload[3] & 0xff) << 8)
                 | (payload[4] & 0xff);
-        if (sequence != nextSequence) throw new IllegalStateException("Memoket block order mismatch");
+        if (sequence != nextSequence) {
+            throw new IllegalStateException("Memoket block order mismatch expected=" + nextSequence + " actual=" + sequence);
+        }
         int size = payload.length - 5;
-        if ((long) buffer.size() + size > expectedSize) throw new IllegalStateException("Memoket file length exceeded");
+        if ((long) buffer.size() + size > expectedSize) {
+            throw new IllegalStateException("Memoket file length exceeded");
+        }
         buffer.write(payload, 5, size);
         crc.update(payload, 5, size);
         nextSequence++;
     }
 
-    public synchronized boolean isDone() { return done; }
+    public synchronized boolean isDone() { return state == State.DONE; }
     public synchronized int completedCount() { return completedCount; }
 
     private static void requireName(String value) {
@@ -120,8 +155,12 @@ public final class MemoketTransfer {
     }
 
     private static int indexOf(byte[] haystack, byte[] needle) {
+        outer:
         for (int i = 0; i <= haystack.length - needle.length; i++) {
-            if (Arrays.equals(Arrays.copyOfRange(haystack, i, i + needle.length), needle)) return i;
+            for (int j = 0; j < needle.length; j++) {
+                if (haystack[i + j] != needle[j]) continue outer;
+            }
+            return i;
         }
         return -1;
     }
@@ -131,5 +170,11 @@ public final class MemoketTransfer {
                 | ((long) (bytes[offset + 1] & 0xff) << 16)
                 | ((long) (bytes[offset + 2] & 0xff) << 8)
                 | (bytes[offset + 3] & 0xff);
+    }
+
+    private static String hex(byte[] bytes) {
+        StringBuilder out = new StringBuilder(bytes.length * 2);
+        for (byte value : bytes) out.append(String.format("%02x", value & 0xff));
+        return out.toString();
     }
 }
