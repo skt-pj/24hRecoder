@@ -53,7 +53,7 @@ public final class MemoketSessionProtocol {
             case 8:
                 if ((value[0] & 0xff) != 0xe8) throw new IllegalStateException("Unexpected e8 response");
                 step = 9;
-                return MemoketTransfer.initialCommand();
+                return null;
             default:
                 return null;
         }
