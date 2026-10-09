@@ -103,4 +103,21 @@ public class MemoketTransferTest {
         assertTrue(new String(ogg, StandardCharsets.ISO_8859_1).contains("OpusHead"));
         assertTrue(new String(ogg, StandardCharsets.ISO_8859_1).contains("OpusTags"));
     }
+    @Test
+    public void replaysObservedSessionHandshake() {
+        MemoketSessionProtocol session = new MemoketSessionProtocol();
+        assertArrayEquals(new byte[]{0x00}, session.firstCommand());
+        assertArrayEquals(new byte[]{0x27,0x01}, session.onResponse(new byte[]{0x00,0x00}));
+        assertArrayEquals(new byte[]{(byte)0xe1}, session.onResponse(new byte[]{0x27,0x02}));
+        assertArrayEquals(new byte[]{(byte)0xf3,0x00}, session.onResponse(new byte[]{(byte)0xe1,0x1f,0x02}));
+        assertArrayEquals(new byte[]{(byte)0xe3,0x01}, session.onResponse(new byte[]{(byte)0xf3,0x00,0x00}));
+        assertArrayEquals(new byte[]{(byte)0xff,0x68}, session.onResponse(new byte[]{(byte)0xe3,'0','1','.','4','8'}));
+        assertArrayEquals(new byte[]{(byte)0xe5,0x6a,(byte)0xc9,0x5e,0x6e},
+                session.onResponse(new byte[]{(byte)0xff,0x68,0x6a,(byte)0xc9,0x5e,0x6d}));
+        assertArrayEquals(new byte[]{(byte)0xe8}, session.onResponse(new byte[]{(byte)0xe5,0x01}));
+        assertArrayEquals(new byte[]{0x03}, session.onResponse(new byte[]{(byte)0xe8,0x0c,0x00,'7','0','4'}));
+        assertArrayEquals(new byte[]{0x01,0x00,0x00}, session.onResponse(new byte[]{0x03,(byte)0xff}));
+        assertTrue(session.isReady());
+    }
+
 }
