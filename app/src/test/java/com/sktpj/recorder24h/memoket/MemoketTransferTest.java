@@ -63,9 +63,11 @@ public class MemoketTransferTest {
             saved.incrementAndGet();
         });
         assertArrayEquals(new byte[]{2,0}, transfer.onControl(listResult()));
-        assertArrayEquals(new byte[]{3}, transfer.onControl(metadata(audio)));
+        assertArrayEquals(new byte[]{2,0}, transfer.onControl(new byte[]{2,0,2}));
         transfer.onData(block(0,audio));
+        assertArrayEquals(new byte[]{3}, transfer.onControl(metadata(audio)));
         assertEquals(0,saved.get());
+        assertNull(transfer.onControl(new byte[]{3,1,0,0}));
         byte[] ack = transfer.onControl(new byte[]{3, (byte) 0xff});
         assertEquals(1,saved.get());
         assertEquals(5,ack[0]);
@@ -80,8 +82,8 @@ public class MemoketTransferTest {
         byte[] audio = new byte[480];
         MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> fail("no save"));
         transfer.onControl(listResult());
+        transfer.onData(block(0,new byte[480]));
         transfer.onControl(metadata(audio));
-        transfer.onData(block(0,new byte[80]));
         transfer.onControl(new byte[]{3,(byte)0xff});
     }
 
@@ -141,6 +143,9 @@ public class MemoketTransferTest {
         list.writeBytes(new byte[]{1,1,1});
         list.writeBytes(fileName.getBytes(StandardCharsets.US_ASCII));
         assertArrayEquals(new byte[]{2,0}, transfer.onControl(list.toByteArray()));
+        for (int seq = 0; seq < 30; seq++) {
+            transfer.onData(block(seq, Arrays.copyOfRange(audio, seq * 480, (seq + 1) * 480)));
+        }
 
         ByteArrayOutputStream metadata = new ByteArrayOutputStream();
         metadata.writeBytes(new byte[]{2,0,1,0,3});
@@ -154,6 +159,29 @@ public class MemoketTransferTest {
             metadata.write((int)number);
         }
         assertArrayEquals(new byte[]{3}, transfer.onControl(metadata.toByteArray()));
+    }
+
+    @Test
+    public void pollsObservedShortMetadataStatusUntilDataIsReady() throws Exception {
+        byte[] audio = new byte[480];
+        for (int i = 0; i < audio.length; i += 80) audio[i] = (byte) 0xbc;
+        MemoketTransfer transfer = new MemoketTransfer((name, payload, crc) -> {});
+        assertArrayEquals(new byte[]{2,0}, transfer.onControl(listResult()));
+        assertArrayEquals(new byte[]{2,0}, transfer.onControl(new byte[]{2,0,2}));
+        transfer.onData(block(0, audio));
+        assertArrayEquals(new byte[]{3}, transfer.onControl(metadata(audio)));
+    }
+
+    @Test
+    public void metadataBeforeFinalBlockKeepsPollingUntilComplete() throws Exception {
+        byte[] audio = new byte[960];
+        for (int i = 0; i < audio.length; i += 80) audio[i] = (byte) 0xbc;
+        MemoketTransfer transfer = new MemoketTransfer((name, payload, crc) -> {});
+        transfer.onControl(listResult());
+        transfer.onData(block(0, Arrays.copyOfRange(audio, 0, 480)));
+        assertArrayEquals(new byte[]{2,0}, transfer.onControl(metadata(audio)));
+        transfer.onData(block(1, Arrays.copyOfRange(audio, 480, 960)));
+        assertArrayEquals(new byte[]{3}, transfer.onControl(metadata(audio)));
     }
 
     @Test
