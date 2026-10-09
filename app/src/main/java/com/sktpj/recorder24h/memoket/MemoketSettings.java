@@ -20,7 +20,18 @@ public final class MemoketSettings {
         if (address == null || !address.matches("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}")) {
             throw new IllegalArgumentException("Invalid Bluetooth address");
         }
-        prefs(context).edit().putString("address", address).apply();
+        prefs(context).edit().putString("address", address).putString("source", "MEMOKET").apply();
+    }
+
+    public static String source(Context context) {
+        return prefs(context).getString("source", "LOCAL");
+    }
+
+    public static void setSource(Context context, String source) {
+        if (!"LOCAL".equals(source) && !"MEMOKET".equals(source)) {
+            throw new IllegalArgumentException("Unknown recording source");
+        }
+        prefs(context).edit().putString("source", source).apply();
     }
 
     public static boolean enabled(Context context) {
