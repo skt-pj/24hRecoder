@@ -115,7 +115,7 @@ public class MemoketTransferTest {
         assertArrayEquals(new byte[]{(byte)0xe5,0x6a,(byte)0xc9,0x5e,0x6e},
                 session.onResponse(new byte[]{(byte)0xff,0x68,0x6a,(byte)0xc9,0x5e,0x6d}));
         assertArrayEquals(new byte[]{(byte)0xe8}, session.onResponse(new byte[]{(byte)0xe5,0x01}));
-        assertArrayEquals(new byte[]{0x01,0x00,0x00}, session.onResponse(new byte[]{(byte)0xe8,0x0c,0x00,'7','0','4'}));
+        assertNull(session.onResponse(new byte[]{(byte)0xe8,0x0c,0x00,'7','0','4'}));
         assertTrue(session.isReady());
     }
 
