@@ -232,6 +232,18 @@ fun MemoketGemSettingsCard() {
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("今すぐ録音データを取得") }
                 Text("端末内保存: ${fileCount}件 / 最新結果: $result")
+                Button(
+                    enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中",
+                    onClick = {
+                        context.startActivity(android.content.Intent(context, MemoketTestActivity::class.java))
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Memoketテストを開く") }
+                Text(
+                    "開始・停止・振動・ファイル取得の因果関係を通常録音とは分離して検証します。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
                 OutlinedButton(
                     enabled = fileCount > 0,
                     onClick = {
@@ -246,7 +258,7 @@ fun MemoketGemSettingsCard() {
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("最新の録音をファイルに保存") }
                 Text(
-                    "同期はAndroidの実行制約によって遅れる場合があります。Gemの録音開始・停止コマンドは未確認のため発行しません。",
+                    "同期はAndroidの実行制約によって遅れる場合があります。Memoketテストは診断専用で、通常の録音操作とは別画面で実行します。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall
                 )
