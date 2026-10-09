@@ -129,4 +129,38 @@ public class MemoketTransferTest {
         assertArrayEquals(new byte[]{(byte)0xe1}, session.onResponse(new byte[]{0x27,0x02}));
     }
 
+    @Test
+    public void parsesCapturedMetadataBySelectedFilename() throws Exception {
+        String fileName = "20261009_213958_2.opus";
+        byte[] audio = new byte[14400];
+        Arrays.fill(audio, (byte) 0x11);
+        CRC32 crc = new CRC32();
+        crc.update(audio);
+        MemoketTransfer transfer = new MemoketTransfer((name, payload, expectedCrc) -> {});
+        ByteArrayOutputStream list = new ByteArrayOutputStream();
+        list.writeBytes(new byte[]{1,1,1});
+        list.writeBytes(fileName.getBytes(StandardCharsets.US_ASCII));
+        assertArrayEquals(new byte[]{2,0}, transfer.onControl(list.toByteArray()));
+
+        ByteArrayOutputStream metadata = new ByteArrayOutputStream();
+        metadata.writeBytes(new byte[]{2,0,1,0,3});
+        metadata.writeBytes(fileName.getBytes(StandardCharsets.US_ASCII));
+        long size = audio.length;
+        long check = crc.getValue();
+        for (long number : new long[]{size, check}) {
+            metadata.write((int)(number >>> 24));
+            metadata.write((int)(number >>> 16));
+            metadata.write((int)(number >>> 8));
+            metadata.write((int)number);
+        }
+        assertArrayEquals(new byte[]{3}, transfer.onControl(metadata.toByteArray()));
+    }
+
+    @Test
+    public void ignoresUnrelatedCodeTwoUntilMetadataIsExpected() throws Exception {
+        MemoketTransfer transfer = new MemoketTransfer((name, payload, crc) -> {});
+        assertNull(transfer.onControl(new byte[]{2,0}));
+        assertArrayEquals(new byte[]{2,0}, transfer.onControl(listResult()));
+    }
+
 }
