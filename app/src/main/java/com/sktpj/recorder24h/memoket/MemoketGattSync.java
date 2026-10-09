@@ -163,6 +163,7 @@ public final class MemoketGattSync {
                 byte[] next;
                 if (!session.isReady()) {
                     next = session.onResponse(value);
+                    if (next == null && session.isReady()) next = MemoketTransfer.initialCommand();
                 } else {
                     next = protocol.onControl(value);
                 }
