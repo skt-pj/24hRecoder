@@ -56,7 +56,7 @@ public final class MemoketGattSync {
         BluetoothManager manager = context.getSystemService(BluetoothManager.class);
         BluetoothAdapter adapter = manager == null ? null : manager.getAdapter();
         if (adapter == null || !adapter.isEnabled()) throw new IllegalStateException("Bluetooth is disabled");
-        BluetoothDevice device = adapter.getRemoteDevice(address);
+        BluetoothDevice device = MemoketDeviceResolver.resolve(context, address, 8_000L);
         try {
             gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE);
             if (gatt == null) throw new IllegalStateException("Cannot open GATT connection");
