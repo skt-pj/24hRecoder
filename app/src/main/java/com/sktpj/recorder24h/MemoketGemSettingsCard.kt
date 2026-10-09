@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -28,6 +29,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -36,11 +38,35 @@ import com.sktpj.recorder24h.memoket.MemoketRecordingStore
 import com.sktpj.recorder24h.memoket.MemoketSettings
 import com.sktpj.recorder24h.memoket.MemoketSyncScheduler
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
 @Composable
 fun MemoketGemSettingsCard() {
     val context = LocalContext.current
     val handler = remember { Handler(Looper.getMainLooper()) }
+    val scope = rememberCoroutineScope()
+    var exportFile by remember { mutableStateOf<File?>(null) }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("audio/ogg")
+    ) { uri ->
+        val file = exportFile
+        if (uri != null && file != null) {
+            scope.launch {
+                val saved = withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            file.inputStream().use { it.copyTo(out) }
+                        } != null
+                    } catch (_: Exception) { false }
+                }
+                Toast.makeText(context, if (saved) "音声を書き出しました" else "書き出しに失敗しました", Toast.LENGTH_SHORT).show()
+            }
+        }
+        exportFile = null
+    }
     var source by remember { mutableStateOf(MemoketSettings.source(context)) }
     var address by remember { mutableStateOf(MemoketSettings.address(context)) }
     var automatic by remember { mutableStateOf(MemoketSettings.enabled(context)) }
@@ -180,6 +206,19 @@ fun MemoketGemSettingsCard() {
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("今すぐ録音データを取得") }
                 Text("端末内保存: ${fileCount}件 / 最新結果: $result")
+                OutlinedButton(
+                    enabled = fileCount > 0,
+                    onClick = {
+                        val last = MemoketRecordingStore(context).directory()
+                            .listFiles { _, fileName -> fileName.endsWith(".opus") }
+                            ?.maxByOrNull { it.lastModified() }
+                        if (last != null) {
+                            exportFile = last
+                            exportLauncher.launch(last.name)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("最新の録音をファイルに保存") }
                 Text(
                     "同期はAndroidの実行制約によって遅れる場合があります。Gemの録音開始・停止コマンドは未確認のため発行しません。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
