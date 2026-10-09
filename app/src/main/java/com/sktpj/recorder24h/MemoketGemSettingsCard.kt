@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.sktpj.recorder24h.memoket.MemoketRecordingStore
+import com.sktpj.recorder24h.memoket.MemoketRemoteRecordingService
 import com.sktpj.recorder24h.memoket.MemoketSettings
 import com.sktpj.recorder24h.memoket.MemoketSyncScheduler
 import kotlinx.coroutines.delay
@@ -72,6 +73,7 @@ fun MemoketGemSettingsCard() {
     var automatic by remember { mutableStateOf(MemoketSettings.enabled(context)) }
     var result by remember { mutableStateOf(MemoketSettings.result(context)) }
     var fileCount by remember { mutableStateOf(MemoketRecordingStore(context).count()) }
+    var remoteState by remember { mutableStateOf(MemoketSettings.remoteRecordingState(context)) }
     var scanState by remember { mutableStateOf("") }
     var devices by remember { mutableStateOf(emptyList<Pair<String, String>>()) }
     var scanning by remember { mutableStateOf(false) }
@@ -132,6 +134,7 @@ fun MemoketGemSettingsCard() {
         while (true) {
             result = MemoketSettings.result(context)
             fileCount = MemoketRecordingStore(context).count()
+            remoteState = MemoketSettings.remoteRecordingState(context)
             delay(2_000)
         }
     }
@@ -197,8 +200,31 @@ fun MemoketGemSettingsCard() {
                 ) {
                     Text(if (automatic) "定期取得をOFFにする" else "定期取得をONにする（15分間隔）")
                 }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中",
+                        onClick = {
+                            val intent = android.content.Intent(context, MemoketRemoteRecordingService::class.java)
+                                .setAction(MemoketRemoteRecordingService.ACTION_START_RECORDING)
+                            if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent)
+                            else context.startService(intent)
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Gem録音開始") }
+                    OutlinedButton(
+                        enabled = remoteState == "録音中",
+                        onClick = {
+                            context.startService(
+                                android.content.Intent(context, MemoketRemoteRecordingService::class.java)
+                                    .setAction(MemoketRemoteRecordingService.ACTION_STOP_RECORDING)
+                            )
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Gem録音停止") }
+                }
+                Text("Gem録音状態: $remoteState")
                 Button(
-                    enabled = address.isNotEmpty(),
+                    enabled = address.isNotEmpty() && remoteState != "録音中",
                     onClick = {
                         MemoketSyncScheduler.syncNow(context)
                         scanState = "同期を要求しました"
