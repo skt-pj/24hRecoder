@@ -71,9 +71,9 @@ public final class MemoketTransfer {
             crc.reset();
             nextSequence = 0;
             state = State.RECEIVING_DATA;
-            // Official Memoket flow: 01 list response is followed by automatic DATA notifications.
-            // Do not send 02 metadata until the DATA stream becomes quiet.
-            return null;
+            // Official Memoket flow: 01 starts automatic DATA streaming. Existing callers
+            // are response-driven, so poll 02 until the device returns the complete metadata.
+            return metadataCommand();
         }
 
         if (state == State.RECEIVING_DATA || state == State.WAIT_FINALIZE) {
@@ -81,8 +81,8 @@ public final class MemoketTransfer {
                 byte[] nameBytes = name == null ? null : name.getBytes(StandardCharsets.US_ASCII);
                 int nameOffset = nameBytes == null ? -1 : indexOf(payload, nameBytes);
                 if (nameOffset < 0) {
-                    // 02 00 02 is a short device status seen when metadata is requested too early.
-                    if (payload.length <= 4) return null;
+                    // 02 00 02 is the observed busy/status response while DATA is still streaming.
+                    if (payload.length <= 4) return metadataCommand();
                     throw new IllegalStateException("Memoket metadata filename missing payload=" + hex(payload));
                 }
                 int valuesOffset = nameOffset + nameBytes.length;
@@ -99,7 +99,8 @@ public final class MemoketTransfer {
                     throw new IllegalStateException("Memoket file length exceeded expected=" + expectedSize + " actual=" + buffer.size());
                 }
                 state = State.WAIT_FINALIZE;
-                return finalizeIfComplete();
+                byte[] ready = finalizeIfComplete();
+                return ready != null ? ready : metadataCommand();
             }
 
             if (code == 3 && state == State.WAIT_FINALIZE) {
@@ -141,6 +142,9 @@ public final class MemoketTransfer {
     public synchronized byte[] onData(byte[] payload) {
         if ((state != State.RECEIVING_DATA && state != State.WAIT_FINALIZE)
                 || buffer == null || payload == null || payload.length < 6) return null;
+        if (payload.length != 485) {
+            throw new IllegalStateException("Memoket DATA block length invalid bytes=" + payload.length);
+        }
         long sequence = ((long) (payload[0] & 0xff) << 32)
                 | ((long) (payload[1] & 0xff) << 24)
                 | ((long) (payload[2] & 0xff) << 16)
