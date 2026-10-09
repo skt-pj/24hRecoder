@@ -93,7 +93,7 @@ public final class MemoketRemoteRecordingService extends Service {
             return START_NOT_STICKY;
         }
         try {
-            BluetoothDevice device = adapter.getRemoteDevice(address);
+            BluetoothDevice device = MemoketDeviceResolver.resolve(this, address, 8_000L);
             gatt = device.connectGatt(this, false, callback, BluetoothDevice.TRANSPORT_LE);
             if (gatt == null) finishWithError("Gemへ接続できませんでした");
         } catch (Exception error) {
