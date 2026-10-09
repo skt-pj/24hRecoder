@@ -94,7 +94,9 @@ public final class MemoketRemoteRecordingService extends Service {
         }
         new Thread(() -> {
             try {
-                BluetoothDevice device = MemoketDeviceResolver.resolve(this, address, 8_000L);
+                JSONObject probe = MemoketConnectionProbe.observe(this, address, 3_000L);
+                AppLogger.event(this, "MEMOKET_CONNECT_PREFLIGHT", probe);
+                BluetoothDevice device = adapter.getRemoteDevice(address);
                 BluetoothGatt connection = device.connectGatt(this, false, callback, BluetoothDevice.TRANSPORT_LE);
                 if (connection == null) {
                     finishWithError("Gemへ接続できませんでした");
