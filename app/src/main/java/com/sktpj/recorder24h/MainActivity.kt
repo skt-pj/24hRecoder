@@ -1457,6 +1457,7 @@ private fun SettingsScreen(
     ) {
         item { WhisperModelSettingsCard() }
         item { AiSettingsCard() }
+        item { MemoketGemSettingsCard() }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
