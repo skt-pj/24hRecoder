@@ -119,4 +119,14 @@ public class MemoketTransferTest {
         assertTrue(session.isReady());
     }
 
+    @Test
+    public void ignoresUnsolicitedStatusDuringHandshake() {
+        MemoketSessionProtocol session = new MemoketSessionProtocol();
+        assertArrayEquals(new byte[]{0x00}, session.firstCommand());
+        assertArrayEquals(new byte[]{0x27,0x01}, session.onResponse(new byte[]{0x00,0x00}));
+        assertNull(session.onResponse(new byte[]{0x00,0x00}));
+        assertNull(session.onResponse(new byte[]{0x00,0x01}));
+        assertArrayEquals(new byte[]{(byte)0xe1}, session.onResponse(new byte[]{0x27,0x02}));
+    }
+
 }
