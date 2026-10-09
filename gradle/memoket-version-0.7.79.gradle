@@ -1,8 +1,8 @@
 androidComponents {
     onVariants(selector().withBuildType('debug')) { v ->
         v.outputs.each { o ->
-            o.versionCode.set(1079)
-            o.versionName.set('0.7.79')
+            o.versionCode.set(1080)
+            o.versionName.set('0.7.80')
         }
     }
 }
