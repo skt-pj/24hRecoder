@@ -31,6 +31,7 @@ public final class MemoketGattSync {
     private final Context context;
     private final String address;
     private final MemoketTransfer protocol;
+    private final MemoketSessionProtocol session = new MemoketSessionProtocol();
     private final CountDownLatch finished = new CountDownLatch(1);
     private final Deque<byte[]> commands = new ArrayDeque<>();
     private BluetoothGatt gatt;
@@ -142,7 +143,7 @@ public final class MemoketGattSync {
         BluetoothGattCharacteristic next = notifyStep++ == 0 ? dataCharacteristic :
                 notifyStep == 2 ? responseCharacteristic : null;
         if (next == null) {
-            queue(MemoketTransfer.initialCommand());
+            queue(session.firstCommand());
             return;
         }
         BluetoothGattDescriptor descriptor = next.getDescriptor(CCCD);
@@ -159,7 +160,12 @@ public final class MemoketGattSync {
             if (uuid.equals(DATA)) {
                 protocol.onData(value);
             } else if (uuid.equals(RESPONSE)) {
-                byte[] next = protocol.onControl(value);
+                byte[] next;
+                if (!session.isReady()) {
+                    next = session.onResponse(value);
+                } else {
+                    next = protocol.onControl(value);
+                }
                 if (next != null) queue(next);
                 if (protocol.isDone()) finished.countDown();
             }
