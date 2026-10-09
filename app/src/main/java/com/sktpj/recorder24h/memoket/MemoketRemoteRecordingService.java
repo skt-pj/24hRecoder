@@ -92,13 +92,19 @@ public final class MemoketRemoteRecordingService extends Service {
             finishWithError("Bluetoothが無効です");
             return START_NOT_STICKY;
         }
-        try {
-            BluetoothDevice device = MemoketDeviceResolver.resolve(this, address, 8_000L);
-            gatt = device.connectGatt(this, false, callback, BluetoothDevice.TRANSPORT_LE);
-            if (gatt == null) finishWithError("Gemへ接続できませんでした");
-        } catch (Exception error) {
-            finishWithError(error.getMessage() == null ? "Gemへ接続できませんでした" : error.getMessage());
-        }
+        new Thread(() -> {
+            try {
+                BluetoothDevice device = MemoketDeviceResolver.resolve(this, address, 8_000L);
+                BluetoothGatt connection = device.connectGatt(this, false, callback, BluetoothDevice.TRANSPORT_LE);
+                if (connection == null) {
+                    finishWithError("Gemへ接続できませんでした");
+                    return;
+                }
+                gatt = connection;
+            } catch (Exception error) {
+                finishWithError(error.getMessage() == null ? "Gemへ接続できませんでした" : error.getMessage());
+            }
+        }, "memoket-connect").start();
         return START_NOT_STICKY;
     }
 
