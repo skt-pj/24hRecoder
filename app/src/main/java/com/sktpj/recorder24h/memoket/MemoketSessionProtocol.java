@@ -53,10 +53,6 @@ public final class MemoketSessionProtocol {
             case 8:
                 if ((value[0] & 0xff) != 0xe8) throw new IllegalStateException("Unexpected e8 response");
                 step = 9;
-                return new byte[]{0x03};
-            case 9:
-                require(value, new byte[]{0x03, (byte) 0xff}, "03");
-                step = 10;
                 return MemoketTransfer.initialCommand();
             default:
                 return null;
@@ -64,7 +60,7 @@ public final class MemoketSessionProtocol {
     }
 
     public boolean isReady() {
-        return step >= 10;
+        return step >= 9;
     }
 
     private static void require(byte[] actual, byte[] expected, String label) {
