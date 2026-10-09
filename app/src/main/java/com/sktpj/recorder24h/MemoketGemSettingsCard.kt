@@ -78,7 +78,7 @@ fun MemoketGemSettingsCard() {
             scanning = true
             scanState = "Memoket Gemを検索中"
             handler.postDelayed({
-                try { adapter.bluetoothLeScanner?.stopScan(callback) } catch (_: Exception) { }
+                try { adapter?.bluetoothLeScanner?.stopScan(callback) } catch (_: Exception) { }
                 scanning = false
                 if (devices.isEmpty()) scanState = "Memoket Gemが見つかりません"
                 else scanState = "${devices.size}台見つかりました"
