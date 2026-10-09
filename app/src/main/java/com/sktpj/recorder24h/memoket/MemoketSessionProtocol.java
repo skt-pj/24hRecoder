@@ -11,32 +11,37 @@ public final class MemoketSessionProtocol {
     }
 
     public byte[] onResponse(byte[] value) {
-        if (value == null || value.length == 0) {
-            throw new IllegalStateException("Empty Memoket session response");
-        }
+        if (value == null || value.length == 0) return null;
+        int opcode = value[0] & 0xff;
+
         switch (step) {
+            case 0:
+                return null;
             case 1:
-                require(value, new byte[]{0x00, 0x00}, "00");
+                if (opcode != 0x00) return null;
+                requirePrefix(value, new byte[]{0x00, 0x00}, "00");
                 step = 2;
                 return new byte[]{0x27, 0x01};
             case 2:
-                require(value, new byte[]{0x27, 0x02}, "27");
+                if (opcode != 0x27) return null;
+                requirePrefix(value, new byte[]{0x27, 0x02}, "27");
                 step = 3;
                 return new byte[]{(byte) 0xe1};
             case 3:
-                if ((value[0] & 0xff) != 0xe1) throw new IllegalStateException("Unexpected e1 response");
+                if (opcode != 0xe1) return null;
                 step = 4;
                 return new byte[]{(byte) 0xf3, 0x00};
             case 4:
-                if ((value[0] & 0xff) != 0xf3) throw new IllegalStateException("Unexpected f3 response");
+                if (opcode != 0xf3) return null;
                 step = 5;
                 return new byte[]{(byte) 0xe3, 0x01};
             case 5:
-                if ((value[0] & 0xff) != 0xe3) throw new IllegalStateException("Unexpected e3 response");
+                if (opcode != 0xe3) return null;
                 step = 6;
                 return new byte[]{(byte) 0xff, 0x68};
             case 6:
-                if (value.length < 6 || (value[0] & 0xff) != 0xff || (value[1] & 0xff) != 0x68) {
+                if (opcode != 0xff) return null;
+                if (value.length < 6 || (value[1] & 0xff) != 0x68) {
                     throw new IllegalStateException("Unexpected ff68 challenge response");
                 }
                 byte[] token = Arrays.copyOfRange(value, 2, 6);
@@ -47,11 +52,12 @@ public final class MemoketSessionProtocol {
                 step = 7;
                 return reply;
             case 7:
-                require(value, new byte[]{(byte) 0xe5, 0x01}, "e5");
+                if (opcode != 0xe5) return null;
+                requirePrefix(value, new byte[]{(byte) 0xe5, 0x01}, "e5");
                 step = 8;
                 return new byte[]{(byte) 0xe8};
             case 8:
-                if ((value[0] & 0xff) != 0xe8) throw new IllegalStateException("Unexpected e8 response");
+                if (opcode != 0xe8) return null;
                 step = 9;
                 return null;
             default:
@@ -63,9 +69,14 @@ public final class MemoketSessionProtocol {
         return step >= 9;
     }
 
-    private static void require(byte[] actual, byte[] expected, String label) {
-        if (!Arrays.equals(actual, expected)) {
+    private static void requirePrefix(byte[] actual, byte[] expected, String label) {
+        if (actual.length < expected.length) {
             throw new IllegalStateException("Unexpected Memoket " + label + " response");
+        }
+        for (int i = 0; i < expected.length; i++) {
+            if (actual[i] != expected[i]) {
+                throw new IllegalStateException("Unexpected Memoket " + label + " response");
+            }
         }
     }
 
