@@ -70,7 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .ci-signing
-          curl -fsSL "https://raw.githubusercontent.com/skt-pj/pointCloudSplating/main/ci/pointcloud-dev.jks.b64" -o .ci-signing/common.jks.b64
+          curl -fsSL "https://raw.githubusercontent.com/skt-pj/2048TD/main/ci/2048td-release.jks.b64" -o .ci-signing/common.jks.b64
           base64 --decode .ci-signing/common.jks.b64 > .ci-signing/common.jks
 
           APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
@@ -80,9 +80,9 @@ jobs:
           test -f "$UNSIGNED_APK"
           "$APKSIGNER" sign \
             --ks .ci-signing/common.jks \
-            --ks-key-alias pointclouddev \
-            --ks-pass pass:pointclouddev \
-            --key-pass pass:pointclouddev \
+            --ks-key-alias 2048td-release \
+            --ks-pass pass:2048td-release \
+            --key-pass pass:2048td-release \
             --out "$SIGNED_APK" \
             "$UNSIGNED_APK"
 
