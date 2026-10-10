@@ -82,6 +82,8 @@ public final class MemoketTestEngine {
 
             result.put("status", "COMPLETED");
             result.put("finishedAtMs", System.currentTimeMillis());
+            if (session != null) session.debug.completed(
+                    new JSONObject().put("caseId", caseId).put("status", "COMPLETED"));
             AppLogger.event(context, "MEMOKET_TEST_COMPLETED", compact(result));
         } catch (Exception error) {
             if (session != null) session.debug.failure(
@@ -346,6 +348,7 @@ public final class MemoketTestEngine {
             out.put("audioDurationMs", result.optLong("audioDurationMs"));
             out.put("stopInference", result.optString("stopInference"));
             out.put("downloadedFiles", result.optInt("downloadedFiles"));
+            out.put("traceSessionId", result.optString("traceSessionId"));
         } catch (Exception ignored) { }
         return out;
     }
@@ -424,6 +427,7 @@ public final class MemoketTestEngine {
             this.address = address;
             this.result = result;
             this.debug = new MemoketDebugTrace(this.context, "TEST_ENGINE:" + result.optString("caseId", "unknown"));
+            try { this.result.put("traceSessionId", this.debug.sessionId()); } catch (Exception ignored) { }
         }
 
         void connect() throws Exception {
