@@ -560,6 +560,7 @@ public final class MemoketTestEngine {
             List<String> saved = new ArrayList<>();
             MemoketTransfer transfer = new MemoketTransfer((name, payload, crc) -> {
                 store.persist(name, payload, crc);
+                debug.filePersisted(name, payload.length, crc);
                 saved.add(name);
             });
 
@@ -686,7 +687,11 @@ public final class MemoketTestEngine {
                     }
                     addTrace("DATA", "bytes=" + (value == null ? 0 : value.length) + sequence);
                 } else {
-                    debug.response(value, "TEST_DIRECT", "TEST_QUEUE");
+                    if (MemoketGattSync.RESPONSE.equals(uuid)) {
+                        debug.response(value, "TEST_DIRECT", "TEST_QUEUE");
+                    } else {
+                        debug.notification(uuid.toString(), value);
+                    }
                     addTrace("NOTIFY", uuid + ":" + hex(value));
                 }
                 notifications.offer(new Event(uuid, value));
