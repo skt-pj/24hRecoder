@@ -664,11 +664,6 @@ private fun StorageCard(dashboard: DashboardSnapshot) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Text(
-                "",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         }
     }
 }
@@ -1463,7 +1458,6 @@ private fun SettingsScreen(
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("プライバシー", style = MaterialTheme.typography.titleLarge)
                     Text("録音音声は端末内保存。OpenAI利用時は文字起こしテキストのみ送信します。")
-                    Text("", fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -1471,7 +1465,6 @@ private fun SettingsScreen(
             Card {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Android設定", style = MaterialTheme.typography.titleLarge)
-                    Text("", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     OutlinedButton(onClick = onOpenSystemSettings, modifier = Modifier.fillMaxWidth()) { Text("アプリ設定を開く") }
                 }
             }
