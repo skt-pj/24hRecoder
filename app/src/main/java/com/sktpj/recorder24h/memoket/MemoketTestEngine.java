@@ -30,6 +30,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class MemoketTestEngine {
     public interface ProgressListener {
@@ -38,6 +39,7 @@ public final class MemoketTestEngine {
 
     public static final UUID EXTRA5 = UUID.fromString("a1b2c305-4f5c-6e7d-df23-ab12cd34ef56");
     public static final UUID EXTRA6 = UUID.fromString("a1b2c306-4f5c-6e7d-df23-ab12cd34ef56");
+    private static final AtomicBoolean BATCH_RUNNING = new AtomicBoolean(false);
     private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
 
     private MemoketTestEngine() {}
@@ -105,6 +107,17 @@ public final class MemoketTestEngine {
     public static JSONObject runBatch(Context context, ProgressListener listener) {
         long began = System.currentTimeMillis();
         JSONObject report = new JSONObject();
+        if (!BATCH_RUNNING.compareAndSet(false, true)) {
+            try {
+                report.put("caseId", "BATCH_ALL");
+                report.put("status", "BUSY_ALREADY_RUNNING");
+                report.put("error", "別のMemoket一括診断が実行中です。並列BLE通信を防止しました");
+                report.put("startedAtMs", began);
+                report.put("finishedAtMs", System.currentTimeMillis());
+            } catch (Exception ignored) { }
+            progress(listener, "一括診断は実行中", "同時接続による音声転送破損を防止しました", false);
+            return report;
+        }
         JSONArray cases = new JSONArray();
         int downloaded = 0;
         int errors = 0;
@@ -200,6 +213,13 @@ public final class MemoketTestEngine {
             report.put("fileTransferCaseMethod", "ONE_CONTINUOUS_GATT_SESSION");
             report.put("fileTransferResult", MemoketBatchAssessment.fileState(downloaded,
                     transferError, transferSession == null ? -1 : transferSession.firstDataSequence));
+            report.put("fileTransferMetadataProbeCount",
+                    transferSession == null ? 0 : transferSession.metadataProbeCount);
+            report.put("fileTransferLastMetadataResponseHex",
+                    transferSession == null ? "" : transferSession.lastMetadataResponseHex);
+            report.put("fileTransferMayStillBeStreaming",
+                    downloaded == 0 && transferSession != null
+                            && transferSession.observedDataBlocks > 0);
             if (downloaded == 0 && transferSession != null && transferSession.firstDataSequence > 0) {
                 report.put("fileStreamState", "PARTIAL_STREAM_ALREADY_ACTIVE");
                 report.put("fileStreamFirstSequence", transferSession.firstDataSequence);
@@ -283,7 +303,11 @@ public final class MemoketTestEngine {
             } catch (Exception ignored) { }
             progress(listener, "一括診断失敗", report.optString("error"), false);
         } finally {
-            MemoketTestStore.save(context, report);
+            try {
+                MemoketTestStore.save(context, report);
+            } finally {
+                BATCH_RUNNING.set(false);
+            }
         }
         return report;
     }
@@ -585,6 +609,8 @@ public final class MemoketTestEngine {
         final List<String> savedFileNames = new ArrayList<>();
         volatile long firstDataSequence = -1L;
         volatile int observedDataBlocks = 0;
+        volatile int metadataProbeCount = 0;
+        volatile String lastMetadataResponseHex = "";
 
         Session(Context context, String address, JSONObject result) {
             this.context = context.getApplicationContext();
@@ -734,10 +760,17 @@ public final class MemoketTestEngine {
             });
 
             byte[] next = MemoketTransfer.initialCommand();
-            long deadline = System.currentTimeMillis() + 90_000;
+            final long MAX_DIAGNOSTIC_TRANSFER_MS = 90_000L;
+            final long METADATA_PROBE_INTERVAL_MS = 10_000L;
+            long deadline = System.currentTimeMillis() + MAX_DIAGNOSTIC_TRANSFER_MS;
+            long lastMetadataProbeAt = System.currentTimeMillis();
             long lastActivity = System.currentTimeMillis();
             while (System.currentTimeMillis() < deadline) {
                 if (next != null) {
+                    if (next.length > 0 && next[0] == 0x02) {
+                        metadataProbeCount++;
+                        lastMetadataProbeAt = System.currentTimeMillis();
+                    }
                     write(next);
                     next = null;
                 }
@@ -759,12 +792,23 @@ public final class MemoketTestEngine {
                     byte[] candidate = transfer.onData(event.value);
                     debug.transferState(transfer, "TEST_DATA_PARSED");
                     if (candidate != null) next = candidate;
+                    // In v0.7.96 continuous DATA occupied the queue for 90 seconds,
+                    // so the idle-only metadata probe never ran. Probe conservatively
+                    // while streaming (no faster than once every 10 seconds).
+                    if (next == null && transfer.shouldRequestMetadata()
+                            && System.currentTimeMillis() - lastMetadataProbeAt
+                            >= METADATA_PROBE_INTERVAL_MS) {
+                        next = MemoketTransfer.metadataCommand();
+                    }
                     continue;
                 }
                 if (!MemoketGattSync.RESPONSE.equals(event.uuid)) continue;
 
                 if (event.value.length > 0 && (event.value[0] & 0xff) == 1) {
                     lastListResponseHex = hex(event.value);
+                }
+                if (event.value.length > 0 && (event.value[0] & 0xff) == 2) {
+                    lastMetadataResponseHex = hex(event.value);
                 }
                 byte[] candidate = transfer.onControl(event.value);
                 if (firstAnnouncedFile.isEmpty() && !transfer.debugFileName().isEmpty()) {
@@ -783,6 +827,18 @@ public final class MemoketTestEngine {
                     next = candidate;
                 }
                 if (transfer.isDone()) break;
+            }
+            if (saved.isEmpty() && transfer.dataBlockCount() > 0 && !transfer.isDone()) {
+                throw new IllegalStateException(
+                        "音声DATAは" + transfer.dataBlockCount() + "ブロック受信しましたが"
+                        + "90秒以内にファイル完了とCRC照合まで進めません。"
+                        + " filename=" + transfer.debugFileName()
+                        + " bufferedBytes=" + transfer.bufferedBytes()
+                        + " firstSeq=" + firstDataSequence
+                        + " metadataProbes=" + metadataProbeCount
+                        + " lastMetadata=" + lastMetadataResponseHex
+                        + " state=" + transfer.debugState()
+                        + "。Gemの録音が続いているか、長時間ファイルの転送が未完了の可能性があります");
             }
             return saved.size();
         }
