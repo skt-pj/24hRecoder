@@ -19,6 +19,9 @@ public final class MemoketSyncScheduler {
     private MemoketSyncScheduler() {}
 
     public static void setPeriodic(Context context, boolean enabled) {
+        // Never schedule unattended BLE transfers while Gem recording status
+        // cannot be read. It can still be actively recording after a BLE disconnect.
+        enabled = enabled && MemoketFlowPolicy.periodicTransferAllowed();
         MemoketSettings.setEnabled(context, enabled);
         WorkManager manager = WorkManager.getInstance(context);
         if (!enabled) {
@@ -34,6 +37,11 @@ public final class MemoketSyncScheduler {
     }
 
     public static void syncNow(Context context) {
+        MemoketSettings.saveResult(context,
+                "Gem本体の録音停止確認が必要です。「本体の録音停止を確認」を選択してください");
+    }
+
+    public static void syncNowAfterPhysicalStopConfirmation(Context context) {
         scheduleOneTime(context, 0);
     }
 
@@ -44,6 +52,7 @@ public final class MemoketSyncScheduler {
                 .setInputData(new Data.Builder()
                         .putBoolean("manual", true)
                         .putBoolean("afterStop", true)
+                        .putBoolean("confirmedStopped", true)
                         .putLong("startedAtMs", startedAtMs)
                         .putLong("stoppedAtMs", stoppedAtMs)
                         .putString("recordingZone", zoneId)
@@ -56,7 +65,7 @@ public final class MemoketSyncScheduler {
 
     private static void scheduleOneTime(Context context, long delaySeconds) {
         OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(MemoketSyncWorker.class)
-                .setInputData(new Data.Builder().putBoolean("manual", true).build())
+                .setInputData(new Data.Builder().putBoolean("manual", true).putBoolean("confirmedStopped", true).build())
                 .setInitialDelay(delaySeconds, TimeUnit.SECONDS)
                 .build();
         WorkManager.getInstance(context)

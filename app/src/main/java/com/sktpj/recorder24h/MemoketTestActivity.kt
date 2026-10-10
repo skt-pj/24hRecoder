@@ -221,7 +221,7 @@ private fun MenuScreen(modifier: Modifier, onStart: () -> Unit, onStop: () -> Un
     val context = LocalContext.current
     val address = MemoketSettings.address(context)
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Text("Gemの録音・停止・振動の因果関係を調べる診断画面です。", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        item { Text("未検証の診断コマンドはGemの録音を開始したまま停止できなくする可能性があります。開始・停止テストは本体を手動停止できる状況でのみ実行してください。", color = MaterialTheme.colorScheme.error) }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {

@@ -145,10 +145,10 @@ public final class MemoketTestEngine {
             result.put("startResponseHex", "notification disabled");
         }
 
-        progress(listener, "録音確認", "5秒間録音します。最後の安全停止の振動は開始時の振動回数に含めないでください", false);
+        progress(listener, "録音確認", "5秒間録音します。最後の未検証の停止手順の振動は開始時の振動回数に含めないでください", false);
         Thread.sleep(5_000);
 
-        progress(listener, "安全停止", "既知の OFF→ON→01 00 00 で録音を確定し、音声を取得します", false);
+        progress(listener, "未検証の停止手順", "既知の OFF→ON→01 00 00 で録音を確定し、音声を取得します", false);
         ensureForCleanup(s);
         s.enableData(false);
         Thread.sleep(150);
@@ -187,12 +187,12 @@ public final class MemoketTestEngine {
         executeStopCandidate(s, caseId);
         result.put("candidateAtMs", candidateAt);
 
-        progress(listener, "候補操作後を観測", "3秒待ちます。この後の安全停止の振動はテスト結果に含めないでください", false);
+        progress(listener, "候補操作後を観測", "3秒待ちます。この後の未検証の停止手順の振動はテスト結果に含めないでください", false);
         Thread.sleep(3_000);
 
         long cleanupAt = System.currentTimeMillis();
         result.put("cleanupAtMs", cleanupAt);
-        progress(listener, "安全停止・取得", "既知の停止手順で復旧し、新規録音を取得します", false);
+        progress(listener, "未検証の停止手順・取得", "既知の停止手順で復旧し、新規録音を取得します", false);
         ensureForCleanup(s);
         s.enableData(false);
         Thread.sleep(150);

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
@@ -74,6 +75,7 @@ fun MemoketGemSettingsCard() {
     var result by remember { mutableStateOf(MemoketSettings.result(context)) }
     var fileCount by remember { mutableStateOf(MemoketRecordingStore(context).count()) }
     var remoteState by remember { mutableStateOf(MemoketSettings.remoteRecordingState(context)) }
+    var physicalStopConfirmed by remember { mutableStateOf(false) }
     var scanState by remember { mutableStateOf("") }
     var devices by remember { mutableStateOf(emptyList<Pair<String, String>>()) }
     var scanning by remember { mutableStateOf(false) }
@@ -131,6 +133,10 @@ fun MemoketGemSettingsCard() {
     }
 
     LaunchedEffect(Unit) {
+        if (MemoketSettings.enabled(context)) {
+            MemoketSyncScheduler.setPeriodic(context, false)
+            automatic = false
+        }
         while (true) {
             result = MemoketSettings.result(context)
             fileCount = MemoketRecordingStore(context).count()
@@ -190,27 +196,13 @@ fun MemoketGemSettingsCard() {
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("$name ($deviceAddress)") }
                 }
-                OutlinedButton(
-                    enabled = address.isNotEmpty(),
-                    onClick = {
-                        automatic = !automatic
-                        MemoketSyncScheduler.setPeriodic(context, automatic)
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(if (automatic) "定期取得をOFFにする" else "定期取得をONにする（15分間隔）")
-                }
+                Text("定期取得は、Gemの録音中・停止中を安全に判別できるようになるまで無効です。")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
-                        enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中" && remoteState != "ファイル取得中" && remoteState != "停止操作済・取得待ち" && remoteState != "Gem本体停止待ち",
-                        onClick = {
-                            val intent = android.content.Intent(context, MemoketRemoteRecordingService::class.java)
-                                .setAction(MemoketRemoteRecordingService.ACTION_START_RECORDING)
-                            if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent)
-                            else context.startService(intent)
-                        },
+                        enabled = false,
+                        onClick = {},
                         modifier = Modifier.weight(1f)
-                    ) { Text("Gem録音開始") }
+                    ) { Text("遠隔開始（検証待ち）") }
                     OutlinedButton(
                         enabled = remoteState == "録音中",
                         onClick = {
@@ -223,7 +215,7 @@ fun MemoketGemSettingsCard() {
                     ) { Text("録音操作を終了") }
                 }
                 Text("Gem録音状態: $remoteState")
-                Text("Gemの遠隔停止コマンドは未特定です。「録音操作を終了」はアプリのBLE接続を閉じるだけで、Gemの録音は停止しません。本体録音ボタンを1回押し、短い振動2回と赤LED消灯を確認してください。")
+                Text("Gemの遠隔停止コマンドは未特定です。遠隔開始も停止できなくなる危険があるため無効化しました。Gem本体ボタンで録音開始・停止し、短い振動2回と赤LED消灯を確認してからファイル取得してください。過去のアプリ操作で録音中だった場合、「録音操作を終了」はBLE接続を閉じるだけで録音は停止しません。")
                 if (remoteState == "Gem本体停止待ち" ||
                     (remoteState == "エラー" && MemoketSettings.recordingStopRequestedAt(context) > 0L)) {
                     Button(
@@ -251,17 +243,25 @@ fun MemoketGemSettingsCard() {
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("本体停止を確認して今回の録音1件を取得") }
                 }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Checkbox(
+                        checked = physicalStopConfirmed,
+                        onCheckedChange = { physicalStopConfirmed = it }
+                    )
+                    Text("Gem本体の録音を停止しました（短い振動2回・赤LED消灯を確認）")
+                }
                 Button(
-                    enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中" && remoteState != "ファイル取得中" && remoteState != "停止操作済・取得待ち" && remoteState != "Gem本体停止待ち",
+                    enabled = physicalStopConfirmed && address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中" && remoteState != "ファイル取得中" && remoteState != "停止操作済・取得待ち" && remoteState != "Gem本体停止待ち",
                     onClick = {
-                        MemoketSyncScheduler.syncNow(context)
-                        scanState = "同期を要求しました"
+                        physicalStopConfirmed = false
+                        MemoketSyncScheduler.syncNowAfterPhysicalStopConfirmation(context)
+                        scanState = "停止を確認したため、保存済み録音の取得を要求しました"
                     },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text("保存済み録音を手動取得（過去分含む）") }
+                ) { Text("停止確認後に保存済み録音を取得（過去分含む）") }
                 Text("端末内保存: ${fileCount}件 / 最新結果: $result")
                 Text(
-                    "0.7.88実機で録音停止が成立しないことを確認。停止確認前の自動取得は廃止しました。物理停止確認後、今回分1ファイルだけ取得し、CRC32と永続保存が成功した場合のみ対象ファイルに完了通知を送ります。",
+                    "既存の0.7.89は遠隔開始だけ可能で停止不能でした。0.7.90では未検証の遠隔開始と定期取得を停止します。本体停止確認後のみファイル転送を開始し、CRC32・永続保存・Gemの完了応答を分けて扱います。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

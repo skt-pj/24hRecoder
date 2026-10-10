@@ -86,6 +86,13 @@ public final class MemoketRemoteRecordingService extends Service {
         }
         if (!ACTION_START_RECORDING.equals(action)) return START_NOT_STICKY;
 
+        if (!MemoketFlowPolicy.remoteStartAllowed()) {
+            trace.phase("REMOTE_START_BLOCKED_UNVERIFIED_STOP", stateDetails());
+            MemoketSettings.saveResult(this,
+                    "遠隔停止のBLEコマンドを検証できていないため、遠隔録音開始を無効化しています。Gem本体ボタンで録音・停止してください");
+            if (!recordingActive) stopSelf(startId);
+            return START_NOT_STICKY;
+        }
         trace.phase("START_REQUESTED", stateDetails());
         if (Build.VERSION.SDK_INT >= 31 &&
                 checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {

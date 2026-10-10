@@ -22,7 +22,17 @@ public final class MemoketSyncWorker extends Worker {
         Context context = getApplicationContext();
         boolean manual = getInputData().getBoolean("manual", false);
         boolean afterStop = getInputData().getBoolean("afterStop", false);
+        // An unattended sync must not activate DATA while Gem may be recording.
+        if (!manual && !MemoketFlowPolicy.periodicTransferAllowed()) {
+            MemoketSettings.saveResult(context,
+                    "自動取得を停止しました。Gem録音状態の確認方法が未検証です");
+            return Result.success();
+        }
         if (!manual && !MemoketSettings.enabled(context)) return Result.success();
+        if (manual && !getInputData().getBoolean("confirmedStopped", false)) {
+            MemoketSettings.saveResult(context, "Gem本体の録音停止確認がないため、取得を開始しません");
+            return Result.failure();
+        }
         String gemRecordingState = MemoketSettings.remoteRecordingState(context);
         if ("録音中".equals(gemRecordingState) || "接続中".equals(gemRecordingState)
                 || "停止処理中".equals(gemRecordingState)
