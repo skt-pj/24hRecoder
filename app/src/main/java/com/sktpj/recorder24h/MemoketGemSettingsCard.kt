@@ -215,7 +215,7 @@ fun MemoketGemSettingsCard() {
                     ) { Text("録音操作を終了") }
                 }
                 Text("Gem録音状態: $remoteState")
-                Text("Gemの遠隔停止コマンドは未特定です。遠隔開始も停止できなくなる危険があるため無効化しました。Gem本体ボタンで録音開始・停止し、短い振動2回と赤LED消灯を確認してからファイル取得してください。過去のアプリ操作で録音中だった場合、「録音操作を終了」はBLE接続を閉じるだけで録音は停止しません。")
+                Text("遠隔停止は利用できません。本体で停止後に録音を取得してください。")
                 if (remoteState == "Gem本体停止待ち" ||
                     (remoteState == "エラー" && MemoketSettings.recordingStopRequestedAt(context) > 0L)) {
                     Button(
@@ -261,7 +261,7 @@ fun MemoketGemSettingsCard() {
                 ) { Text("停止確認後に保存済み録音を取得（過去分含む）") }
                 Text("端末内保存: ${fileCount}件 / 最新結果: $result")
                 Text(
-                    "既存の0.7.89は遠隔開始だけ可能で停止不能でした。0.7.90では未検証の遠隔開始と定期取得を停止します。本体停止確認後のみファイル転送を開始し、CRC32・永続保存・Gemの完了応答を分けて扱います。",
+                    "",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
