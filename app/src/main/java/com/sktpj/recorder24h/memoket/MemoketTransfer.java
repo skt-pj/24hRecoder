@@ -71,9 +71,9 @@ public final class MemoketTransfer {
             crc.reset();
             nextSequence = 0;
             state = State.RECEIVING_DATA;
-            // Official Memoket flow: 01 starts automatic DATA streaming. Existing callers
-            // are response-driven, so poll 02 until the device returns the complete metadata.
-            return metadataCommand();
+            // Official Memoket flow: 01 starts automatic DATA streaming.
+            // The transport layer requests 02 only after DATA has gone quiet.
+            return null;
         }
 
         if (state == State.RECEIVING_DATA || state == State.WAIT_FINALIZE) {
@@ -82,7 +82,8 @@ public final class MemoketTransfer {
                 int nameOffset = nameBytes == null ? -1 : indexOf(payload, nameBytes);
                 if (nameOffset < 0) {
                     // 02 00 02 is the observed busy/status response while DATA is still streaming.
-                    if (payload.length <= 4) return metadataCommand();
+                    // Do not immediately re-send 02; the transport layer retries after a quiet delay.
+                    if (payload.length <= 4) return null;
                     throw new IllegalStateException("Memoket metadata filename missing payload=" + hex(payload));
                 }
                 int valuesOffset = nameOffset + nameBytes.length;
@@ -99,8 +100,7 @@ public final class MemoketTransfer {
                     throw new IllegalStateException("Memoket file length exceeded expected=" + expectedSize + " actual=" + buffer.size());
                 }
                 state = State.WAIT_FINALIZE;
-                byte[] ready = finalizeIfComplete();
-                return ready != null ? ready : metadataCommand();
+                return finalizeIfComplete();
             }
 
             if (code == 3 && state == State.WAIT_FINALIZE) {
@@ -142,9 +142,6 @@ public final class MemoketTransfer {
     public synchronized byte[] onData(byte[] payload) {
         if ((state != State.RECEIVING_DATA && state != State.WAIT_FINALIZE)
                 || buffer == null || payload == null || payload.length < 6) return null;
-        if (payload.length != 485) {
-            throw new IllegalStateException("Memoket DATA block length invalid bytes=" + payload.length);
-        }
         long sequence = ((long) (payload[0] & 0xff) << 32)
                 | ((long) (payload[1] & 0xff) << 24)
                 | ((long) (payload[2] & 0xff) << 16)
