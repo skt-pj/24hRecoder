@@ -44,6 +44,7 @@ public final class MemoketRemoteRecordingService extends Service {
 
     private final Deque<byte[]> commands = new ArrayDeque<>();
     private final MemoketSessionProtocol session = new MemoketSessionProtocol();
+    private MemoketTransfer transfer;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable metadataProbe = () -> {
         if (transfer != null && transfer.shouldRequestMetadata()) queue(MemoketTransfer.metadataCommand());
@@ -52,7 +53,6 @@ public final class MemoketRemoteRecordingService extends Service {
     private BluetoothGattCharacteristic data;
     private BluetoothGattCharacteristic control;
     private BluetoothGattCharacteristic response;
-    private MemoketTransfer transfer;
     private boolean commandBusy;
     private int notifySetupStep;
     private boolean recordingStartPending;
