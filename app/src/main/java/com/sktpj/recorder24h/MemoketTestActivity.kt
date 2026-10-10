@@ -71,7 +71,7 @@ class MemoketTestActivity : ComponentActivity() {
     }
 }
 
-private enum class Screen { MENU, START, STOP, FILE, RUNNING, RESULT, HISTORY }
+private enum class Screen { MENU, OFFICIAL, START, STOP, FILE, RUNNING, RESULT, HISTORY }
 private data class CaseUi(val id: String, val title: String, val subtitle: String)
 private data class StepUi(val title: String, val detail: String, val observe: Boolean)
 
@@ -184,8 +184,10 @@ private fun TestApp(onClose: () -> Unit) {
                 { selected = starts.first(); screen = Screen.START },
                 { selected = stops.first(); screen = Screen.STOP },
                 { selected = files.first(); screen = Screen.FILE },
-                { reloadHistory(); screen = Screen.HISTORY }
+                { reloadHistory(); screen = Screen.HISTORY },
+                { screen = Screen.OFFICIAL }
             )
+            Screen.OFFICIAL -> OfficialHciGuideScreen(Modifier.padding(pad))
             Screen.START -> CaseScreen(
                 Modifier.padding(pad),
                 "録音開始時の振動と、実際に約5秒の録音ファイルができるかを確認します。安全停止時の振動は回答に含めません。",
@@ -217,7 +219,7 @@ private fun TestApp(onClose: () -> Unit) {
 }
 
 @Composable
-private fun MenuScreen(modifier: Modifier, onStart: () -> Unit, onStop: () -> Unit, onFile: () -> Unit, onHistory: () -> Unit) {
+private fun MenuScreen(modifier: Modifier, onStart: () -> Unit, onStop: () -> Unit, onFile: () -> Unit, onHistory: () -> Unit, onOfficial: () -> Unit) {
     val context = LocalContext.current
     val address = MemoketSettings.address(context)
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -231,6 +233,7 @@ private fun MenuScreen(modifier: Modifier, onStart: () -> Unit, onStop: () -> Un
                 }
             }
         }
+        item { MenuCard("公式アプリHCI採取", "本体の録音操作を公式アプリの通信ログで調査", onOfficial) }
         item { MenuCard("録音開始テスト", "開始時の振動と録音成立を調査", onStart) }
         item { MenuCard("録音停止テスト", "停止時の振動とファイル確定を調査", onStop) }
         item { MenuCard("ファイル取得テスト", "一覧・メタデータ・ダウンロードを確認", onFile) }
@@ -384,6 +387,7 @@ private fun HistoryScreen(modifier: Modifier, history: List<JSONObject>) {
 
 private fun titleFor(screen: Screen) = when (screen) {
     Screen.MENU -> "Memoket テスト"
+    Screen.OFFICIAL -> "公式アプリHCI採取"
     Screen.START -> "録音開始テスト"
     Screen.STOP -> "録音停止テスト"
     Screen.FILE -> "ファイル取得テスト"
