@@ -68,7 +68,11 @@ public final class MemoketRemoteRecordingService extends Service {
         trace = new MemoketDebugTrace(this, "REMOTE_RECORDING");
         trace.phase("SERVICE_CREATED");
         createChannel();
-        transfer = new MemoketTransfer(new MemoketRecordingStore(this)::persist);
+        MemoketRecordingStore store = new MemoketRecordingStore(this);
+        transfer = new MemoketTransfer((name, payload, crc) -> {
+            store.persist(name, payload, crc);
+            trace.filePersisted(name, payload.length, crc);
+        });
     }
 
     @Override
@@ -422,8 +426,11 @@ public final class MemoketRemoteRecordingService extends Service {
     }
 
     private void log(String event, JSONObject details) {
-        if (details == null) AppLogger.event(this, event);
-        else AppLogger.event(this, event, details);
+        JSONObject out = details == null ? new JSONObject() : details;
+        try {
+            if (trace != null) out.put("sessionId", trace.sessionId());
+        } catch (Exception ignored) { }
+        AppLogger.event(this, event, out);
     }
 
     private void createChannel() {
