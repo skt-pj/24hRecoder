@@ -19,6 +19,8 @@ import androidx.work.WorkManager;
 
 import com.sktpj.recorder24h.ai.AiQueueStore;
 import com.sktpj.recorder24h.ai.OpenAiKeyStore;
+import com.sktpj.recorder24h.memoket.MemoketRecordingStore;
+import com.sktpj.recorder24h.memoket.MemoketSettings;
 import com.sktpj.recorder24h.storage.RecorderStateStore;
 import com.sktpj.recorder24h.storage.RecordingIntentStore;
 import com.sktpj.recorder24h.storage.StoragePolicy;
@@ -251,6 +253,18 @@ public final class DriveLogSync {
         ai.put("analysisFiles", latestAnalysisFiles(context, 20));
         ai.put("queue", aiQueueSnapshot(context));
         root.put("ai", ai);
+
+        JSONObject memoket = new JSONObject();
+        memoket.put("source", MemoketSettings.source(context));
+        memoket.put("periodicEnabled", MemoketSettings.enabled(context));
+        memoket.put("deviceConfigured", !MemoketSettings.address(context).isEmpty());
+        memoket.put("remoteRecordingState", MemoketSettings.remoteRecordingState(context));
+        memoket.put("lastResult", MemoketSettings.result(context));
+        memoket.put("lastAttemptMs", MemoketSettings.lastAttempt(context));
+        File[] memoketFiles = new MemoketRecordingStore(context).directory()
+                .listFiles((dir, name) -> name.endsWith(".opus") || name.endsWith(".raw"));
+        memoket.put("localFileCount", memoketFiles == null ? 0 : memoketFiles.length);
+        root.put("memoket", memoket);
 
         JSONObject work = new JSONObject();
         work.put("transcription", workInfos(context, "transcription"));

@@ -61,7 +61,7 @@ fun VulkanDiagnosticCard() {
         ) {
             Text("CPU / Vulkan 速度比較", style = MaterialTheme.typography.titleLarge)
             Text(
-                "保存済みの同じ音声・同じWhisperモデル・同じ区間で比較します。通常の文字起こし設定は変更しません。Vulkanを先に測り、その後CPUを測ります。",
+                "同一音声・同一モデルでCPUとVulkanの処理時間を比較",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 

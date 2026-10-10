@@ -79,7 +79,7 @@ fun WhisperModelSettingsCard() {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("ライブ文字起こしモデル", style = MaterialTheme.typography.titleLarge)
                 Text(
-                    "リアルタイムの発話ごとの認識に使うWhisperモデルです。5分後の確定・通常文字起こしモデルとは独立して選択します。",
+                    "暫定表示用モデル",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -126,7 +126,7 @@ fun WhisperModelSettingsCard() {
                     ) { Text("ライブモデルをダウンロード") }
                 }
                 Text(
-                    "録音中のモデル変更は次の5分セグメント境界からライブ処理へ反映します。モデルを分けても自動フォールバックは行いません。",
+                    "変更は次の録音区間から反映",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -134,9 +134,9 @@ fun WhisperModelSettingsCard() {
         }
         Card {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("5分後の確定・通常文字起こしモデル", style = MaterialTheme.typography.titleLarge)
+                Text("確定・手動文字起こしモデル", style = MaterialTheme.typography.titleLarge)
                 Text(
-                    "5分後の確定文字起こし、自動文字起こしと「この音声を再文字起こし」で使うモデルです。ライブモデル・モデル比較とは別です。",
+                    "確定・手動処理用モデル",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 

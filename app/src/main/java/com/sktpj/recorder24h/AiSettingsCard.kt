@@ -115,7 +115,6 @@ fun AiSettingsCard() {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text("AI分析", style = MaterialTheme.typography.titleLarge)
-            Text("1時間ごとの要約 / 1日ごとの統合分析")
             Text("使用するLLM", style = MaterialTheme.typography.titleMedium)
 
             ProviderRow(

@@ -66,7 +66,7 @@ fun TranscriptionProcessingCard(record: SegmentRecord) {
             ProcessingInfoRow("使用モデル", if (record.hasTranscript) modelLabel else "-")
             ProcessingInfoRow("処理時間", processingText)
             Text(
-                "処理時間は、実際に文字起こしを開始してから結果を保存するまでの最新の成功処理時間です。キュー待ち時間は含みません。",
+                "キュー待ち時間を除く",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

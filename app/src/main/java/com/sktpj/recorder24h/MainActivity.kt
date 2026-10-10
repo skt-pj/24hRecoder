@@ -664,11 +664,6 @@ private fun StorageCard(dashboard: DashboardSnapshot) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Text(
-                "Whisperモデルは1GBの作業データ制限には含めません。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         }
     }
 }
@@ -917,7 +912,7 @@ private fun LiveHistoryScreen(
                     Text(liveState!!.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
                 if (state == "OFF" && !TranscriptionPipelineSettings.isLiveStreaming(pipeline)) {
-                    Text("設定で「完全ストリーミング」を選ぶと、この画面に会話がリアルタイム表示されます。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("ライブ文字起こし: オフ", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -1055,11 +1050,11 @@ private fun SegmentCard(record: SegmentRecord, onClick: () -> Unit) {
                 when {
                     record.hasTranscript && !record.transcriptText.isNullOrBlank() -> record.transcriptText!!
                     record.hasTranscript -> "文字起こし結果は空です（無音区間の可能性があります）"
-                    record.liveOwned && record.fiveMinuteFinalEnabled && record.status == "TRANSCRIBING" -> "ライブ表示とは別に、5分音声を確定モデルで処理中です"
-                    record.liveOwned && record.fiveMinuteFinalEnabled && record.status in setOf("QUEUED", "RETRY_WAIT", "READY") -> "ライブ発話はリアルタイム表示済みです。5分後の確定処理を待っています"
-                    record.liveOwned && !record.fiveMinuteFinalEnabled -> "ライブ発話を5分記録へ確定しています"
+                    record.liveOwned && record.fiveMinuteFinalEnabled && record.status == "TRANSCRIBING" -> "確定文字起こし中"
+                    record.liveOwned && record.fiveMinuteFinalEnabled && record.status in setOf("QUEUED", "RETRY_WAIT", "READY") -> "確定文字起こし待ち"
+                    record.liveOwned && !record.fiveMinuteFinalEnabled -> "ライブ記録確定中"
                     record.status == "TRANSCRIBING" -> "端末内で文字起こし中です"
-                    record.audioAvailable -> "音声は保存済みです。文字起こしを待っています"
+                    record.audioAvailable -> "文字起こし待ち"
                     else -> "文字起こし結果はまだありません"
                 },
                 maxLines = 3,
@@ -1298,7 +1293,7 @@ private fun TranscriptCard(record: SegmentRecord) {
                 Text(
                     when (record.status) {
                         "TRANSCRIBING" -> "文字起こし処理中です。"
-                        "FAILED" -> "文字起こしに失敗しました。元音声が残っていればこの画面から再実行できます。"
+                        "FAILED" -> "文字起こし失敗"
                         else -> "文字起こし結果はまだありません。"
                     },
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1306,7 +1301,7 @@ private fun TranscriptCard(record: SegmentRecord) {
             } else {
                 if (retranscriptionActive) {
                     Text(
-                        "再文字起こし中も現在の結果を表示しています。新しい結果が正常保存された時点で置き換わります。",
+                        "再文字起こし中",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1364,14 +1359,14 @@ private fun TranscriptCard(record: SegmentRecord) {
                     })
                 }
                 Text(
-                    if (record.hasTranscript) "元M4Aが残っていれば、現在の結果を保持したまま再度キューへ追加できます。"
+                    if (record.hasTranscript) "再処理できます"
                     else "保存済みM4Aを文字起こしキューへ追加します。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else if (record.hasTranscript) {
                 Text(
-                    "元音声が削除済みのため、この記録は再文字起こしできません。",
+                    "元音声なし・再処理不可",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1388,15 +1383,15 @@ private fun isManualRetranscriptionState(record: SegmentRecord): Boolean {
 private fun transcriptionActivityMessage(record: SegmentRecord): String? {
     return when {
         record.status == "QUEUED" && record.reason.orEmpty().endsWith("SLOT_WAIT") ->
-            "Worker起動済み。現在はWhisper実行枠を待っています。他のWhisper処理が実行枠を使用中です。"
+            "推論枠待ち"
         record.status == "QUEUED" && record.reason.orEmpty().endsWith("WORK_ENQUEUED") ->
-            "WorkManager登録済み・Worker未開始です。明示制約はbattery-not-lowです。OSスケジューラ待ちとの区別は現時点では計測していません。"
+            "実行待ち"
         record.status == "TRANSCRIBING" ->
-            "選択中のWhisperモデルの実行枠を取得済みです。端末内で文字起こし処理中です。"
+            "文字起こし中"
         record.status == "RETRY_WAIT" ->
-            "前回処理が失敗し、WorkManagerの再試行を待っています。"
+            "再試行待ち"
         record.status == "READY" && record.audioAvailable ->
-            "音声は保存済みですが、現在は文字起こしキュー外です。"
+            "音声保存済み・キュー外"
         else -> null
     }
 }
@@ -1457,12 +1452,12 @@ private fun SettingsScreen(
     ) {
         item { WhisperModelSettingsCard() }
         item { AiSettingsCard() }
+        item { MemoketGemSettingsCard() }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("プライバシー", style = MaterialTheme.typography.titleLarge)
-                    Text("録音音声とローカル文字起こしは端末内で処理します。AI分析を有効にした場合のみ、文字起こしテキストをOpenAI APIへ送信します。録音音声はOpenAI APIへ送信しません。")
-                    Text("モデル本体は1GBの作業データ制限の対象外です。", fontWeight = FontWeight.SemiBold)
+                    Text("録音音声は端末内保存。OpenAI利用時は文字起こしテキストのみ送信します。")
                 }
             }
         }
@@ -1470,14 +1465,13 @@ private fun SettingsScreen(
             Card {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Android設定", style = MaterialTheme.typography.titleLarge)
-                    Text("マイク権限、通知権限、バッテリー設定などをAndroidのアプリ情報画面で確認できます。", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     OutlinedButton(onClick = onOpenSystemSettings, modifier = Modifier.fillMaxWidth()) { Text("アプリ設定を開く") }
                 }
             }
         }
         item {
             Text(
-                "端末再起動後はAndroidの制約により録音を自動開始しません。再起動後はホームから録音を再開してください。\n\n24hRecoder $versionName",
+                "24hRecoder $versionName",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(4.dp)

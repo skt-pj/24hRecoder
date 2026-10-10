@@ -70,7 +70,7 @@ fun Model30sBenchmarkCard() {
         ) {
             Text("30秒・各モデル速度比較", style = MaterialTheme.typography.titleLarge)
             Text(
-                "同じ保存済み音声の先頭30秒を、現在選択中のWhisper実行方式で各モデルへ順番に通します。VADは挟まず、モデルの処理速度だけを比較します。",
+                "同一音声・30秒の処理時間を比較",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(

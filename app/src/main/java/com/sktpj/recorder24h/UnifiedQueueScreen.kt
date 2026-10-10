@@ -232,9 +232,9 @@ private fun TranscriptionQueuePauseControls(
             )
             Text(
                 if (paused) {
-                    "待機中の項目は保持します。実行中の通常文字起こしも中断して待機へ戻します。"
+                    "処理は一時停止中"
                 } else {
-                    "完全ストリーミング中に通常キューを止めたい場合は一時停止してください。"
+                    "処理中"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

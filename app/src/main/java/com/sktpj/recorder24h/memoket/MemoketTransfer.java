@@ -1,0 +1,267 @@
+package com.sktpj.recorder24h.memoket;
+
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.regex.Pattern;
+import java.util.zip.CRC32;
+
+public final class MemoketTransfer {
+    private static final Pattern SAFE_NAME = Pattern.compile("[A-Za-z0-9._-]+\\.opus");
+    private static final int MAX_BYTES = 64 * 1024 * 1024;
+
+    private enum State {
+        WAIT_LIST,
+        RECEIVING_DATA,
+        WAIT_FINALIZE,
+        WAIT_ACK,
+        DONE
+    }
+
+    public interface CompletedFile {
+        void persist(String name, byte[] payload, long expectedCrc) throws Exception;
+    }
+
+    /** Applied as soon as the Gem announces a filename, before accepting any audio bytes. */
+    public interface FileSelector {
+        boolean accept(String filename);
+    }
+
+    public static final class OlderRecordingBlockedException extends IllegalStateException {
+        public OlderRecordingBlockedException(String filename) {
+            super("今回の録音ではないファイルがGemの転送待ちにあります: " + filename
+                    + "。過去の録音は取得・削除していません。必要なら手動取得してください。");
+        }
+    }
+
+    private final CompletedFile save;
+    private final FileSelector selector;
+    private final int maxFiles;
+    private String name;
+    private long expectedSize = -1;
+    private long expectedCrc = -1;
+    private final CRC32 crc = new CRC32();
+    private ByteArrayOutputStream buffer;
+    private long nextSequence;
+    private int completedCount;
+    private boolean finalizeRequested;
+    private State state = State.WAIT_LIST;
+
+    public MemoketTransfer(CompletedFile save) {
+        this(save, null);
+    }
+
+    public MemoketTransfer(CompletedFile save, FileSelector selector) {
+        this(save, selector, 50);
+    }
+
+    /** maxFiles=1 for the Gem recording that the user explicitly stopped. */
+    public MemoketTransfer(CompletedFile save, FileSelector selector, int maxFiles) {
+        if (maxFiles < 1 || maxFiles > 50) throw new IllegalArgumentException("Invalid file limit");
+        this.save = save;
+        this.selector = selector;
+        this.maxFiles = maxFiles;
+    }
+
+    public static byte[] initialCommand() {
+        return new byte[] {1, 0, 0};
+    }
+
+    public static byte[] metadataCommand() {
+        return new byte[] {2, 0};
+    }
+
+    public static byte[] finalizeCommand() {
+        return new byte[] {3};
+    }
+
+    /** Kept for source compatibility with older callers. */
+    public static byte[] downloadCommand() {
+        return finalizeCommand();
+    }
+
+    public synchronized byte[] onControl(byte[] payload) throws Exception {
+        if (state == State.DONE || payload == null || payload.length == 0) return null;
+        int code = payload[0] & 0xff;
+
+        if (state == State.WAIT_LIST) {
+            if (code != 1) return null;
+            if (payload.length < 4 || payload[1] != 1 || payload[2] != 1) {
+                state = State.DONE;
+                return null;
+            }
+            String incoming = new String(payload, 3, payload.length - 3, StandardCharsets.US_ASCII);
+            requireName(incoming);
+            if (selector != null && !selector.accept(incoming)) {
+                // A list request may begin streaming a different recording. Never ACK
+                // it merely to advance a queue: an ACK may delete the Gem's source file.
+                throw new OlderRecordingBlockedException(incoming);
+            }
+            name = incoming;
+            expectedSize = -1;
+            expectedCrc = -1;
+            buffer = new ByteArrayOutputStream();
+            crc.reset();
+            nextSequence = 0;
+            finalizeRequested = false;
+            state = State.RECEIVING_DATA;
+            // Observed BLE behavior: 01 starts DATA streaming.
+            // Only send 02 after DATA has gone quiet.
+            return null;
+        }
+
+        if (state == State.RECEIVING_DATA || state == State.WAIT_FINALIZE) {
+            if (code == 2) {
+                byte[] nameBytes = name == null ? null : name.getBytes(StandardCharsets.US_ASCII);
+                int nameOffset = nameBytes == null ? -1 : indexOf(payload, nameBytes);
+                if (nameOffset < 0) {
+                    // 02 00 02 is the observed busy/status response while DATA is still streaming.
+                    // Do not immediately re-send 02; the transport layer retries after a quiet delay.
+                    if (payload.length <= 4) return null;
+                    throw new IllegalStateException("Memoket metadata filename missing payload=" + hex(payload));
+                }
+                int valuesOffset = nameOffset + nameBytes.length;
+                if (payload.length < valuesOffset + 8) {
+                    throw new IllegalStateException("Memoket metadata missing size/CRC payload=" + hex(payload));
+                }
+                expectedSize = u32(payload, valuesOffset);
+                expectedCrc = u32(payload, valuesOffset + 4);
+                if (expectedSize <= 0 || expectedSize > MAX_BYTES) {
+                    throw new IllegalStateException("Memoket file size invalid size=" + expectedSize + " payload=" + hex(payload));
+                }
+                if (buffer == null) throw new IllegalStateException("Memoket data buffer missing");
+                if (buffer.size() > expectedSize) {
+                    throw new IllegalStateException("Memoket file length exceeded expected=" + expectedSize + " actual=" + buffer.size());
+                }
+                state = State.WAIT_FINALIZE;
+                return finalizeIfComplete();
+            }
+
+            if (code == 3 && state == State.WAIT_FINALIZE) {
+                if (payload.length < 2 || (payload[1] & 0xff) != 0xff
+                        || !finalizeRequested) {
+                    return null;
+                }
+                verifyComplete();
+                byte[] data = buffer.toByteArray();
+                save.persist(name, data, expectedCrc);
+                completedCount++;
+                buffer = null;
+                byte[] n = name.getBytes(StandardCharsets.US_ASCII);
+                byte[] ack = new byte[n.length + 2];
+                ack[0] = 5;
+                ack[1] = (byte) n.length;
+                System.arraycopy(n, 0, ack, 2, n.length);
+                state = State.WAIT_ACK;
+                return ack;
+            }
+            return null;
+        }
+
+        if (state == State.WAIT_ACK) {
+            if (code != 5 || payload.length < 2 || payload[1] != 1) return null;
+            if (completedCount >= maxFiles) {
+                state = State.DONE;
+                return null;
+            }
+            name = null;
+            expectedSize = -1;
+            expectedCrc = -1;
+            finalizeRequested = false;
+            state = State.WAIT_LIST;
+            return initialCommand();
+        }
+        return null;
+    }
+
+    public synchronized byte[] onData(byte[] payload) {
+        if ((state != State.RECEIVING_DATA && state != State.WAIT_FINALIZE)
+                || buffer == null || payload == null || payload.length < 6) return null;
+        long sequence = ((long) (payload[0] & 0xff) << 32)
+                | ((long) (payload[1] & 0xff) << 24)
+                | ((long) (payload[2] & 0xff) << 16)
+                | ((long) (payload[3] & 0xff) << 8)
+                | (payload[4] & 0xff);
+        if (sequence != nextSequence) {
+            throw new IllegalStateException("Memoket block order mismatch expected=" + nextSequence + " actual=" + sequence);
+        }
+        int size = payload.length - 5;
+        if (expectedSize > 0 && (long) buffer.size() + size > expectedSize) {
+            throw new IllegalStateException("Memoket file length exceeded expected=" + expectedSize
+                    + " actualAfterBlock=" + ((long) buffer.size() + size));
+        }
+        buffer.write(payload, 5, size);
+        crc.update(payload, 5, size);
+        nextSequence++;
+        if (state == State.WAIT_FINALIZE) return finalizeIfComplete();
+        return null;
+    }
+
+    public synchronized boolean shouldRequestMetadata() {
+        return state == State.RECEIVING_DATA && buffer != null && buffer.size() > 0;
+    }
+
+    public synchronized int bufferedBytes() {
+        return buffer == null ? 0 : buffer.size();
+    }
+
+    public synchronized long dataBlockCount() {
+        return nextSequence;
+    }
+
+    public synchronized boolean isDone() { return state == State.DONE; }
+    public synchronized int completedCount() { return completedCount; }
+    public synchronized String debugState() { return state.name(); }
+    public synchronized String debugFileName() { return name == null ? "" : name; }
+    public synchronized long debugExpectedSize() { return expectedSize; }
+    public synchronized String debugExpectedCrcHex() {
+        return expectedCrc < 0 ? "" : Long.toHexString(expectedCrc);
+    }
+
+    private byte[] finalizeIfComplete() {
+        if (expectedSize <= 0 || buffer == null || buffer.size() < expectedSize
+                || finalizeRequested) return null;
+        verifyComplete();
+        finalizeRequested = true;
+        return finalizeCommand();
+    }
+
+    private void verifyComplete() {
+        if (buffer == null || expectedSize <= 0 || expectedCrc < 0
+                || buffer.size() != expectedSize || crc.getValue() != expectedCrc) {
+            throw new IllegalStateException(
+                    "Memoket transfer incomplete expectedSize=" + expectedSize
+                            + " actualSize=" + (buffer == null ? -1 : buffer.size())
+                            + " expectedCrc=" + Long.toHexString(expectedCrc)
+                            + " actualCrc=" + Long.toHexString(crc.getValue()));
+        }
+    }
+
+    private static void requireName(String value) {
+        if (value == null || value.length() > 100 || !SAFE_NAME.matcher(value).matches()
+                || value.startsWith(".")) throw new IllegalStateException("Unsafe Memoket filename");
+    }
+
+    private static int indexOf(byte[] haystack, byte[] needle) {
+        outer:
+        for (int i = 0; i <= haystack.length - needle.length; i++) {
+            for (int j = 0; j < needle.length; j++) {
+                if (haystack[i + j] != needle[j]) continue outer;
+            }
+            return i;
+        }
+        return -1;
+    }
+
+    private static long u32(byte[] bytes, int offset) {
+        return ((long) (bytes[offset] & 0xff) << 24)
+                | ((long) (bytes[offset + 1] & 0xff) << 16)
+                | ((long) (bytes[offset + 2] & 0xff) << 8)
+                | (bytes[offset + 3] & 0xff);
+    }
+
+    private static String hex(byte[] bytes) {
+        StringBuilder out = new StringBuilder(bytes.length * 2);
+        for (byte value : bytes) out.append(String.format("%02x", value & 0xff));
+        return out.toString();
+    }
+}
