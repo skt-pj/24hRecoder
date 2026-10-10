@@ -84,6 +84,8 @@ public final class MemoketTestEngine {
             result.put("finishedAtMs", System.currentTimeMillis());
             AppLogger.event(context, "MEMOKET_TEST_COMPLETED", compact(result));
         } catch (Exception error) {
+            if (session != null) session.debug.failure(
+                    error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage(), error);
             try {
                 result.put("status", "FAILED");
                 result.put("error", error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage());
@@ -398,6 +400,7 @@ public final class MemoketTestEngine {
         final String address;
         final JSONObject result;
         final JSONArray trace = new JSONArray();
+        final MemoketDebugTrace debug;
         final BlockingQueue<Event> notifications = new LinkedBlockingQueue<>();
         final BlockingQueue<Integer> descriptorStatuses = new LinkedBlockingQueue<>();
         final BlockingQueue<Integer> writeStatuses = new LinkedBlockingQueue<>();
@@ -420,9 +423,11 @@ public final class MemoketTestEngine {
             this.context = context.getApplicationContext();
             this.address = address;
             this.result = result;
+            this.debug = new MemoketDebugTrace(this.context, "TEST_ENGINE:" + result.optString("caseId", "unknown"));
         }
 
         void connect() throws Exception {
+            debug.phase("GATT_CONNECT_REQUESTED");
             BluetoothManager manager = context.getSystemService(BluetoothManager.class);
             BluetoothAdapter adapter = manager == null ? null : manager.getAdapter();
             if (adapter == null || !adapter.isEnabled()) throw new IllegalStateException("Bluetoothが無効です");
@@ -433,6 +438,7 @@ public final class MemoketTestEngine {
             if (connectionStatus != BluetoothGatt.GATT_SUCCESS || connectionState != BluetoothProfile.STATE_CONNECTED) {
                 throw new IllegalStateException("GATT接続エラー: " + connectionStatus);
             }
+            debug.phase("SERVICE_DISCOVERY_REQUESTED");
             if (!gatt.discoverServices()) throw new IllegalStateException("GATTサービス探索を開始できません");
             if (!servicesReady.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("GATTサービス探索がタイムアウトしました");
             if (serviceStatus != BluetoothGatt.GATT_SUCCESS) throw new IllegalStateException("GATTサービス探索エラー: " + serviceStatus);
@@ -444,6 +450,7 @@ public final class MemoketTestEngine {
             response = service.getCharacteristic(MemoketGattSync.RESPONSE);
             extra5 = service.getCharacteristic(EXTRA5);
             extra6 = service.getCharacteristic(EXTRA6);
+            debug.characteristicInventory(data != null, control != null, response != null);
             if (data == null || control == null || response == null) {
                 throw new IllegalStateException("Memoket必須Characteristicが不足しています");
             }
@@ -479,6 +486,7 @@ public final class MemoketTestEngine {
             BluetoothGattDescriptor descriptor = characteristic.getDescriptor(CCCD);
             if (descriptor == null) throw new IllegalStateException(label + " CCCDがありません");
             descriptorStatuses.clear();
+            debug.descriptorRequest(label, enabled, characteristic.getUuid().toString());
             descriptor.setValue(enabled
                     ? BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                     : BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE);
@@ -521,6 +529,7 @@ public final class MemoketTestEngine {
 
         void write(byte[] command) throws Exception {
             writeStatuses.clear();
+            debug.commandWriteRequested(command, 0);
             control.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
             control.setValue(command);
             addTrace("WRITE", hex(command));
@@ -578,12 +587,14 @@ public final class MemoketTestEngine {
 
                 if (MemoketGattSync.DATA.equals(event.uuid)) {
                     byte[] candidate = transfer.onData(event.value);
+                    debug.transferState(transfer, "TEST_DATA_PARSED");
                     if (candidate != null) next = candidate;
                     continue;
                 }
                 if (!MemoketGattSync.RESPONSE.equals(event.uuid)) continue;
 
                 byte[] candidate = transfer.onControl(event.value);
+                debug.transferState(transfer, "TEST_RESPONSE_PARSED");
                 if (candidate != null && candidate.length > 0 && candidate[0] == 0x05) {
                     write(candidate);
                     Event ack = waitResponse(0x05, System.currentTimeMillis() - 500, 5_000);
@@ -622,6 +633,7 @@ public final class MemoketTestEngine {
         final BluetoothGattCallback callback = new BluetoothGattCallback() {
             @Override
             public void onConnectionStateChange(BluetoothGatt connection, int status, int newState) {
+                debug.gattConnection(status, newState);
                 connectionStatus = status;
                 connectionState = newState;
                 addTrace("CONNECTION", "status=" + status + " state=" + newState);
@@ -630,6 +642,7 @@ public final class MemoketTestEngine {
 
             @Override
             public void onServicesDiscovered(BluetoothGatt connection, int status) {
+                debug.servicesDiscovered(status);
                 serviceStatus = status;
                 addTrace("SERVICES", "status=" + status);
                 servicesReady.countDown();
@@ -637,11 +650,15 @@ public final class MemoketTestEngine {
 
             @Override
             public void onDescriptorWrite(BluetoothGatt connection, BluetoothGattDescriptor descriptor, int status) {
+                String uuid = descriptor == null || descriptor.getCharacteristic() == null
+                        ? "" : descriptor.getCharacteristic().getUuid().toString();
+                debug.descriptorResult(uuid, status);
                 descriptorStatuses.offer(status);
             }
 
             @Override
             public void onCharacteristicWrite(BluetoothGatt connection, BluetoothGattCharacteristic characteristic, int status) {
+                debug.commandWriteResult(status);
                 writeStatuses.offer(status);
             }
 
@@ -657,6 +674,7 @@ public final class MemoketTestEngine {
 
             void onChanged(UUID uuid, byte[] value) {
                 if (MemoketGattSync.DATA.equals(uuid)) {
+                    debug.data(value, "TEST_QUEUE", 0);
                     String sequence = "";
                     if (value != null && value.length >= 5) {
                         long seq = ((long)(value[0] & 0xff) << 32)
@@ -668,6 +686,7 @@ public final class MemoketTestEngine {
                     }
                     addTrace("DATA", "bytes=" + (value == null ? 0 : value.length) + sequence);
                 } else {
+                    debug.response(value, "TEST_DIRECT", "TEST_QUEUE");
                     addTrace("NOTIFY", uuid + ":" + hex(value));
                 }
                 notifications.offer(new Event(uuid, value));
