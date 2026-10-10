@@ -391,7 +391,6 @@ public final class MemoketRemoteRecordingService extends Service {
     }
 
     private void closeGatt() {
-        handler.removeCallbacks(metadataProbe);
         BluetoothGatt current = gatt;
         gatt = null;
         if (current != null) {
@@ -410,7 +409,6 @@ public final class MemoketRemoteRecordingService extends Service {
             d.put("commandBusy", commandBusy);
             d.put("queueDepth", commands.size());
             d.put("sessionStep", session.debugStep());
-            d.put("transferState", transfer == null ? "" : transfer.debugState());
         } catch (Exception ignored) { }
         return d;
     }
