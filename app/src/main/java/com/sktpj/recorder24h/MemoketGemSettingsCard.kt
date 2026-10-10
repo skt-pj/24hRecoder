@@ -202,7 +202,7 @@ fun MemoketGemSettingsCard() {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
-                        enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中",
+                        enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中" && remoteState != "ファイル取得中",
                         onClick = {
                             val intent = android.content.Intent(context, MemoketRemoteRecordingService::class.java)
                                 .setAction(MemoketRemoteRecordingService.ACTION_START_RECORDING)
@@ -223,8 +223,9 @@ fun MemoketGemSettingsCard() {
                     ) { Text("Gem録音停止") }
                 }
                 Text("Gem録音状態: $remoteState")
+                Text("録音停止ボタンは、その録音の確定・1ファイル取得・Gemでの確認応答までを実行します。古いファイルは自動削除しません。")
                 Button(
-                    enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中",
+                    enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中" && remoteState != "ファイル取得中",
                     onClick = {
                         MemoketSyncScheduler.syncNow(context)
                         scanState = "同期を要求しました"
@@ -233,12 +234,12 @@ fun MemoketGemSettingsCard() {
                 ) { Text("保存済み録音を手動取得（過去分含む）") }
                 Text("端末内保存: ${fileCount}件 / 最新結果: $result")
                 Text(
-                    "録音停止後の自動取得は今回の録音だけが対象です。Gem内に古い録音が先にある場合は自動取得を中止し、過去分を削除しません。手動取得では過去分も同期され、成功した録音はGem本体から削除される場合があります。",
+                    "録音停止では今回の録音1件のみ取得し、端末保存とCRC32検証が成功した場合だけGemへ対象ファイルの完了通知を送ります。古いファイルが先頭なら他ファイルを消さず中止します。手動取得は別操作です。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Button(
-                    enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中",
+                    enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中" && remoteState != "ファイル取得中",
                     onClick = {
                         context.startActivity(android.content.Intent(context, MemoketTestActivity::class.java))
                     },

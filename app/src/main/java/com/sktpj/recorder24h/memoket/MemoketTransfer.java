@@ -35,6 +35,7 @@ public final class MemoketTransfer {
 
     private final CompletedFile save;
     private final FileSelector selector;
+    private final int maxFiles;
     private String name;
     private long expectedSize = -1;
     private long expectedCrc = -1;
@@ -50,8 +51,15 @@ public final class MemoketTransfer {
     }
 
     public MemoketTransfer(CompletedFile save, FileSelector selector) {
+        this(save, selector, 50);
+    }
+
+    /** maxFiles=1 for the Gem recording that the user explicitly stopped. */
+    public MemoketTransfer(CompletedFile save, FileSelector selector, int maxFiles) {
+        if (maxFiles < 1 || maxFiles > 50) throw new IllegalArgumentException("Invalid file limit");
         this.save = save;
         this.selector = selector;
+        this.maxFiles = maxFiles;
     }
 
     public static byte[] initialCommand() {
@@ -84,8 +92,8 @@ public final class MemoketTransfer {
             String incoming = new String(payload, 3, payload.length - 3, StandardCharsets.US_ASCII);
             requireName(incoming);
             if (selector != null && !selector.accept(incoming)) {
-                // A list request may start automatic streaming. Never ACK or discard another
-                // recording simply to advance the Gem queue: ACK can delete it on the Gem.
+                // A list request may begin streaming a different recording. Never ACK
+                // it merely to advance a queue: an ACK may delete the Gem's source file.
                 throw new OlderRecordingBlockedException(incoming);
             }
             name = incoming;
@@ -96,8 +104,8 @@ public final class MemoketTransfer {
             nextSequence = 0;
             finalizeRequested = false;
             state = State.RECEIVING_DATA;
-            // Official Memoket flow: 01 starts automatic DATA streaming.
-            // The transport layer requests 02 only after DATA has gone quiet.
+            // Observed BLE behavior: 01 starts DATA streaming.
+            // Only send 02 after DATA has gone quiet.
             return null;
         }
 
@@ -151,7 +159,7 @@ public final class MemoketTransfer {
 
         if (state == State.WAIT_ACK) {
             if (code != 5 || payload.length < 2 || payload[1] != 1) return null;
-            if (completedCount >= 50) {
+            if (completedCount >= maxFiles) {
                 state = State.DONE;
                 return null;
             }

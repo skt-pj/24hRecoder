@@ -79,6 +79,31 @@ public class MemoketTransferTest {
     }
 
     @Test
+    public void stopTransfersExactlyOneRecordingAndAcknowledgesOnlyAfterSave() throws Exception {
+        byte[] data = new byte[480];
+        java.util.concurrent.atomic.AtomicInteger saved = new java.util.concurrent.atomic.AtomicInteger();
+        MemoketTransfer transfer = new MemoketTransfer((name, audio, crc) -> {
+            assertEquals(NAME, name);
+            assertArrayEquals(data, audio);
+            saved.incrementAndGet();
+        }, name -> NAME.equals(name), 1);
+        assertNull(transfer.onControl(listResult()));
+        assertNull(transfer.onData(block(0, data)));
+        assertArrayEquals(new byte[]{3}, transfer.onControl(metadata(data)));
+        assertEquals(0, saved.get());
+        byte[] ack = transfer.onControl(new byte[]{3, (byte) 0xff});
+        assertEquals(1, saved.get());
+        assertEquals(5, ack[0]);
+        assertArrayEquals(NAME.getBytes(StandardCharsets.US_ASCII),
+                Arrays.copyOfRange(ack, 2, ack.length));
+        assertNull(transfer.onControl(new byte[]{5, 1}));
+        assertTrue(transfer.isDone());
+        assertEquals(1, transfer.completedCount());
+        assertNull(transfer.onControl(listResult()));
+        assertEquals(1, saved.get());
+    }
+
+    @Test
     public void ignoresEarlyFinalizeResponseUntilCompleteDataIsReceived() throws Exception {
         byte[] audio = new byte[960];
         AtomicInteger saved = new AtomicInteger();
