@@ -35,6 +35,7 @@ public final class MemoketGattSync {
     private final String address;
     private final MemoketTransfer protocol;
     private final MemoketSessionProtocol session = new MemoketSessionProtocol();
+    private final MemoketDebugTrace trace;
     private final CountDownLatch finished = new CountDownLatch(1);
     private final Deque<byte[]> commands = new ArrayDeque<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -52,12 +53,14 @@ public final class MemoketGattSync {
         this.context = context.getApplicationContext();
         this.address = address;
         this.protocol = new MemoketTransfer(new MemoketRecordingStore(this.context)::persist);
+        this.trace = new MemoketDebugTrace(this.context, "SYNC_WORKER");
         this.metadataProbe = () -> {
             if (protocol.shouldRequestMetadata()) queue(MemoketTransfer.metadataCommand());
         };
     }
 
     public int sync() throws Exception {
+        trace.phase("SYNC_PREFLIGHT");
         if (Build.VERSION.SDK_INT >= 31 &&
                 context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
             throw new SecurityException("Bluetooth connection permission required");
@@ -67,11 +70,14 @@ public final class MemoketGattSync {
         if (adapter == null || !adapter.isEnabled()) throw new IllegalStateException("Bluetooth is disabled");
         BluetoothDevice device = adapter.getRemoteDevice(address);
         try {
+            trace.phase("GATT_CONNECT_REQUESTED");
             gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE);
             if (gatt == null) throw new IllegalStateException("Cannot open GATT connection");
             if (!finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)) throw new IllegalStateException("Memoket sync timed out");
             if (error != null) throw new IllegalStateException(error);
-            return protocol.completedCount();
+            int count = protocol.completedCount();
+            trace.completed(new org.json.JSONObject().put("completedCount", count));
+            return count;
         } finally {
             handler.removeCallbacks(metadataProbe);
             if (gatt != null) {
@@ -84,11 +90,14 @@ public final class MemoketGattSync {
     private final BluetoothGattCallback callback = new BluetoothGattCallback() {
         @Override
         public void onConnectionStateChange(BluetoothGatt connection, int status, int newState) {
+            trace.gattConnection(status, newState);
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 fail("GATT connection error " + status);
                 return;
             }
             if (newState == android.bluetooth.BluetoothProfile.STATE_CONNECTED) {
+                trace.phase("GATT_CONNECTED");
+                trace.phase("SERVICE_DISCOVERY_REQUESTED");
                 if (!connection.discoverServices()) fail("GATT service discovery failed");
             } else if (newState == android.bluetooth.BluetoothProfile.STATE_DISCONNECTED) {
                 if (!protocol.isDone()) fail("Gem disconnected before transfer completed");
@@ -98,6 +107,7 @@ public final class MemoketGattSync {
 
         @Override
         public void onServicesDiscovered(BluetoothGatt connection, int status) {
+            trace.servicesDiscovered(status);
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 fail("Memoket service discovery failed " + status);
                 return;
@@ -110,6 +120,7 @@ public final class MemoketGattSync {
             dataCharacteristic = service.getCharacteristic(DATA);
             commandCharacteristic = service.getCharacteristic(CONTROL);
             responseCharacteristic = service.getCharacteristic(RESPONSE);
+            trace.characteristicInventory(dataCharacteristic != null, commandCharacteristic != null, responseCharacteristic != null);
             if (dataCharacteristic == null || commandCharacteristic == null || responseCharacteristic == null) {
                 fail("Memoket required GATT characteristics not found");
                 return;
@@ -119,6 +130,9 @@ public final class MemoketGattSync {
 
         @Override
         public void onDescriptorWrite(BluetoothGatt connection, BluetoothGattDescriptor descriptor, int status) {
+            String uuid = descriptor == null || descriptor.getCharacteristic() == null
+                    ? "" : descriptor.getCharacteristic().getUuid().toString();
+            trace.descriptorResult(uuid, status);
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 fail("Memoket notification setup failed " + status);
                 return;
@@ -128,6 +142,7 @@ public final class MemoketGattSync {
 
         @Override
         public void onCharacteristicWrite(BluetoothGatt connection, BluetoothGattCharacteristic characteristic, int status) {
+            trace.commandWriteResult(status);
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 fail("Memoket command write failed status=" + status + " command=" + hex(lastCommand));
                 return;
@@ -153,9 +168,12 @@ public final class MemoketGattSync {
         BluetoothGattCharacteristic next = notifyStep++ == 0 ? dataCharacteristic :
                 notifyStep == 2 ? responseCharacteristic : null;
         if (next == null) {
+            trace.phase("HANDSHAKE_STARTED");
             queue(session.firstCommand());
             return;
         }
+        String label = next == dataCharacteristic ? "DATA" : "RESPONSE";
+        trace.descriptorRequest(label, true, next.getUuid().toString());
         BluetoothGattDescriptor descriptor = next.getDescriptor(CCCD);
         if (descriptor == null || !connection.setCharacteristicNotification(next, true)) {
             fail("Memoket notification configuration missing");
@@ -168,16 +186,24 @@ public final class MemoketGattSync {
     private void handleNotification(UUID uuid, byte[] value) {
         try {
             if (uuid.equals(DATA)) {
+                trace.data(value, protocol.debugState(), protocol.bufferedBytes());
                 byte[] next = protocol.onData(value);
+                trace.transferState(protocol, "DATA_RECEIVED");
                 if (next != null) queue(next);
                 if (protocol.shouldRequestMetadata()) scheduleMetadata(DATA_QUIET_MS);
             } else if (uuid.equals(RESPONSE)) {
+                trace.response(value, session.debugStep(), protocol.debugState());
                 byte[] next;
                 if (!session.isReady()) {
                     next = session.onResponse(value);
-                    if (next == null && session.isReady()) next = MemoketTransfer.initialCommand();
+                    trace.phase(session.debugStep());
+                    if (next == null && session.isReady()) {
+                        trace.phase("TRANSFER_LIST_REQUEST");
+                        next = MemoketTransfer.initialCommand();
+                    }
                 } else {
                     next = protocol.onControl(value);
+                    trace.transferState(protocol, "RESPONSE_RECEIVED");
                     if (isShortMetadataStatus(value) && protocol.shouldRequestMetadata()) {
                         scheduleMetadata(300);
                     }
@@ -191,6 +217,7 @@ public final class MemoketGattSync {
     }
 
     private void scheduleMetadata(long delayMs) {
+        trace.metadataProbeScheduled(delayMs, protocol.debugState(), protocol.bufferedBytes());
         handler.removeCallbacks(metadataProbe);
         handler.postDelayed(metadataProbe, delayMs);
     }
@@ -201,6 +228,7 @@ public final class MemoketGattSync {
 
     private synchronized void queue(byte[] bytes) {
         commands.add(Arrays.copyOf(bytes, bytes.length));
+        trace.commandQueued(bytes, commands.size());
         sendNext();
     }
 
@@ -208,6 +236,7 @@ public final class MemoketGattSync {
         if (busy || commands.isEmpty() || gatt == null || commandCharacteristic == null) return;
         byte[] command = commands.removeFirst();
         lastCommand = Arrays.copyOf(command, command.length);
+        trace.commandWriteRequested(command, commands.size());
         busy = true;
         commandCharacteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
         commandCharacteristic.setValue(command);
@@ -219,6 +248,8 @@ public final class MemoketGattSync {
 
     private void fail(String message) {
         handler.removeCallbacks(metadataProbe);
+        trace.transferState(protocol, "FAILURE");
+        trace.failure(message, null);
         if (error == null) error = message;
         finished.countDown();
     }
