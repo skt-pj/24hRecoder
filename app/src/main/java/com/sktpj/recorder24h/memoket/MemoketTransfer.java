@@ -29,6 +29,7 @@ public final class MemoketTransfer {
     private ByteArrayOutputStream buffer;
     private long nextSequence;
     private int completedCount;
+    private boolean finalizeRequested;
     private State state = State.WAIT_LIST;
 
     public MemoketTransfer(CompletedFile save) {
@@ -70,6 +71,7 @@ public final class MemoketTransfer {
             buffer = new ByteArrayOutputStream();
             crc.reset();
             nextSequence = 0;
+            finalizeRequested = false;
             state = State.RECEIVING_DATA;
             // Official Memoket flow: 01 starts automatic DATA streaming.
             // The transport layer requests 02 only after DATA has gone quiet.
@@ -104,8 +106,8 @@ public final class MemoketTransfer {
             }
 
             if (code == 3 && state == State.WAIT_FINALIZE) {
-                if (payload.length < 2 || (payload[1] & 0xff) != 0xff) {
-                    // Official app receives a 03 01 ... status before the final 03 ff.
+                if (payload.length < 2 || (payload[1] & 0xff) != 0xff
+                        || !finalizeRequested) {
                     return null;
                 }
                 verifyComplete();
@@ -133,6 +135,7 @@ public final class MemoketTransfer {
             name = null;
             expectedSize = -1;
             expectedCrc = -1;
+            finalizeRequested = false;
             state = State.WAIT_LIST;
             return initialCommand();
         }
@@ -184,8 +187,10 @@ public final class MemoketTransfer {
     }
 
     private byte[] finalizeIfComplete() {
-        if (expectedSize <= 0 || buffer == null || buffer.size() < expectedSize) return null;
+        if (expectedSize <= 0 || buffer == null || buffer.size() < expectedSize
+                || finalizeRequested) return null;
         verifyComplete();
+        finalizeRequested = true;
         return finalizeCommand();
     }
 

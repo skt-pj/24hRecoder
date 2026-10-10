@@ -78,14 +78,21 @@ public class MemoketTransferTest {
         assertTrue(transfer.isDone());
     }
 
-    @Test(expected = IllegalStateException.class)
-    public void refusesAcknowledgmentForIncompleteTransfer() throws Exception {
+    @Test
+    public void ignoresEarlyFinalizeResponseUntilCompleteDataIsReceived() throws Exception {
         byte[] audio = new byte[960];
-        MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> fail("no save"));
-        transfer.onControl(listResult());
-        transfer.onData(block(0,new byte[480]));
-        transfer.onControl(metadata(audio));
-        transfer.onControl(new byte[]{3,(byte)0xff});
+        AtomicInteger saved = new AtomicInteger();
+        MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> saved.incrementAndGet());
+        assertNull(transfer.onControl(listResult()));
+        assertNull(transfer.onData(block(0, Arrays.copyOfRange(audio, 0, 480))));
+        assertNull(transfer.onControl(metadata(audio)));
+        assertNull(transfer.onControl(new byte[]{3, (byte) 0xff}));
+        assertEquals(0, saved.get());
+        assertEquals(480, transfer.bufferedBytes());
+        assertArrayEquals(new byte[]{3}, transfer.onData(block(1, Arrays.copyOfRange(audio, 480, 960))));
+        assertNull(transfer.onControl(new byte[]{3, 1}));
+        assertEquals(5, transfer.onControl(new byte[]{3, (byte) 0xff})[0]);
+        assertEquals(1, saved.get());
     }
 
     @Test(expected = IllegalStateException.class)
