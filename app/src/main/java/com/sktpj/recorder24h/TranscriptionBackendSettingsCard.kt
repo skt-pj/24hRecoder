@@ -84,7 +84,7 @@ fun TranscriptionBackendSettingsCard() {
         ) {
             Text("文字起こし処理経路", style = MaterialTheme.typography.titleLarge)
             Text(
-                "文字起こし設定",
+                "各処理を明示的に選択します。選択した経路が利用できない・失敗した場合も、別のCPU/GPU/ASRへ自動切替はしません。",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
@@ -301,7 +301,7 @@ fun TranscriptionBackendSettingsCard() {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                "暫定表示: 30秒単位 / 確定処理: 夜間",
+                "録音中PCMは専用ASRプロセスへ渡し、暫定表示は30秒窓で更新します。確定処理は前日分を夜間にまとめて実行します。内部5分M4Aは録音継続・障害復旧のための保存単位であり、5分ごとに確定文字起こしを出すための単位ではありません。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
