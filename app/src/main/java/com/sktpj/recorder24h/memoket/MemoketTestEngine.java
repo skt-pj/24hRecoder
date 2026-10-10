@@ -102,6 +102,153 @@ public final class MemoketTestEngine {
         return result;
     }
 
+    public static JSONObject runBatch(Context context, ProgressListener listener) {
+        long began = System.currentTimeMillis();
+        JSONObject report = new JSONObject();
+        JSONArray cases = new JSONArray();
+        int downloaded = 0;
+        int errors = 0;
+        int executedStops = 0;
+        String discoveredFile = "";
+        boolean startAcknowledged = false;
+        long recordingStartedAtMs = 0L;
+        try {
+            report.put("id", began + "-BATCH_ALL");
+            report.put("caseId", "BATCH_ALL");
+            report.put("startedAtMs", began);
+            report.put("status", "RUNNING");
+            report.put("cases", cases);
+            report.put("verification", "BLE operations are not proof of physical stop");
+            report.put("fileTransferStage", "BEFORE_RECORDING");
+            report.put("gemStopVerified", false);
+            report.put("gemFileAckPolicy", "Only after CRC verification and durable local persistence");
+            if (Build.VERSION.SDK_INT >= 31
+                    && context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
+                    != PackageManager.PERMISSION_GRANTED) {
+                throw new SecurityException("Bluetooth接続権限がありません");
+            }
+            String address = MemoketSettings.address(context);
+            if (address.isEmpty()) throw new IllegalStateException("Memoket Gemが選択されていません");
+
+            for (String id : MemoketBatchPlan.FILE_CASES) {
+                JSONObject item = new JSONObject();
+                Session session = null;
+                long started = System.currentTimeMillis();
+                item.put("caseId", id);
+                item.put("startedAtMs", started);
+                cases.put(item);
+                if (!"FILE_LIST".equals(id) && discoveredFile.isEmpty()) {
+                    item.put("status", "SKIPPED_NO_PENDING_FILE");
+                    item.put("finishedAtMs", System.currentTimeMillis());
+                    progress(listener, id, "一覧に未取得音声がないため取得は実行しません", false);
+                    continue;
+                }
+                progress(listener, id, "録音開始前に取得経路を確認しています", false);
+                try {
+                    session = new Session(context, address, item);
+                    session.connect();
+                    runFileCase(context, session, id,
+                            "FILE_SPECIFIC".equals(id) ? discoveredFile : "", item, listener);
+                    if ("FILE_LIST".equals(id)) discoveredFile = item.optString("listedFile", "").trim();
+                    downloaded += item.optInt("downloadedFiles", 0);
+                    item.put("status", "COMPLETED");
+                    session.debug.completed(new JSONObject().put("caseId", id));
+                } catch (Exception error) {
+                    errors++;
+                    item.put("status", "FAILED");
+                    item.put("error", error.getMessage() == null ? error.toString() : error.getMessage());
+                    if (session != null) session.debug.failure(item.optString("error"), error);
+                } finally {
+                    if (session != null) {
+                        item.put("traceSessionId", session.debug.sessionId());
+                        item.put("trace", session.trace);
+                        session.close();
+                    }
+                    item.put("finishedAtMs", System.currentTimeMillis());
+                }
+            }
+
+            for (String id : MemoketBatchPlan.STOP_CASES) {
+                JSONObject item = new JSONObject();
+                Session session = null;
+                item.put("caseId", id);
+                item.put("startedAtMs", System.currentTimeMillis());
+                cases.put(item);
+                if (!startAcknowledged && recordingStartedAtMs != 0L) {
+                    item.put("status", "SKIPPED_UNVERIFIED_RECORDING_START");
+                    item.put("finishedAtMs", System.currentTimeMillis());
+                    continue;
+                }
+                progress(listener, id, stopLabel(id), false);
+                try {
+                    session = new Session(context, address, item);
+                    session.connect();
+                    session.enableData(true);
+                    session.enableResponse(true);
+                    session.handshakeStandard();
+                    if (recordingStartedAtMs == 0L) {
+                        progress(listener, "録音開始", "03を一度だけ送り5秒間録音します", false);
+                        recordingStartedAtMs = System.currentTimeMillis();
+                        item.put("startResponseHex", hex(session.exchange(new byte[]{0x03}, 0x03, 4_000).value));
+                        startAcknowledged = true;
+                        report.put("recordingStartedAtMs", recordingStartedAtMs);
+                        Thread.sleep(5_000);
+                    }
+                    item.put("candidateAtMs", System.currentTimeMillis());
+                    item.put("candidateLabel", stopLabel(id));
+                    executeStopCandidate(session, id);
+                    Thread.sleep(800L);
+                    item.put("status", "EXECUTED_UNVERIFIED");
+                    item.put("stopVerified", false);
+                    executedStops++;
+                    session.debug.completed(new JSONObject().put("caseId", id)
+                            .put("stopVerified", false));
+                } catch (Exception error) {
+                    errors++;
+                    item.put("status", "FAILED");
+                    item.put("error", error.getMessage() == null ? error.toString() : error.getMessage());
+                    if (session != null) session.debug.failure(item.optString("error"), error);
+                } finally {
+                    if (session != null) {
+                        item.put("traceSessionId", session.debug.sessionId());
+                        item.put("trace", session.trace);
+                        session.close();
+                    }
+                    item.put("finishedAtMs", System.currentTimeMillis());
+                }
+            }
+            report.put("status", errors == 0 ? "COMPLETED" : "PARTIAL");
+            report.put("failedCases", errors);
+            report.put("executedStopCandidates", executedStops);
+            report.put("totalCases", cases.length());
+            report.put("downloadedFiles", downloaded);
+            report.put("stopObserved", "UNSET");
+            report.put("stopInference", "停止は未確定です。録音継続中ならGem本体で停止してください");
+            report.put("requiresPhysicalStop", startAcknowledged);
+            report.put("afterStopFileTransferAttempted", false);
+            report.put("candidateTrialsIndependent", false);
+            report.put("finishedAtMs", System.currentTimeMillis());
+            progress(listener, "一括診断完了", "結果・全候補の時系列ログをコピーできます", false);
+            AppLogger.event(context, "MEMOKET_BATCH_COMPLETED", new JSONObject()
+                    .put("cases", cases.length()).put("failed", errors)
+                    .put("stopCandidates", executedStops)
+                    .put("downloadedFiles", downloaded)
+                    .put("gemStopVerified", false));
+        } catch (Exception error) {
+            try {
+                report.put("status", "FAILED");
+                report.put("error", error.getMessage() == null ? error.toString() : error.getMessage());
+                report.put("finishedAtMs", System.currentTimeMillis());
+                AppLogger.event(context, "MEMOKET_BATCH_FAILED",
+                        new JSONObject().put("error", report.optString("error")));
+            } catch (Exception ignored) { }
+            progress(listener, "一括診断失敗", report.optString("error"), false);
+        } finally {
+            MemoketTestStore.save(context, report);
+        }
+        return report;
+    }
+
     private static void runStartCase(
             Context context,
             Session s,
