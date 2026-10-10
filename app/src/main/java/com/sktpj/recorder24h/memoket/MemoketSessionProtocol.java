@@ -42,7 +42,7 @@ public final class MemoketSessionProtocol {
             case 6:
                 if (opcode != 0xff) return null;
                 if (value.length < 6 || (value[1] & 0xff) != 0x68) {
-                    throw new IllegalStateException("Unexpected ff68 challenge response");
+                    throw new IllegalStateException("Unexpected ff68 challenge response actual=" + hex(value));
                 }
                 byte[] token = Arrays.copyOfRange(value, 2, 6);
                 incrementBigEndian(token);
@@ -69,15 +69,39 @@ public final class MemoketSessionProtocol {
         return step >= 9;
     }
 
+    public String debugStep() {
+        switch (step) {
+            case 0: return "IDLE";
+            case 1: return "WAIT_0000";
+            case 2: return "WAIT_2702";
+            case 3: return "WAIT_E1";
+            case 4: return "WAIT_F3";
+            case 5: return "WAIT_E3";
+            case 6: return "WAIT_FF68";
+            case 7: return "WAIT_E501";
+            case 8: return "WAIT_E8";
+            default: return "READY";
+        }
+    }
+
     private static void requirePrefix(byte[] actual, byte[] expected, String label) {
         if (actual.length < expected.length) {
-            throw new IllegalStateException("Unexpected Memoket " + label + " response");
+            throw new IllegalStateException("Unexpected Memoket " + label + " response expected="
+                    + hex(expected) + " actual=" + hex(actual));
         }
         for (int i = 0; i < expected.length; i++) {
             if (actual[i] != expected[i]) {
-                throw new IllegalStateException("Unexpected Memoket " + label + " response");
+                throw new IllegalStateException("Unexpected Memoket " + label + " response expected="
+                        + hex(expected) + " actual=" + hex(actual));
             }
         }
+    }
+
+    private static String hex(byte[] bytes) {
+        if (bytes == null) return "";
+        StringBuilder out = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) out.append(String.format("%02x", b & 0xff));
+        return out.toString();
     }
 
     private static void incrementBigEndian(byte[] bytes) {
