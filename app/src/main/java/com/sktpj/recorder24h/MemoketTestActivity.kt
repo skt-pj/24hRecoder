@@ -271,7 +271,7 @@ private fun MenuScreen(modifier: Modifier, onStart: () -> Unit, onStop: () -> Un
     val context = LocalContext.current
     val address = MemoketSettings.address(context)
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Text("未検証の診断コマンドはGemの録音を開始したまま停止できなくする可能性があります。開始・停止テストは本体を手動停止できる状況でのみ実行してください。", color = MaterialTheme.colorScheme.error) }
+        item { Text("本体停止可能な状態で実行してください。", color = MaterialTheme.colorScheme.error) }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -320,7 +320,7 @@ private fun StopCaseScreen(modifier: Modifier, cases: List<CaseUi>, selected: Ca
     onSelect: (CaseUi) -> Unit, ready: Boolean, onReady: (Boolean) -> Unit, onRun: () -> Unit) {
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { Text("03で録音開始→約5秒後に停止候補を1回送信→10秒観測→切断。録音が続けばGem本体ボタンで停止し、ファイルを取得して長さを検証します。テスト自体はファイル取得・削除ACKを行いません。", color = MaterialTheme.colorScheme.error) }
+        item { Text("録音が続いている場合は本体ボタンで停止してください。", color = MaterialTheme.colorScheme.error) }
         items(cases) { c -> CaseCard(c, selected.id == c.id) { onSelect(c) } }
         item {
             Row {
