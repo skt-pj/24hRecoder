@@ -59,6 +59,8 @@ public final class MemoketRemoteRecordingService extends Service {
     private boolean recordingStartPending;
     private boolean recordingActive;
     private boolean stopPending;
+    private volatile boolean stopCompleted;
+    private final MemoketStopProtocol stopProtocol = new MemoketStopProtocol();
     private int stopNotifyStep;
     private byte[] lastCommand;
 
@@ -79,10 +81,15 @@ public final class MemoketRemoteRecordingService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
         if (ACTION_STOP_RECORDING.equals(action)) {
+            if (stopPending || stopCompleted) return START_NOT_STICKY;
             trace.phase("STOP_REQUESTED", stateDetails());
+            if (!recordingActive || gatt == null || data == null) {
+                finishWithError("Gem録音中の接続がありません");
+                return START_NOT_STICKY;
+            }
             stopPending = true;
             updateState("停止処理中");
-            if (gatt != null && data != null) beginStopSequence();
+            beginStopSequence();
             return START_NOT_STICKY;
         }
         if (!ACTION_START_RECORDING.equals(action)) return START_NOT_STICKY;
@@ -150,6 +157,7 @@ public final class MemoketRemoteRecordingService extends Service {
         @Override
         public void onConnectionStateChange(BluetoothGatt connection, int status, int newState) {
             trace.gattConnection(status, newState);
+            if (stopCompleted) return;
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 finishWithError("GATT接続エラー: " + status);
                 return;
@@ -195,10 +203,28 @@ public final class MemoketRemoteRecordingService extends Service {
                 finishWithError("通知設定に失敗しました: " + status);
                 return;
             }
+            if (stopCompleted) return;
             if (stopPending && stopNotifyStep > 0) {
-                if (stopNotifyStep == 1) trace.phase("STOP_DATA_NOTIFY_OFF_DONE");
-                else if (stopNotifyStep == 2) trace.phase("STOP_DATA_NOTIFY_ON_DONE");
-                continueStopSequence();
+                try {
+                    if (descriptor == null || descriptor.getCharacteristic() == null ||
+                            !MemoketGattSync.DATA.equals(descriptor.getCharacteristic().getUuid())) {
+                        throw new IllegalStateException("停止処理中に想定外のCCCD応答を受信しました");
+                    }
+                    boolean enabled = Arrays.equals(descriptor.getValue(),
+                            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+                    MemoketStopProtocol.Next next = stopProtocol.onDataNotificationWriteSucceeded(enabled);
+                    if (next == MemoketStopProtocol.Next.ENABLE_DATA) {
+                        trace.phase("STOP_DATA_NOTIFY_OFF_DONE");
+                        stopNotifyStep = 2;
+                        trace.phase("STOP_DATA_NOTIFY_ON_REQUESTED");
+                        setNotification(data, true);
+                    } else {
+                        trace.phase("STOP_DATA_NOTIFY_ON_DONE");
+                        completeStopSequence();
+                    }
+                } catch (Exception exception) {
+                    finishWithError(exception.getMessage());
+                }
             } else {
                 enableInitialNotifications();
             }
@@ -240,6 +266,7 @@ public final class MemoketRemoteRecordingService extends Service {
     }
 
     private void handleNotification(UUID uuid, byte[] value) {
+        if (stopCompleted) return;
         try {
             if (uuid.equals(MemoketGattSync.DATA)) {
                 trace.data(value, transfer.debugState(), transfer.bufferedBytes());
@@ -280,18 +307,8 @@ public final class MemoketRemoteRecordingService extends Service {
                 scheduleMetadata(300);
             }
             if (next != null) queue(next);
-            if (transfer.isDone() && stopPending) {
-                int count = transfer.completedCount();
-                MemoketSettings.saveResult(this, count + "件の録音を取得しました");
-                JSONObject completed = new JSONObject().put("downloadedFiles", count);
-                log("MEMOKET_REMOTE_RECORDING_STOPPED", completed);
-                trace.completed(completed);
-                stopPending = false;
-                recordingActive = false;
-                updateState("停止");
-                stopForeground(STOP_FOREGROUND_REMOVE);
-                stopSelf();
-            }
+            // File transfer is handled by a separate worker after recording has stopped.
+            // A long backlog must never keep the recording control stuck in STOPPING.
         } catch (Exception error) {
             finishWithError(error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage());
         }
@@ -302,22 +319,38 @@ public final class MemoketRemoteRecordingService extends Service {
             finishWithError("Gem録音中の接続がありません");
             return;
         }
+        stopProtocol.begin();
         stopNotifyStep = 1;
         trace.phase("STOP_DATA_NOTIFY_OFF_REQUESTED");
         setNotification(data, false);
     }
 
-    private void continueStopSequence() {
-        if (stopNotifyStep == 1) {
-            stopNotifyStep = 2;
-            trace.phase("STOP_DATA_NOTIFY_ON_REQUESTED");
-            setNotification(data, true);
-            return;
-        }
-        if (stopNotifyStep == 2) {
-            stopNotifyStep = 3;
-            trace.phase("STOP_LIST_010000_REQUESTED");
-            queue(MemoketTransfer.initialCommand());
+    private void completeStopSequence() {
+        stopCompleted = true;
+        stopPending = false;
+        recordingActive = false;
+        stopNotifyStep = 0;
+        updateState("停止");
+        trace.phase("STOP_NOTIFICATION_SEQUENCE_COMPLETED");
+        try {
+            JSONObject details = new JSONObject()
+                    .put("stopMethod", "DATA_NOTIFICATION_OFF_ON")
+                    .put("fileRetrieval", "SEPARATE_WORKER");
+            log("MEMOKET_REMOTE_RECORDING_STOPPED", details);
+            trace.completed(details);
+        } catch (Exception ignored) { }
+        MemoketSettings.saveResult(this, "Gem停止操作完了。録音ファイルは別途取得します");
+        closeGatt();
+        stopForeground(STOP_FOREGROUND_REMOVE);
+        stopSelf();
+        try {
+            MemoketSyncScheduler.syncAfterStop(this);
+            log("MEMOKET_POST_STOP_SYNC_QUEUED", new JSONObject());
+        } catch (Exception error) {
+            String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+            MemoketSettings.saveResult(this, "録音停止済み・データ取得予約失敗: " + message);
+            try { log("MEMOKET_POST_STOP_SYNC_QUEUE_FAILED", new JSONObject().put("error", message)); }
+            catch (Exception ignored) { }
         }
     }
 

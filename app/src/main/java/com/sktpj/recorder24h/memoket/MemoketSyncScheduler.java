@@ -33,8 +33,18 @@ public final class MemoketSyncScheduler {
     }
 
     public static void syncNow(Context context) {
+        scheduleOneTime(context, 0);
+    }
+
+    public static void syncAfterStop(Context context) {
+        // Release the remote-recording GATT session before starting a new BLE connection.
+        scheduleOneTime(context, 3);
+    }
+
+    private static void scheduleOneTime(Context context, long delaySeconds) {
         OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(MemoketSyncWorker.class)
                 .setInputData(new Data.Builder().putBoolean("manual", true).build())
+                .setInitialDelay(delaySeconds, TimeUnit.SECONDS)
                 .build();
         WorkManager.getInstance(context)
                 .enqueueUniqueWork(MANUAL_WORK, ExistingWorkPolicy.KEEP, request);

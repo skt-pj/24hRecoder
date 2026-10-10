@@ -202,7 +202,7 @@ fun MemoketGemSettingsCard() {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
-                        enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中",
+                        enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中",
                         onClick = {
                             val intent = android.content.Intent(context, MemoketRemoteRecordingService::class.java)
                                 .setAction(MemoketRemoteRecordingService.ACTION_START_RECORDING)
@@ -224,7 +224,7 @@ fun MemoketGemSettingsCard() {
                 }
                 Text("Gem録音状態: $remoteState")
                 Button(
-                    enabled = address.isNotEmpty() && remoteState != "録音中",
+                    enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中",
                     onClick = {
                         MemoketSyncScheduler.syncNow(context)
                         scanState = "同期を要求しました"
