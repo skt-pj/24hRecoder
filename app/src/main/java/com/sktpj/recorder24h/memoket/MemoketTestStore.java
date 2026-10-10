@@ -33,9 +33,10 @@ public final class MemoketTestStore {
         } catch (Exception ignored) {
             next.put(result);
         }
-        for (int i = 0; i < old.length() && i < 99; i++) {
+        String id = result.optString("id");
+        for (int i = 0; i < old.length() && next.length() < 100; i++) {
             JSONObject row = old.optJSONObject(i);
-            if (row != null) next.put(row);
+            if (row != null && !id.equals(row.optString("id"))) next.put(row);
         }
         prefs(context).edit().putString(KEY_HISTORY, next.toString()).apply();
     }

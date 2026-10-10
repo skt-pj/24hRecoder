@@ -283,12 +283,12 @@ private fun MenuScreen(modifier: Modifier, onStart: () -> Unit, onStop: () -> Un
         }
         item { MenuCard("公式アプリHCI採取", "本体の録音操作を公式アプリの通信ログで調査", onOfficial) }
         item { MenuCard("録音開始テスト", "開始時の振動と録音成立を調査", onStart) }
-        item { MenuCard("録音停止テスト", "停止時の振動とファイル確定を調査", onStop) }
+        item { MenuCard("録音停止テスト", "BLE候補を比較し録音ファイルの長さで検証", onStop) }
         item { MenuCard("ファイル取得テスト", "一覧・メタデータ・ダウンロードを確認", onFile) }
-        item { MenuCard("テスト履歴", "ケース・振動回数・録音時間・結果を確認", onHistory) }
+        item { MenuCard("テスト履歴", "候補の実行時刻・音声長・検証結果を確認", onHistory) }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                Text("停止・取得テストは取得成功時にGemへACKを送ります。未取得ファイルをGemに残したい場合は実行しないでください。",
+                Text("停止候補テスト自体はファイル取得・ACKをしません。ファイル取得テストは取得成功時にGemへACKを送るため、未取得の重要音声がある場合は注意してください。",
                     Modifier.padding(16.dp))
             }
         }
