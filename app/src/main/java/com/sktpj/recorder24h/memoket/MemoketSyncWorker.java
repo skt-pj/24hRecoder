@@ -32,19 +32,34 @@ public final class MemoketSyncWorker extends Worker {
             MemoketSettings.saveResult(context, "Bluetooth接続権限がありません");
             return Result.failure();
         }
+        MemoketGattSync sync = null;
         try {
-            int files = new MemoketGattSync(context, address).sync();
+            sync = new MemoketGattSync(context, address);
+            AppLogger.diagnostic(context, "MEMOKET_SYNC_WORKER_STARTED",
+                    new JSONObject()
+                            .put("sessionId", sync.sessionId())
+                            .put("manual", manual)
+                            .put("attempt", getRunAttemptCount()));
+            int files = sync.sync();
             String message = files + "件の録音を取得しました";
             MemoketSettings.saveResult(context, message);
-            JSONObject details = new JSONObject().put("fileCount", files);
+            JSONObject details = new JSONObject()
+                    .put("fileCount", files)
+                    .put("sessionId", sync.sessionId())
+                    .put("manual", manual)
+                    .put("attempt", getRunAttemptCount());
             AppLogger.event(context, "MEMOKET_SYNC_COMPLETED", details);
             return Result.success();
         } catch (Exception exception) {
             String message = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
             MemoketSettings.saveResult(context, "同期失敗: " + message);
             try {
-                AppLogger.event(context, "MEMOKET_SYNC_FAILED",
-                        new JSONObject().put("error", message).put("attempt", getRunAttemptCount()));
+                JSONObject failed = new JSONObject()
+                        .put("error", message)
+                        .put("attempt", getRunAttemptCount())
+                        .put("manual", manual);
+                if (sync != null) failed.put("sessionId", sync.sessionId());
+                AppLogger.event(context, "MEMOKET_SYNC_FAILED", failed);
             } catch (Exception ignored) { }
             return manual ? Result.failure() : Result.retry();
         }
