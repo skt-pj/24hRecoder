@@ -63,8 +63,8 @@ public class MemoketTransferTest {
             assertEquals(check.getValue(), crc);
             saved.incrementAndGet();
         });
-        assertArrayEquals(new byte[]{2,0}, transfer.onControl(listResult()));
-        assertArrayEquals(new byte[]{2,0}, transfer.onControl(new byte[]{2,0,2}));
+        assertNull(transfer.onControl(listResult()));
+        assertNull(transfer.onControl(new byte[]{2,0,2}));
         transfer.onData(block(0,audio));
         assertArrayEquals(new byte[]{3}, transfer.onControl(metadata(audio)));
         assertEquals(0,saved.get());
@@ -143,7 +143,7 @@ public class MemoketTransferTest {
         ByteArrayOutputStream list = new ByteArrayOutputStream();
         list.writeBytes(new byte[]{1,1,1});
         list.writeBytes(fileName.getBytes(StandardCharsets.US_ASCII));
-        assertArrayEquals(new byte[]{2,0}, transfer.onControl(list.toByteArray()));
+        assertNull(transfer.onControl(list.toByteArray()));
         for (int seq = 0; seq < 30; seq++) {
             transfer.onData(block(seq, Arrays.copyOfRange(audio, seq * 480, (seq + 1) * 480)));
         }
@@ -167,8 +167,8 @@ public class MemoketTransferTest {
         byte[] audio = new byte[480];
         for (int i = 0; i < audio.length; i += 80) audio[i] = (byte) 0xbc;
         MemoketTransfer transfer = new MemoketTransfer((name, payload, crc) -> {});
-        assertArrayEquals(new byte[]{2,0}, transfer.onControl(listResult()));
-        assertArrayEquals(new byte[]{2,0}, transfer.onControl(new byte[]{2,0,2}));
+        assertNull(transfer.onControl(listResult()));
+        assertNull(transfer.onControl(new byte[]{2,0,2}));
         transfer.onData(block(0, audio));
         assertArrayEquals(new byte[]{3}, transfer.onControl(metadata(audio)));
     }
@@ -180,16 +180,15 @@ public class MemoketTransferTest {
         MemoketTransfer transfer = new MemoketTransfer((name, payload, crc) -> {});
         transfer.onControl(listResult());
         transfer.onData(block(0, Arrays.copyOfRange(audio, 0, 480)));
-        assertArrayEquals(new byte[]{2,0}, transfer.onControl(metadata(audio)));
-        transfer.onData(block(1, Arrays.copyOfRange(audio, 480, 960)));
-        assertArrayEquals(new byte[]{3}, transfer.onControl(metadata(audio)));
+        assertNull(transfer.onControl(metadata(audio)));
+        assertArrayEquals(new byte[]{3}, transfer.onData(block(1, Arrays.copyOfRange(audio, 480, 960))));
     }
 
     @Test
     public void ignoresUnrelatedCodeTwoUntilMetadataIsExpected() throws Exception {
         MemoketTransfer transfer = new MemoketTransfer((name, payload, crc) -> {});
         assertNull(transfer.onControl(new byte[]{2,0}));
-        assertArrayEquals(new byte[]{2,0}, transfer.onControl(listResult()));
+        assertNull(transfer.onControl(listResult()));
     }
 
 }
