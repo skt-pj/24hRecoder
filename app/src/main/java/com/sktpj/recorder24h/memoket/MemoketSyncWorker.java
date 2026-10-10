@@ -23,6 +23,12 @@ public final class MemoketSyncWorker extends Worker {
         boolean manual = getInputData().getBoolean("manual", false);
         boolean afterStop = getInputData().getBoolean("afterStop", false);
         if (!manual && !MemoketSettings.enabled(context)) return Result.success();
+        String gemRecordingState = MemoketSettings.remoteRecordingState(context);
+        if ("録音中".equals(gemRecordingState) || "接続中".equals(gemRecordingState)
+                || "停止処理中".equals(gemRecordingState) || "ファイル取得中".equals(gemRecordingState)) {
+            MemoketSettings.saveResult(context, "録音操作中は別のGem同期を実行しません");
+            return manual ? Result.failure() : Result.retry();
+        }
         String address = MemoketSettings.address(context);
         if (address.isEmpty()) {
             MemoketSettings.saveResult(context, "Gemが選択されていません");

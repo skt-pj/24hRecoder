@@ -292,7 +292,7 @@ public final class MemoketRemoteRecordingService extends Service {
             }
             if (!uuid.equals(MemoketGattSync.RESPONSE)) return;
 
-            trace.response(value, session.debugStep(), transfer.debugState());
+            trace.response(value, session.debugStep(), transfer == null ? "INACTIVE" : transfer.debugState());
             if (!session.isReady()) {
                 byte[] next = session.onResponse(value);
                 trace.phase(session.debugStep());
