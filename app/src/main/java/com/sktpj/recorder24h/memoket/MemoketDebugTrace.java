@@ -93,6 +93,7 @@ public final class MemoketDebugTrace {
     public void commandQueued(byte[] command, int queueDepth) {
         JSONObject d = base();
         put(d, "commandHex", hex(command));
+        put(d, "commandName", commandName(command));
         put(d, "queueDepth", queueDepth);
         AppLogger.diagnostic(context, "MEMOKET_CONTROL_QUEUED", d);
     }
@@ -101,6 +102,7 @@ public final class MemoketDebugTrace {
         lastCommandHex = hex(command);
         JSONObject d = base();
         put(d, "commandHex", lastCommandHex);
+        put(d, "commandName", commandName(command));
         put(d, "remainingQueueDepth", remainingQueueDepth);
         AppLogger.diagnostic(context, "MEMOKET_CONTROL_WRITE_REQUESTED", d);
     }
@@ -119,6 +121,13 @@ public final class MemoketDebugTrace {
         put(d, "sessionStep", sessionStep);
         put(d, "transferState", transferState);
         AppLogger.diagnostic(context, "MEMOKET_RESPONSE_RECEIVED", d);
+    }
+
+    public void notification(String characteristicUuid, byte[] value) {
+        JSONObject d = base();
+        put(d, "characteristicUuid", characteristicUuid);
+        put(d, "valueHex", hex(value));
+        AppLogger.diagnostic(context, "MEMOKET_NOTIFICATION_RECEIVED", d);
     }
 
     public void data(byte[] value, String transferState, int bufferedBytes) {
@@ -145,6 +154,14 @@ public final class MemoketDebugTrace {
         put(d, "transferState", transferState);
         put(d, "bufferedBytes", bufferedBytes);
         AppLogger.diagnostic(context, "MEMOKET_METADATA_PROBE_SCHEDULED", d);
+    }
+
+    public void filePersisted(String fileName, int payloadBytes, long expectedCrc) {
+        JSONObject d = base();
+        put(d, "fileName", fileName);
+        put(d, "payloadBytes", payloadBytes);
+        put(d, "expectedCrcHex", Long.toHexString(expectedCrc));
+        AppLogger.event(context, "MEMOKET_FILE_PERSISTED", d);
     }
 
     public void transferState(MemoketTransfer transfer, String reason) {
@@ -215,6 +232,24 @@ public final class MemoketDebugTrace {
         StringBuilder out = new StringBuilder(bytes.length * 2);
         for (byte b : bytes) out.append(String.format("%02x", b & 0xff));
         return out.toString();
+    }
+
+    private static String commandName(byte[] value) {
+        if (value == null || value.length == 0) return "EMPTY";
+        String h = hex(value);
+        if ("00".equals(h)) return "SESSION_00";
+        if ("2701".equals(h)) return "SESSION_27";
+        if ("e1".equals(h)) return "SESSION_E1";
+        if ("f300".equals(h)) return "SESSION_F3";
+        if ("e301".equals(h)) return "SESSION_E3";
+        if ("ff68".equals(h)) return "SESSION_CHALLENGE";
+        if ((value[0] & 0xff) == 0xe5) return "SESSION_CHALLENGE_REPLY";
+        if ("e8".equals(h)) return "SESSION_E8";
+        if ("03".equals(h)) return "STATEFUL_03";
+        if ("010000".equals(h)) return "FILE_LIST";
+        if ("0200".equals(h)) return "FILE_METADATA";
+        if ((value[0] & 0xff) == 0x05) return "FILE_ACK";
+        return "UNKNOWN";
     }
 
     private static long sequence(byte[] value) {
