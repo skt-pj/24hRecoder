@@ -1,9 +1,15 @@
 package com.sktpj.recorder24h.memoket;
 
-/** Confirm recording stop from DATA notification OFF -> ON, not from file downloads. */
+/**
+ * DATA notifications disabled for the recording-control BLE connection.
+ * Disabling the CCCD is a transport operation, not proof of device stop.
+ *
+ * Never automatically enable DATA again on this same connection: a user's
+ * physical observation showed recording immediately restarting after OFF->ON.
+ */
 public final class MemoketStopProtocol {
-    public enum Next { ENABLE_DATA, RECORDING_STOPPED }
-    private enum State { IDLE, WAIT_OFF, WAIT_ON, STOPPED }
+    public enum Next { DISCONNECT_BEFORE_TRANSFER }
+    private enum State { IDLE, WAIT_OFF, DATA_DISABLED }
     private State state = State.IDLE;
 
     public void begin() {
@@ -13,17 +19,11 @@ public final class MemoketStopProtocol {
 
     public Next onDataNotificationWriteSucceeded(boolean enabled) {
         if (state == State.WAIT_OFF && !enabled) {
-            state = State.WAIT_ON;
-            return Next.ENABLE_DATA;
-        }
-        if (state == State.WAIT_ON && enabled) {
-            state = State.STOPPED;
-            return Next.RECORDING_STOPPED;
+            state = State.DATA_DISABLED;
+            return Next.DISCONNECT_BEFORE_TRANSFER;
         }
         throw new IllegalStateException("Unexpected stop notification transition: " + state + " enabled=" + enabled);
     }
 
-    public boolean isStopped() {
-        return state == State.STOPPED;
-    }
+    public boolean notificationDisabled() { return state == State.DATA_DISABLED; }
 }

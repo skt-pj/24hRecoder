@@ -62,6 +62,10 @@ public final class MemoketSettings {
         return prefs(context).getString("remote_recording_state", "停止");
     }
 
+    public static void setRemoteRecordingState(Context context, String state) {
+        prefs(context).edit().putString("remote_recording_state", state).apply();
+    }
+
     public static String result(Context context) {
         return prefs(context).getString("last_result", "未取得");
     }

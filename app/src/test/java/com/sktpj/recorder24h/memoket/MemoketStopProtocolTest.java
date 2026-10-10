@@ -5,16 +5,21 @@ import static org.junit.Assert.*;
 
 public class MemoketStopProtocolTest {
     @Test
-    public void completesStopAfterNotificationOffThenOnWithoutFileTransfer() {
+    public void stopDisablesNotificationsAndNeverRequestsReenableOnSameConnection() {
         MemoketStopProtocol stop = new MemoketStopProtocol();
         stop.begin();
-        assertFalse(stop.isStopped());
-        assertEquals(MemoketStopProtocol.Next.ENABLE_DATA,
+        assertFalse(stop.notificationDisabled());
+        assertEquals(MemoketStopProtocol.Next.DISCONNECT_BEFORE_TRANSFER,
                 stop.onDataNotificationWriteSucceeded(false));
-        assertFalse(stop.isStopped());
-        assertEquals(MemoketStopProtocol.Next.RECORDING_STOPPED,
-                stop.onDataNotificationWriteSucceeded(true));
-        assertTrue(stop.isStopped());
+        assertTrue(stop.notificationDisabled());
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void forbidsImmediateReenableWhichRestartedRecordingOnGem() {
+        MemoketStopProtocol stop = new MemoketStopProtocol();
+        stop.begin();
+        stop.onDataNotificationWriteSucceeded(false);
+        stop.onDataNotificationWriteSucceeded(true);
     }
 
     @Test(expected = IllegalStateException.class)
@@ -25,7 +30,7 @@ public class MemoketStopProtocolTest {
     }
 
     @Test(expected = IllegalStateException.class)
-    public void rejectsDuplicateNotificationCallback() {
+    public void rejectsDuplicateOff() {
         MemoketStopProtocol stop = new MemoketStopProtocol();
         stop.begin();
         stop.onDataNotificationWriteSucceeded(false);

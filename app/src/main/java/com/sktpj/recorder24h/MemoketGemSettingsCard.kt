@@ -202,7 +202,7 @@ fun MemoketGemSettingsCard() {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
-                        enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中" && remoteState != "ファイル取得中",
+                        enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中" && remoteState != "ファイル取得中" && remoteState != "停止操作済・取得待ち",
                         onClick = {
                             val intent = android.content.Intent(context, MemoketRemoteRecordingService::class.java)
                                 .setAction(MemoketRemoteRecordingService.ACTION_START_RECORDING)
@@ -223,9 +223,9 @@ fun MemoketGemSettingsCard() {
                     ) { Text("Gem録音停止") }
                 }
                 Text("Gem録音状態: $remoteState")
-                Text("録音停止のBLE通知切替だけでは、Gem本体の録音停止は確認できません。録音時間に対して音声が増え続けた場合は取得を中止し、未保存ファイルへの削除通知は送りません。")
+                Text("録音停止ではDATA通知をOFFにした後、同じ接続でONへ戻しません。停止操作の接続を閉じ、別の接続で今回の録音1件を取得します。Gem実機の停止確認は別途必要です。")
                 Button(
-                    enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中" && remoteState != "ファイル取得中",
+                    enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中" && remoteState != "ファイル取得中" && remoteState != "停止操作済・取得待ち",
                     onClick = {
                         MemoketSyncScheduler.syncNow(context)
                         scanState = "同期を要求しました"
@@ -234,12 +234,12 @@ fun MemoketGemSettingsCard() {
                 ) { Text("保存済み録音を手動取得（過去分含む）") }
                 Text("端末内保存: ${fileCount}件 / 最新結果: $result")
                 Text(
-                    "録音停止では今回の録音1件のみ取得し、端末保存とCRC32検証が成功した場合だけGemへ対象ファイルの完了通知を送ります。古いファイルが先頭なら他ファイルを消さず中止します。手動取得は別操作です。",
+                    "停止後にDATA通知を即ONに戻すと再録音が始まる現象が報告されたため、停止操作とファイル取得を別BLE接続に分離しました。取得・CRC検証・永続保存後だけ対象ファイル名の完了通知を送ります。古いファイルが先頭なら削除せず中止します。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Button(
-                    enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中" && remoteState != "ファイル取得中",
+                    enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中" && remoteState != "ファイル取得中" && remoteState != "停止操作済・取得待ち",
                     onClick = {
                         context.startActivity(android.content.Intent(context, MemoketTestActivity::class.java))
                     },

@@ -25,7 +25,9 @@ public final class MemoketSyncWorker extends Worker {
         if (!manual && !MemoketSettings.enabled(context)) return Result.success();
         String gemRecordingState = MemoketSettings.remoteRecordingState(context);
         if ("録音中".equals(gemRecordingState) || "接続中".equals(gemRecordingState)
-                || "停止処理中".equals(gemRecordingState) || "ファイル取得中".equals(gemRecordingState)) {
+                || "停止処理中".equals(gemRecordingState)
+                || "停止操作済・取得待ち".equals(gemRecordingState) && !afterStop
+                || "ファイル取得中".equals(gemRecordingState)) {
             MemoketSettings.saveResult(context, "録音操作中は別のGem同期を実行しません");
             return manual ? Result.failure() : Result.retry();
         }
@@ -47,6 +49,7 @@ public final class MemoketSyncWorker extends Worker {
                             getInputData().getLong("stoppedAtMs", 0L),
                             getInputData().getString("recordingZone"))
                     : null;
+            if (afterStop) MemoketSettings.setRemoteRecordingState(context, "ファイル取得中");
             sync = new MemoketGattSync(context, address, window);
             AppLogger.diagnostic(context, "MEMOKET_SYNC_WORKER_STARTED",
                     new JSONObject()
@@ -57,6 +60,8 @@ public final class MemoketSyncWorker extends Worker {
                             .put("attempt", getRunAttemptCount())
                             .put("workId", getId().toString()));
             int files = sync.sync();
+            if (afterStop && files != 1) throw new IllegalStateException("今回の録音ファイルを1件取得できませんでした");
+            if (afterStop) MemoketSettings.setRemoteRecordingState(context, "停止");
             String message = afterStop
                     ? (files == 0 ? "今回の録音ファイルはGem内で見つかりませんでした" : "今回の録音を" + files + "件取得しました")
                     : files + "件の録音を取得しました";
@@ -71,6 +76,7 @@ public final class MemoketSyncWorker extends Worker {
             return Result.success();
         } catch (Exception exception) {
             String message = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
+            if (afterStop) MemoketSettings.setRemoteRecordingState(context, "エラー");
             MemoketSettings.saveResult(context,
                     afterStop ? "今回の録音を取得できません: " + message : "同期失敗: " + message);
             try {
