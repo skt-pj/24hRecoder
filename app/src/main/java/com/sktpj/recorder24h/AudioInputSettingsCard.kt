@@ -61,7 +61,7 @@ fun AudioInputSettingsCard() {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("録音入力", style = MaterialTheme.typography.titleLarge)
             Text(
-                "Bluetoothマイクと端末マイクの使い方を選択します。録音中の接続・切断にも追従します。",
+                "録音入力モード",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
@@ -182,7 +182,7 @@ fun AudioInputSettingsCard() {
                 Text(reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Text(
-                "設定変更は録音中でも反映します。Bluetoothは検出だけで成功扱いにせず、Androidの通信オーディオ経路を要求した後、実際の録音入力まで確認します。切替失敗時は録音を止めず端末マイクへ戻します。",
+                "現在の入力経路を確認してください。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
