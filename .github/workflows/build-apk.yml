@@ -90,14 +90,14 @@ jobs:
           printf '%s\n' "$VERIFY_OUT"
           printf '%s\n' "$VERIFY_OUT" | grep -F "Signer #1 certificate SHA-256 digest: e648320071b8ab0de038f76790064b99461b67d7dbe7ce7506d12a5f4fa884d8"
 
-      - name: Verify APK version 0.7.81
+      - name: Verify APK version 0.7.82
         run: |
           set -euo pipefail
           AAPT="$ANDROID_HOME/build-tools/36.0.0/aapt"
           APK="app/build/outputs/apk/debug/app-debug.apk"
           "$AAPT" dump badging "$APK" | tee app/build/outputs/apk/debug/badging.txt
-          grep -F "versionCode='1081'" app/build/outputs/apk/debug/badging.txt
-          grep -F "versionName='0.7.81'" app/build/outputs/apk/debug/badging.txt
+          grep -F "versionCode='1082'" app/build/outputs/apk/debug/badging.txt
+          grep -F "versionName='0.7.82'" app/build/outputs/apk/debug/badging.txt
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
