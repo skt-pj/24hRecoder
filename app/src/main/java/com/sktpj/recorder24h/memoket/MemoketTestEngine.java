@@ -130,42 +130,78 @@ public final class MemoketTestEngine {
             String address = MemoketSettings.address(context);
             if (address.isEmpty()) throw new IllegalStateException("Memoket Gemが選択されていません");
 
-            for (String id : MemoketBatchPlan.FILE_CASES) {
+            // Gem's initial file list command also starts audio streaming.
+            // Observe all four file checks within ONE BLE session to avoid
+            // discarding blocks 0..N when the LIST connection closes.
+            JSONObject transferResult = new JSONObject();
+            Session transferSession = null;
+            long transferStart = System.currentTimeMillis();
+            String transferError = "";
+            try {
+                transferResult.put("caseId", "FILE_THREE");
+                transferResult.put("startedAtMs", transferStart);
+                progress(listener, "ファイル取得", "一覧・音声受信を同じ接続で確認しています", false);
+                transferSession = new Session(context, address, transferResult);
+                transferSession.connect();
+                runFileCase(context, transferSession, "FILE_THREE", "", transferResult, listener);
+                downloaded = transferResult.optInt("downloadedFiles", 0);
+                discoveredFile = transferSession.firstAnnouncedFile;
+            } catch (Exception error) {
+                transferError = error.getMessage() == null ? error.toString() : error.getMessage();
+                errors++;
+                if (transferSession != null) transferSession.debug.failure(transferError, error);
+            } finally {
+                if (transferSession != null) {
+                    transferResult.put("traceSessionId", transferSession.debug.sessionId());
+                    transferResult.put("trace", transferSession.trace);
+                    transferResult.put("firstAnnouncedFile", transferSession.firstAnnouncedFile);
+                    transferResult.put("savedFiles", new JSONArray(transferSession.savedFileNames));
+                    transferResult.put("dataBlockCount", transferSession.observedDataBlocks);
+                    transferResult.put("firstDataSequence", transferSession.firstDataSequence);
+                    transferResult.put("listResponseHex", transferSession.lastListResponseHex);
+                    transferSession.close();
+                }
+                transferResult.put("finishedAtMs", System.currentTimeMillis());
+                if (!transferError.isEmpty()) transferResult.put("error", transferError);
+            }
+            for (String fileCase : MemoketBatchPlan.FILE_CASES) {
                 JSONObject item = new JSONObject();
-                Session session = null;
-                long started = System.currentTimeMillis();
-                item.put("caseId", id);
-                item.put("startedAtMs", started);
+                item.put("caseId", fileCase);
+                item.put("startedAtMs", transferStart);
+                item.put("finishedAtMs", transferResult.optLong("finishedAtMs"));
+                item.put("traceSessionId", transferResult.optString("traceSessionId"));
+                item.put("sharedGattSession", true);
+                item.put("dataBlockCount", transferResult.optInt("dataBlockCount"));
+                item.put("firstDataSequence", transferResult.optLong("firstDataSequence", -1));
+                if ("FILE_LIST".equals(fileCase)) {
+                    item.put("listedFile", discoveredFile);
+                    item.put("status", discoveredFile.isEmpty() ? "NOT_VERIFIED" : "OBSERVED");
+                    item.put("listResponseHex", transferResult.optString("listResponseHex"));
+                } else if ("FILE_SPECIFIC".equals(fileCase)) {
+                    boolean matched = transferSession != null
+                            && !discoveredFile.isEmpty()
+                            && transferSession.savedFileNames.contains(discoveredFile);
+                    item.put("targetFile", discoveredFile);
+                    item.put("status", matched ? "SAVED_AND_MATCHED" : "NOT_VERIFIED");
+                } else if ("FILE_ONE".equals(fileCase)) {
+                    item.put("downloadedFiles", downloaded > 0 ? 1 : 0);
+                    item.put("status", downloaded > 0 ? "SAVED" : "NOT_VERIFIED");
+                } else {
+                    item.put("downloadedFiles", downloaded);
+                    item.put("savedFiles", transferResult.optJSONArray("savedFiles"));
+                    item.put("trace", transferResult.optJSONArray("trace"));
+                    item.put("error", transferResult.optString("error"));
+                    item.put("status", !transferError.isEmpty() ? "FAILED"
+                            : downloaded > 0 ? "SAVED" : "NO_FILE_RECEIVED");
+                }
                 cases.put(item);
-                if (!"FILE_LIST".equals(id) && discoveredFile.isEmpty()) {
-                    item.put("status", "SKIPPED_NO_PENDING_FILE");
-                    item.put("finishedAtMs", System.currentTimeMillis());
-                    progress(listener, id, "一覧に未取得音声がないため取得は実行しません", false);
-                    continue;
-                }
-                progress(listener, id, "録音開始前に取得経路を確認しています", false);
-                try {
-                    session = new Session(context, address, item);
-                    session.connect();
-                    runFileCase(context, session, id,
-                            "FILE_SPECIFIC".equals(id) ? discoveredFile : "", item, listener);
-                    if ("FILE_LIST".equals(id)) discoveredFile = item.optString("listedFile", "").trim();
-                    downloaded += item.optInt("downloadedFiles", 0);
-                    item.put("status", "COMPLETED");
-                    session.debug.completed(new JSONObject().put("caseId", id));
-                } catch (Exception error) {
-                    errors++;
-                    item.put("status", "FAILED");
-                    item.put("error", error.getMessage() == null ? error.toString() : error.getMessage());
-                    if (session != null) session.debug.failure(item.optString("error"), error);
-                } finally {
-                    if (session != null) {
-                        item.put("traceSessionId", session.debug.sessionId());
-                        item.put("trace", session.trace);
-                        session.close();
-                    }
-                    item.put("finishedAtMs", System.currentTimeMillis());
-                }
+            }
+            report.put("fileTransferCaseMethod", "ONE_CONTINUOUS_GATT_SESSION");
+            report.put("fileTransferResult", downloaded > 0 ? "AUDIO_SAVED"
+                    : (transferError.isEmpty() ? "NO_FILE_RECEIVED" : "FAILED"));
+            if (downloaded == 0 && transferSession != null && transferSession.firstDataSequence > 0) {
+                report.put("fileStreamState", "PARTIAL_STREAM_ALREADY_ACTIVE");
+                report.put("fileStreamFirstSequence", transferSession.firstDataSequence);
             }
 
             for (String id : MemoketBatchPlan.STOP_CASES) {
@@ -217,11 +253,13 @@ public final class MemoketTestEngine {
                     item.put("finishedAtMs", System.currentTimeMillis());
                 }
             }
-            report.put("status", errors == 0 ? "COMPLETED" : "PARTIAL");
+            report.put("status", "PARTIAL"); // BLE control actions alone do not verify physical stop.
             report.put("failedCases", errors);
             report.put("executedStopCandidates", executedStops);
             report.put("totalCases", cases.length());
             report.put("downloadedFiles", downloaded);
+            report.put("fileAcquisitionVerified", downloaded > 0);
+            report.put("stopVerificationRequired", true);
             report.put("stopObserved", "UNSET");
             report.put("stopInference", "停止は未確定です。録音継続中ならGem本体で停止してください");
             report.put("requiresPhysicalStop", startAcknowledged);
@@ -541,6 +579,11 @@ public final class MemoketTestEngine {
         volatile int serviceStatus = Integer.MIN_VALUE;
         boolean dataEnabled;
         boolean responseEnabled;
+        String firstAnnouncedFile = "";
+        String lastListResponseHex = "";
+        final List<String> savedFileNames = new ArrayList<>();
+        volatile long firstDataSequence = -1L;
+        volatile int observedDataBlocks = 0;
 
         Session(Context context, String address, JSONObject result) {
             this.context = context.getApplicationContext();
@@ -686,6 +729,7 @@ public final class MemoketTestEngine {
                 store.persist(name, payload, crc);
                 debug.filePersisted(name, payload.length, crc);
                 saved.add(name);
+                savedFileNames.add(name);
             });
 
             byte[] next = MemoketTransfer.initialCommand();
@@ -718,7 +762,13 @@ public final class MemoketTestEngine {
                 }
                 if (!MemoketGattSync.RESPONSE.equals(event.uuid)) continue;
 
+                if (event.value.length > 0 && (event.value[0] & 0xff) == 1) {
+                    lastListResponseHex = hex(event.value);
+                }
                 byte[] candidate = transfer.onControl(event.value);
+                if (firstAnnouncedFile.isEmpty() && !transfer.debugFileName().isEmpty()) {
+                    firstAnnouncedFile = transfer.debugFileName();
+                }
                 debug.transferState(transfer, "TEST_RESPONSE_PARSED");
                 if (candidate != null && candidate.length > 0 && candidate[0] == 0x05) {
                     write(candidate);
@@ -808,6 +858,8 @@ public final class MemoketTestEngine {
                                 | ((long)(value[3] & 0xff) << 8)
                                 | (value[4] & 0xff);
                         sequence = " seq=" + seq;
+                        if (firstDataSequence < 0) firstDataSequence = seq;
+                        observedDataBlocks++;
                     }
                     addTrace("DATA", "bytes=" + (value == null ? 0 : value.length) + sequence);
                 } else {
