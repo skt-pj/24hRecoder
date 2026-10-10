@@ -59,6 +59,7 @@ public final class MemoketRemoteRecordingService extends Service {
     private boolean recordingStartPending;
     private boolean recordingActive;
     private boolean stopPending;
+    private long stopRequestedAtMs;
     private volatile boolean stopCompleted;
     private final MemoketStopProtocol stopProtocol = new MemoketStopProtocol();
     private int stopNotifyStep;
@@ -87,6 +88,7 @@ public final class MemoketRemoteRecordingService extends Service {
                 finishWithError("Gem録音中の接続がありません");
                 return START_NOT_STICKY;
             }
+            stopRequestedAtMs = System.currentTimeMillis();
             stopPending = true;
             updateState("停止処理中");
             beginStopSequence();
@@ -294,6 +296,8 @@ public final class MemoketRemoteRecordingService extends Service {
             if (!recordingActive && value != null && value.length == 2 &&
                     value[0] == 0x03 && (value[1] & 0xff) == 0xff) {
                 recordingActive = true;
+                MemoketSettings.recordingStarted(this, System.currentTimeMillis(),
+                        java.time.ZoneId.systemDefault().getId());
                 trace.phase("RECORDING_ACTIVE");
                 updateState("録音中");
                 updateNotification("Memoket Gem 録音中");
@@ -344,8 +348,17 @@ public final class MemoketRemoteRecordingService extends Service {
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
         try {
-            MemoketSyncScheduler.syncAfterStop(this);
-            log("MEMOKET_POST_STOP_SYNC_QUEUED", new JSONObject());
+            long startedAt = MemoketSettings.recordingStartedAt(this);
+            String zoneId = MemoketSettings.recordingStartedZone(this);
+            if (startedAt <= 0 || stopRequestedAtMs < startedAt || zoneId.isEmpty()) {
+                throw new IllegalStateException("録音開始時刻が不明です。過去の録音を自動取得しません");
+            }
+            MemoketSyncScheduler.syncAfterStop(this, startedAt, stopRequestedAtMs, zoneId);
+            log("MEMOKET_POST_STOP_SYNC_QUEUED", new JSONObject()
+                    .put("recordingStartMs", startedAt)
+                    .put("recordingStopMs", stopRequestedAtMs)
+                    .put("zoneId", zoneId)
+                    .put("onlyCurrentRecording", true));
         } catch (Exception error) {
             String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
             MemoketSettings.saveResult(this, "録音停止済み・データ取得予約失敗: " + message);

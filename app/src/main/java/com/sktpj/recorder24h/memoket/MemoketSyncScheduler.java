@@ -14,6 +14,7 @@ import java.util.concurrent.TimeUnit;
 public final class MemoketSyncScheduler {
     private static final String PERIODIC_WORK = "memoket-gem-periodic";
     private static final String MANUAL_WORK = "memoket-gem-manual";
+    private static final String AFTER_STOP_WORK = "memoket-gem-after-stop";
 
     private MemoketSyncScheduler() {}
 
@@ -36,9 +37,21 @@ public final class MemoketSyncScheduler {
         scheduleOneTime(context, 0);
     }
 
-    public static void syncAfterStop(Context context) {
-        // Release the remote-recording GATT session before starting a new BLE connection.
-        scheduleOneTime(context, 3);
+    public static void syncAfterStop(Context context, long startedAtMs, long stoppedAtMs, String zoneId) {
+        // Only this specific recording is authorized for automatic retrieval.
+        new MemoketRecordingWindow(startedAtMs, stoppedAtMs, zoneId);
+        OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(MemoketSyncWorker.class)
+                .setInputData(new Data.Builder()
+                        .putBoolean("manual", true)
+                        .putBoolean("afterStop", true)
+                        .putLong("startedAtMs", startedAtMs)
+                        .putLong("stoppedAtMs", stoppedAtMs)
+                        .putString("recordingZone", zoneId)
+                        .build())
+                .setInitialDelay(3, TimeUnit.SECONDS)
+                .build();
+        WorkManager.getInstance(context)
+                .enqueueUniqueWork(AFTER_STOP_WORK, ExistingWorkPolicy.REPLACE, request);
     }
 
     private static void scheduleOneTime(Context context, long delaySeconds) {

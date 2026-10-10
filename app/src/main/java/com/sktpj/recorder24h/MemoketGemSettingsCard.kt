@@ -230,8 +230,13 @@ fun MemoketGemSettingsCard() {
                         scanState = "同期を要求しました"
                     },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text("今すぐ録音データを取得") }
+                ) { Text("保存済み録音を手動取得（過去分含む）") }
                 Text("端末内保存: ${fileCount}件 / 最新結果: $result")
+                Text(
+                    "録音停止後の自動取得は今回の録音だけが対象です。Gem内に古い録音が先にある場合は自動取得を中止し、過去分を削除しません。手動取得では過去分も同期され、成功した録音はGem本体から削除される場合があります。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Button(
                     enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中",
                     onClick = {

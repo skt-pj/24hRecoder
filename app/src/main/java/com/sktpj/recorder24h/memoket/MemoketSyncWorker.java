@@ -21,6 +21,7 @@ public final class MemoketSyncWorker extends Worker {
     public Result doWork() {
         Context context = getApplicationContext();
         boolean manual = getInputData().getBoolean("manual", false);
+        boolean afterStop = getInputData().getBoolean("afterStop", false);
         if (!manual && !MemoketSettings.enabled(context)) return Result.success();
         String address = MemoketSettings.address(context);
         if (address.isEmpty()) {
@@ -34,15 +35,25 @@ public final class MemoketSyncWorker extends Worker {
         }
         MemoketGattSync sync = null;
         try {
-            sync = new MemoketGattSync(context, address);
+            MemoketRecordingWindow window = afterStop
+                    ? new MemoketRecordingWindow(
+                            getInputData().getLong("startedAtMs", 0L),
+                            getInputData().getLong("stoppedAtMs", 0L),
+                            getInputData().getString("recordingZone"))
+                    : null;
+            sync = new MemoketGattSync(context, address, window);
             AppLogger.diagnostic(context, "MEMOKET_SYNC_WORKER_STARTED",
                     new JSONObject()
                             .put("sessionId", sync.sessionId())
                             .put("manual", manual)
+                            .put("afterStop", afterStop)
+                            .put("onlyCurrentRecording", window != null)
                             .put("attempt", getRunAttemptCount())
                             .put("workId", getId().toString()));
             int files = sync.sync();
-            String message = files + "件の録音を取得しました";
+            String message = afterStop
+                    ? (files == 0 ? "今回の録音ファイルはGem内で見つかりませんでした" : "今回の録音を" + files + "件取得しました")
+                    : files + "件の録音を取得しました";
             MemoketSettings.saveResult(context, message);
             JSONObject details = new JSONObject()
                     .put("fileCount", files)
@@ -54,7 +65,8 @@ public final class MemoketSyncWorker extends Worker {
             return Result.success();
         } catch (Exception exception) {
             String message = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
-            MemoketSettings.saveResult(context, "同期失敗: " + message);
+            MemoketSettings.saveResult(context,
+                    afterStop ? "今回の録音を取得できません: " + message : "同期失敗: " + message);
             try {
                 JSONObject failed = new JSONObject()
                         .put("error", message)
@@ -64,7 +76,9 @@ public final class MemoketSyncWorker extends Worker {
                 if (sync != null) failed.put("sessionId", sync.sessionId());
                 AppLogger.event(context, "MEMOKET_SYNC_FAILED", failed);
             } catch (Exception ignored) { }
-            return manual ? Result.failure() : Result.retry();
+            // Old recordings are never acknowledged or deleted just to get to the new one.
+            if (afterStop || manual) return Result.failure();
+            return Result.retry();
         }
     }
 }

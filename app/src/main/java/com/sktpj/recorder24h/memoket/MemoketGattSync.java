@@ -50,6 +50,10 @@ public final class MemoketGattSync {
     private byte[] lastCommand;
 
     public MemoketGattSync(Context context, String address) {
+        this(context, address, null);
+    }
+
+    public MemoketGattSync(Context context, String address, MemoketRecordingWindow onlyCurrentRecording) {
         this.context = context.getApplicationContext();
         this.address = address;
         this.trace = new MemoketDebugTrace(this.context, "SYNC_WORKER");
@@ -57,7 +61,7 @@ public final class MemoketGattSync {
         this.protocol = new MemoketTransfer((name, payload, crc) -> {
             store.persist(name, payload, crc);
             trace.filePersisted(name, payload.length, crc);
-        });
+        }, onlyCurrentRecording == null ? null : onlyCurrentRecording::matches);
         this.metadataProbe = () -> {
             if (protocol.shouldRequestMetadata()) queue(MemoketTransfer.metadataCommand());
         };

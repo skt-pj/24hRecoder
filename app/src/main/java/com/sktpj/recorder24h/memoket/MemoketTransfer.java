@@ -21,7 +21,20 @@ public final class MemoketTransfer {
         void persist(String name, byte[] payload, long expectedCrc) throws Exception;
     }
 
+    /** Applied as soon as the Gem announces a filename, before accepting any audio bytes. */
+    public interface FileSelector {
+        boolean accept(String filename);
+    }
+
+    public static final class OlderRecordingBlockedException extends IllegalStateException {
+        public OlderRecordingBlockedException(String filename) {
+            super("今回の録音ではないファイルがGemの転送待ちにあります: " + filename
+                    + "。過去の録音は取得・削除していません。必要なら手動取得してください。");
+        }
+    }
+
     private final CompletedFile save;
+    private final FileSelector selector;
     private String name;
     private long expectedSize = -1;
     private long expectedCrc = -1;
@@ -33,7 +46,12 @@ public final class MemoketTransfer {
     private State state = State.WAIT_LIST;
 
     public MemoketTransfer(CompletedFile save) {
+        this(save, null);
+    }
+
+    public MemoketTransfer(CompletedFile save, FileSelector selector) {
         this.save = save;
+        this.selector = selector;
     }
 
     public static byte[] initialCommand() {
@@ -65,6 +83,11 @@ public final class MemoketTransfer {
             }
             String incoming = new String(payload, 3, payload.length - 3, StandardCharsets.US_ASCII);
             requireName(incoming);
+            if (selector != null && !selector.accept(incoming)) {
+                // A list request may start automatic streaming. Never ACK or discard another
+                // recording simply to advance the Gem queue: ACK can delete it on the Gem.
+                throw new OlderRecordingBlockedException(incoming);
+            }
             name = incoming;
             expectedSize = -1;
             expectedCrc = -1;

@@ -20,7 +20,8 @@ public final class MemoketSettings {
         if (address == null || !address.matches("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}")) {
             throw new IllegalArgumentException("Invalid Bluetooth address");
         }
-        prefs(context).edit().putString("address", address).putString("source", "MEMOKET").apply();
+        prefs(context).edit().putString("address", address).putString("source", "MEMOKET")
+                .remove("remote_started_at_ms").remove("remote_started_zone").apply();
     }
 
     public static String source(Context context) {
@@ -40,6 +41,21 @@ public final class MemoketSettings {
 
     public static void setEnabled(Context context, boolean enabled) {
         prefs(context).edit().putBoolean("enabled", enabled).apply();
+    }
+
+    public static void recordingStarted(Context context, long startedAtMs, String zoneId) {
+        prefs(context).edit()
+                .putLong("remote_started_at_ms", startedAtMs)
+                .putString("remote_started_zone", zoneId)
+                .apply();
+    }
+
+    public static long recordingStartedAt(Context context) {
+        return prefs(context).getLong("remote_started_at_ms", 0);
+    }
+
+    public static String recordingStartedZone(Context context) {
+        return prefs(context).getString("remote_started_zone", "");
     }
 
     public static String remoteRecordingState(Context context) {
