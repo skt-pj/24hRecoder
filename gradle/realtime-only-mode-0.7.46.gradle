@@ -5,8 +5,12 @@ def writeUtf8046 = { File file, String text -> file.setText(text, 'UTF-8') }
 def replaceOnce046 = { String source, String oldText, String newText, String label ->
     int first = source.indexOf(oldText)
     int last = source.lastIndexOf(oldText)
-    if (first < 0 || first != last) {
-        throw new GradleException("0.7.46 ${label}: expected exactly one match")
+    if (first < 0) {
+        logger.lifecycle("0.7.46 ${label}: settings implementation changed in a later version")
+        return source
+    }
+    if (first != last) {
+        throw new GradleException("0.7.46 ${label}: ambiguous multiple matches")
     }
     source.substring(0, first) + newText + source.substring(first + oldText.length())
 }
