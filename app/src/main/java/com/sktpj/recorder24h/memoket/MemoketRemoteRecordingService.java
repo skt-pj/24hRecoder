@@ -48,11 +48,6 @@ public final class MemoketRemoteRecordingService extends Service {
     private MemoketDebugTrace trace;
     private MemoketTransfer transfer;
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final Runnable stopTransferTimeout = () -> {
-        if (stopPending && !stopCompleted) {
-            finishWithError("今回の録音ファイルの転送応答が30秒以上ありません。Gem上のファイルは削除していません");
-        }
-    };
     private final Runnable metadataProbe = () -> {
         if (transfer != null && transfer.shouldRequestMetadata()) queue(MemoketTransfer.metadataCommand());
     };
@@ -69,6 +64,11 @@ public final class MemoketRemoteRecordingService extends Service {
     private boolean stopListRequested;
     private long stopRequestedAtMs;
     private volatile boolean stopCompleted;
+    private final Runnable stopTransferTimeout = () -> {
+        if (stopPending && !stopCompleted) {
+            finishWithError("今回の録音ファイルの転送応答が30秒以上ありません。Gem上のファイルは削除していません");
+        }
+    };
     private final MemoketStopProtocol stopProtocol = new MemoketStopProtocol();
     private int stopNotifyStep;
     private byte[] lastCommand;
