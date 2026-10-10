@@ -32,6 +32,8 @@ public final class MemoketDebugTrace {
     private volatile int lastGattStatus = Integer.MIN_VALUE;
     private volatile int lastGattState = Integer.MIN_VALUE;
     private volatile int lastDescriptorStatus = Integer.MIN_VALUE;
+    private volatile long lastCommandRequestedElapsedMs = -1;
+    private volatile long lastDescriptorRequestedElapsedMs = -1;
 
     public MemoketDebugTrace(Context context, String route) {
         this.context = context.getApplicationContext();
@@ -87,6 +89,7 @@ public final class MemoketDebugTrace {
     }
 
     public void descriptorRequest(String label, boolean enabled, String characteristicUuid) {
+        lastDescriptorRequestedElapsedMs = SystemClock.elapsedRealtime();
         JSONObject d = base();
         put(d, "label", label);
         put(d, "enabled", enabled);
@@ -99,6 +102,8 @@ public final class MemoketDebugTrace {
         JSONObject d = base();
         put(d, "characteristicUuid", characteristicUuid);
         put(d, "status", status);
+        put(d, "writeLatencyMs", lastDescriptorRequestedElapsedMs < 0 ? -1
+                : SystemClock.elapsedRealtime() - lastDescriptorRequestedElapsedMs);
         AppLogger.diagnostic(context, "MEMOKET_GATT_CCCD_WRITE_RESULT", d);
     }
 
@@ -112,6 +117,7 @@ public final class MemoketDebugTrace {
 
     public void commandWriteRequested(byte[] command, int remainingQueueDepth) {
         lastCommandHex = hex(command);
+        lastCommandRequestedElapsedMs = SystemClock.elapsedRealtime();
         JSONObject d = base();
         put(d, "commandHex", lastCommandHex);
         put(d, "commandName", commandName(command));
@@ -123,6 +129,8 @@ public final class MemoketDebugTrace {
         JSONObject d = base();
         put(d, "commandHex", lastCommandHex);
         put(d, "status", status);
+        put(d, "writeLatencyMs", lastCommandRequestedElapsedMs < 0 ? -1
+                : SystemClock.elapsedRealtime() - lastCommandRequestedElapsedMs);
         AppLogger.diagnostic(context, "MEMOKET_CONTROL_WRITE_RESULT", d);
     }
 
@@ -132,6 +140,8 @@ public final class MemoketDebugTrace {
         lastTransferState = transferState == null ? "" : transferState;
         JSONObject d = base();
         put(d, "responseHex", lastResponseHex);
+        put(d, "sinceLastCommandMs", lastCommandRequestedElapsedMs < 0 ? -1
+                : SystemClock.elapsedRealtime() - lastCommandRequestedElapsedMs);
         put(d, "sessionStep", sessionStep);
         put(d, "transferState", transferState);
         AppLogger.diagnostic(context, "MEMOKET_RESPONSE_RECEIVED", d);
