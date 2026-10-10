@@ -166,94 +166,60 @@ public final class MemoketTestEngine {
                 : "3秒以上の新規録音を確認できませんでした", false);
     }
 
-    private static void runStopCase(
-            Context context,
-            Session s,
-            String caseId,
-            Set<String> before,
-            JSONObject result,
-            ProgressListener listener
-    ) throws Exception {
-        progress(listener, "テスト用録音開始", "標準接続で5秒のテスト録音を開始します", false);
+    /**
+     * Independent hypothesis trial. Never auto-retrieve, auto-finalize, or send
+     * 0x05 ACK: CCCD switching is not proven to stop hardware recording.
+     */
+    private static void runStopCase(Context context, Session s, String caseId,
+            Set<String> before, JSONObject result, ProgressListener listener) throws Exception {
+        progress(listener, "接続・認証", "Gem本体が停止していることを事前に確認してください", false);
         s.enableData(true);
         s.enableResponse(true);
         s.handshakeStandard();
+        progress(listener, "録音開始", "03を送信します。開始時の赤LED・振動を確認してください", true);
+        long startAt = System.currentTimeMillis();
         Event started = s.exchange(new byte[]{0x03}, 0x03, 4_000);
+        result.put("startCommandAtMs", startAt);
         result.put("startResponseHex", hex(started.value));
+        result.put("startAckIsStopProof", false);
         Thread.sleep(5_000);
-
-        progress(listener, "停止候補を実行", stopLabel(caseId) + "。今この瞬間の振動回数を覚えてください", true);
-        long candidateAt = System.currentTimeMillis();
+        progress(listener, "停止候補", stopLabel(caseId) + "。LED・振動を観察してください", true);
+        result.put("candidateAtMs", System.currentTimeMillis());
+        result.put("candidateLabel", stopLabel(caseId));
         executeStopCandidate(s, caseId);
-        result.put("candidateAtMs", candidateAt);
-
-        progress(listener, "候補操作後を観測", "3秒待ちます。この後の未検証の停止手順の振動はテスト結果に含めないでください", false);
-        Thread.sleep(3_000);
-
-        long cleanupAt = System.currentTimeMillis();
-        result.put("cleanupAtMs", cleanupAt);
-        progress(listener, "未検証の停止手順・取得", "既知の停止手順で復旧し、新規録音を取得します", false);
-        ensureForCleanup(s);
-        s.enableData(false);
-        Thread.sleep(150);
-        s.enableData(true);
-        Thread.sleep(150);
-        int downloaded = s.downloadPending(context, 50, null);
-        result.put("downloadedFiles", downloaded);
-
-        File newest = newestNewRaw(context, before);
-        attachAudioResult(result, newest);
-        long duration = result.optLong("audioDurationMs", 0);
-        long candidateExpected = candidateAt - result.optLong("startedAtMs", candidateAt);
-        // The connection/handshake time is outside audio duration. Compare against the controlled 5s + 3s windows.
-        if (duration > 0 && duration <= 6_700) {
-            result.put("stopInference", "候補操作で停止した可能性が高い");
-        } else if (duration >= 7_200) {
-            result.put("stopInference", "候補操作後も録音が継続した可能性が高い");
-        } else {
-            result.put("stopInference", "録音時間からは判定不能");
+        if (!"STOP_DISCONNECT".equals(caseId) && !"STOP_OFF_DISCONNECT".equals(caseId)) {
+            progress(listener, "3秒観測", "赤LEDが点灯したままならテスト後に本体ボタンで停止してください", false);
+            Thread.sleep(3_000);
         }
-        result.put("recordingVerified", duration >= 3_000);
-        progress(listener, "結果解析", result.optString("stopInference"), false);
+        result.put("observationEndedAtMs", System.currentTimeMillis());
+        result.put("stopInference", "未判定：BLE書込や03ffは停止の証明ではありません");
+        result.put("stopObserved", "UNSET");
+        result.put("downloadedFiles", 0);
+        result.put("gemFileAckSent", false);
+        progress(listener, "操作終了", "ファイル取得・05 ACKは未実施。Gemが録音中なら本体ボタンで停止してください", false);
     }
 
-    private static void executeStopCandidate(Session s, String caseId) throws Exception {
-        switch (caseId) {
-            case "STOP_A":
-                s.enableData(false);
-                break;
-            case "STOP_B":
-                s.enableData(true);
-                break;
-            case "STOP_C":
-                s.write(new byte[]{0x01, 0x00, 0x00});
-                break;
-            case "STOP_AB":
-                s.enableData(false);
-                s.enableData(true);
-                break;
-            case "STOP_AC":
-                s.enableData(false);
-                s.write(new byte[]{0x01, 0x00, 0x00});
-                break;
-            case "STOP_BC":
-                s.enableData(true);
-                s.write(new byte[]{0x01, 0x00, 0x00});
-                break;
-            case "STOP_ABC":
-                s.enableData(false);
-                s.enableData(true);
-                s.write(new byte[]{0x01, 0x00, 0x00});
-                break;
+    private static void executeStopCandidate(Session s, String id) throws Exception {
+        switch (id) {
+            case "STOP_A": s.enableData(false); break;
+            case "STOP_B": s.enableData(true); break;
+            case "STOP_C": s.write(new byte[]{0x01,0x00,0x00}); break;
+            case "STOP_AB": s.enableData(false); s.enableData(true); break;
+            case "STOP_AC": s.enableData(false); s.write(new byte[]{0x01,0x00,0x00}); break;
+            case "STOP_BC": s.enableData(true); s.write(new byte[]{0x01,0x00,0x00}); break;
+            case "STOP_ABC": s.enableData(false); s.enableData(true); s.write(new byte[]{0x01,0x00,0x00}); break;
             case "STOP_OFFICIAL_TIMING":
-                s.enableData(false);
-                Thread.sleep(400);
-                s.enableData(true);
-                Thread.sleep(270);
-                s.write(new byte[]{0x01, 0x00, 0x00});
-                break;
-            default:
-                throw new IllegalArgumentException("Unknown stop case " + caseId);
+                s.enableData(false); Thread.sleep(400); s.enableData(true); Thread.sleep(270);
+                s.write(new byte[]{0x01,0x00,0x00}); break;
+            case "STOP_OFF_WAIT_ON": s.enableData(false); Thread.sleep(1000); s.enableData(true); break;
+            case "STOP_ON_OFF": s.enableData(true); Thread.sleep(400); s.enableData(false); break;
+            case "STOP_LIST_DELAY":
+                s.enableData(false); Thread.sleep(1000); s.enableData(true); Thread.sleep(1000);
+                s.write(new byte[]{0x01,0x00,0x00}); break;
+            case "STOP_03_REPEAT": s.write(new byte[]{0x03}); break;
+            case "STOP_DISCONNECT": s.close(); break;
+            case "STOP_OFF_DISCONNECT": s.enableData(false); s.close(); break;
+            default: throw new IllegalArgumentException("Unknown stop case " + id);
         }
     }
 
@@ -347,6 +313,9 @@ public final class MemoketTestEngine {
             out.put("audioFile", result.opt("audioFile"));
             out.put("audioDurationMs", result.optLong("audioDurationMs"));
             out.put("stopInference", result.optString("stopInference"));
+            out.put("stopObserved", result.optString("stopObserved"));
+            out.put("candidateAtMs", result.optLong("candidateAtMs"));
+            out.put("gemFileAckSent", result.optBoolean("gemFileAckSent"));
             out.put("downloadedFiles", result.optInt("downloadedFiles"));
             out.put("traceSessionId", result.optString("traceSessionId"));
         } catch (Exception ignored) { }
@@ -375,7 +344,13 @@ public final class MemoketTestEngine {
             case "STOP_AC": return "A→C: OFF→01 00 00";
             case "STOP_BC": return "B→C: ON→01 00 00";
             case "STOP_ABC": return "A→B→C: OFF→ON→01 00 00";
-            case "STOP_OFFICIAL_TIMING": return "公式相当: OFF→400ms→ON→270ms→01 00 00";
+            case "STOP_OFFICIAL_TIMING": return "OFF→400ms→ON→270ms→一覧要求";
+            case "STOP_OFF_WAIT_ON": return "OFF→1000ms→ON";
+            case "STOP_ON_OFF": return "ON→400ms→OFF";
+            case "STOP_LIST_DELAY": return "OFF→1000ms→ON→1000ms→一覧要求";
+            case "STOP_03_REPEAT": return "03再送";
+            case "STOP_DISCONNECT": return "単純切断";
+            case "STOP_OFF_DISCONNECT": return "DATA OFF→切断";
             default: return id;
         }
     }

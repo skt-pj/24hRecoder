@@ -1,6 +1,9 @@
 package com.sktpj.recorder24h
 
 import android.os.Build
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.widget.Toast
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -23,6 +26,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -93,7 +97,13 @@ private val stops = listOf(
     CaseUi("STOP_AC", "OFF → 01 00 00（A→C）", "DATA OFF → 一覧要求"),
     CaseUi("STOP_BC", "ON → 01 00 00（B→C）", "DATA ON → 一覧要求"),
     CaseUi("STOP_ABC", "OFF → ON → 01 00 00（A→B→C）", "現在の停止系列"),
-    CaseUi("STOP_OFFICIAL_TIMING", "公式アプリ相当（待機あり）", "OFF → 400ms → ON → 270ms → 01 00 00")
+    CaseUi("STOP_OFFICIAL_TIMING", "公式ログ類似：時間差あり", "OFF→400ms→ON→270ms→一覧要求"),
+    CaseUi("STOP_OFF_WAIT_ON", "OFF→1秒→ON", "通知切替のみ"),
+    CaseUi("STOP_ON_OFF", "ON→OFF", "逆順"),
+    CaseUi("STOP_LIST_DELAY", "OFF→ON→1秒→一覧", "通知切替と一覧要求を分離"),
+    CaseUi("STOP_03_REPEAT", "録音中に03再送", "03の状態依存仮説"),
+    CaseUi("STOP_DISCONNECT", "通知操作なしで切断", "GATT切断のみ"),
+    CaseUi("STOP_OFF_DISCONNECT", "OFF→切断", "通知OFFの後、接続終了")
 )
 
 private val files = listOf(
@@ -129,6 +139,8 @@ private fun TestApp(onClose: () -> Unit) {
     var result by remember { mutableStateOf<JSONObject?>(null) }
     var history by remember { mutableStateOf(emptyList<JSONObject>()) }
     var vibration by remember { mutableStateOf(-1) }
+    var physicalReady by remember { mutableStateOf(false) }
+    var stopObserved by remember { mutableStateOf("UNSET") }
 
     fun reloadHistory() { history = toList(MemoketTestStore.history(context)) }
 
@@ -141,6 +153,7 @@ private fun TestApp(onClose: () -> Unit) {
         }
         steps = emptyList()
         vibration = -1
+        stopObserved = "UNSET"
         screen = Screen.RUNNING
         scope.launch {
             val r = withContext(Dispatchers.IO) {
@@ -155,6 +168,7 @@ private fun TestApp(onClose: () -> Unit) {
             }
             result = r
             vibration = r.optInt("vibration", -1)
+            stopObserved = r.optString("stopObserved", "UNSET")
             reloadHistory()
             screen = Screen.RESULT
         }
@@ -182,7 +196,7 @@ private fun TestApp(onClose: () -> Unit) {
             Screen.MENU -> MenuScreen(
                 Modifier.padding(pad),
                 { selected = starts.first(); screen = Screen.START },
-                { selected = stops.first(); screen = Screen.STOP },
+                { selected = stops.first(); physicalReady = false; screen = Screen.STOP },
                 { selected = files.first(); screen = Screen.FILE },
                 { reloadHistory(); screen = Screen.HISTORY },
                 { screen = Screen.OFFICIAL }
@@ -193,10 +207,9 @@ private fun TestApp(onClose: () -> Unit) {
                 "録音開始時の振動と、実際に約5秒の録音ファイルができるかを確認します。安全停止時の振動は回答に含めません。",
                 starts, selected, { selected = it }, ::runCase
             )
-            Screen.STOP -> CaseScreen(
-                Modifier.padding(pad),
-                "自動で5秒録音し、停止候補を実行して3秒観測した後、安全停止します。録音時間から候補操作で停止したかを推定します。",
-                stops, selected, { selected = it }, ::runCase
+            Screen.STOP -> StopCaseScreen(
+                Modifier.padding(pad), stops, selected, { selected = it },
+                physicalReady, { physicalReady = it }, ::runCase
             )
             Screen.FILE -> FileScreen(
                 Modifier.padding(pad), selected, specific,
@@ -204,11 +217,17 @@ private fun TestApp(onClose: () -> Unit) {
             )
             Screen.RUNNING -> RunningScreen(Modifier.padding(pad), selected, steps)
             Screen.RESULT -> ResultScreen(
-                Modifier.padding(pad), selected, result, vibration,
+                Modifier.padding(pad), selected, result, vibration, stopObserved,
                 { value ->
                     vibration = value
                     val id = result?.optString("id").orEmpty()
                     if (id.isNotEmpty()) MemoketTestStore.updateVibration(context, id, value)
+                },
+                { value ->
+                    stopObserved = value
+                    result?.put("stopObserved", value)
+                    val id = result?.optString("id").orEmpty()
+                    if (id.isNotEmpty()) MemoketTestStore.updateStopObservation(context, id, value)
                 },
                 { reloadHistory(); screen = Screen.HISTORY },
                 { screen = Screen.MENU }
@@ -268,6 +287,24 @@ private fun CaseScreen(modifier: Modifier, intro: String, cases: List<CaseUi>, s
 }
 
 @Composable
+private fun StopCaseScreen(modifier: Modifier, cases: List<CaseUi>, selected: CaseUi,
+    onSelect: (CaseUi) -> Unit, ready: Boolean, onReady: (Boolean) -> Unit, onRun: () -> Unit) {
+    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        item { Text("03で録音開始→5秒待機→停止仮説1種類→観測・切断。停止は未確認です。ファイル取得/05 ACKは行いません。Gemが録音中なら本体ボタンで停止してください。", color = MaterialTheme.colorScheme.error) }
+        items(cases) { c -> CaseCard(c, selected.id == c.id) { onSelect(c) } }
+        item {
+            Row {
+                Checkbox(checked = ready, onCheckedChange = onReady)
+                Text("現在Gem赤LEDが消灯し、本体ボタンで手動停止できることを確認した")
+            }
+        }
+        item { Button(onClick = { onReady(false); onRun() }, enabled = ready,
+            modifier = Modifier.fillMaxWidth()) { Text("この候補だけ実行") } }
+    }
+}
+
+@Composable
 private fun CaseCard(c: CaseUi, selected: Boolean, onSelect: () -> Unit) {
     Card(colors = CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -315,13 +352,14 @@ private fun RunningScreen(modifier: Modifier, selected: CaseUi, steps: List<Step
 }
 
 @Composable
-private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObject?, vibration: Int, onVibration: (Int) -> Unit, onHistory: () -> Unit, onMenu: () -> Unit) {
+private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObject?, vibration: Int, stopObserved: String, onVibration: (Int) -> Unit, onStopObserved: (String) -> Unit, onHistory: () -> Unit, onMenu: () -> Unit) {
     val ok = result?.optString("status") == "COMPLETED"
+    val context = LocalContext.current
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Card(colors = CardDefaults.cardColors(containerColor = if (ok) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(if (ok) "テストが完了しました" else "テストに失敗しました", fontWeight = FontWeight.Bold)
+                    Text(if (ok) "通信が終了しました（停止未判定）" else "テストに失敗しました", fontWeight = FontWeight.Bold)
                     Text(selected.title)
                     if (!ok) Text(result?.optString("error").orEmpty())
                 }
@@ -337,6 +375,7 @@ private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObjec
                     Text("取得件数: " + (result?.optInt("downloadedFiles", 0) ?: 0) + "件")
                     val inference = result?.optString("stopInference").orEmpty()
                     if (inference.isNotEmpty()) Text("停止判定: " + inference)
+                    if (selected.id.startsWith("STOP_")) Text("候補操作: " + formatTime(result?.optLong("candidateAtMs", 0L) ?: 0L))
                     val listed = result?.optString("listedFile").orEmpty()
                     if (listed.isNotEmpty()) Text("一覧結果: " + listed)
                 }
@@ -358,6 +397,26 @@ private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObjec
                 }
             }
         }
+        if (selected.id.startsWith("STOP_")) {
+            item {
+                Card {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Gem本体の目視結果", fontWeight = FontWeight.Bold)
+                        Text("赤LEDが点灯している場合は、本体ボタンを1回押して停止してください。")
+                        FilterChip(selected = stopObserved == "STOPPED", onClick = { onStopObserved("STOPPED") }, label = { Text("消灯・停止") })
+                        FilterChip(selected = stopObserved == "RECORDING", onClick = { onStopObserved("RECORDING") }, label = { Text("点灯・継続") })
+                        FilterChip(selected = stopObserved == "UNKNOWN", onClick = { onStopObserved("UNKNOWN") }, label = { Text("不明") })
+                    }
+                }
+            }
+        }
+        item {
+            OutlinedButton(onClick = {
+                context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(
+                    ClipData.newPlainText("Memoketテスト結果", result?.toString(2) ?: "{}"))
+                Toast.makeText(context, "結果をコピーしました", Toast.LENGTH_SHORT).show()
+            }, modifier = Modifier.fillMaxWidth()) { Text("BLE結果・操作記録をコピー") }
+        }
         item { OutlinedButton(onClick = onHistory, modifier = Modifier.fillMaxWidth()) { Text("テスト履歴を見る") } }
         item { Button(onClick = onMenu, modifier = Modifier.fillMaxWidth()) { Text("テストメニューへ戻る") } }
     }
@@ -378,7 +437,12 @@ private fun HistoryScreen(modifier: Modifier, history: List<JSONObject>) {
                     if (duration > 0) Text(String.format(Locale.JAPAN, "録音: %.1f秒", duration / 1000.0))
                     val inference = row.optString("stopInference")
                     if (inference.isNotEmpty()) Text(inference)
-                    Text(if (row.optString("status") == "COMPLETED") "成功" else "失敗: " + row.optString("error"))
+                    if (row.optString("caseId").startsWith("STOP_")) {
+                        Text("目視結果: " + when (row.optString("stopObserved")) {
+                            "STOPPED" -> "消灯・停止"; "RECORDING" -> "点灯・継続"; "UNKNOWN" -> "不明"; else -> "未確認"
+                        })
+                    }
+                    Text(if (row.optString("status") == "COMPLETED") "通信完了" else "失敗: " + row.optString("error"))
                 }
             }
         }

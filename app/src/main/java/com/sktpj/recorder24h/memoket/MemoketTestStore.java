@@ -52,6 +52,19 @@ public final class MemoketTestStore {
         prefs(context).edit().putString(KEY_HISTORY, rows.toString()).apply();
     }
 
+    public static synchronized void updateStopObservation(Context context, String id, String value) {
+        if (!"STOPPED".equals(value) && !"RECORDING".equals(value) && !"UNKNOWN".equals(value)) return;
+        JSONArray data = history(context);
+        for (int i = 0; i < data.length(); i++) {
+            JSONObject row = data.optJSONObject(i);
+            if (row != null && id.equals(row.optString("id"))) {
+                try { row.put("stopObserved", value); } catch (Exception ignored) { }
+                break;
+            }
+        }
+        prefs(context).edit().putString(KEY_HISTORY, data.toString()).apply();
+    }
+
     public static synchronized void clear(Context context) {
         prefs(context).edit().remove(KEY_HISTORY).apply();
     }
