@@ -431,7 +431,7 @@ private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObjec
                 Card {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("音声ファイルによる停止検証", fontWeight = FontWeight.Bold)
-                        Text("候補操作後も10秒観測しています。Gemが録音中なら本体ボタンで停止し、該当する録音を公式アプリまたは24hRecoderで保存・書き出してください。")
+                        Text("録音が続いていれば本体で停止し、対象音声を選択してください。")
                         Text("約5秒の音声なら候補時の停止と整合、約15秒以上なら録音継続と整合します。どちらも別ファイルの混入・再録音がないか確認が必要です。")
                         Button(onClick = onImportFile, modifier = Modifier.fillMaxWidth()) {
                             Text("今回の録音ファイルを選択して検証")
