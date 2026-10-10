@@ -4,36 +4,19 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class MemoketStopProtocolTest {
-    @Test
-    public void stopDisablesNotificationsAndNeverRequestsReenableOnSameConnection() {
-        MemoketStopProtocol stop = new MemoketStopProtocol();
-        stop.begin();
-        assertFalse(stop.notificationDisabled());
-        assertEquals(MemoketStopProtocol.Next.DISCONNECT_BEFORE_TRANSFER,
-                stop.onDataNotificationWriteSucceeded(false));
-        assertTrue(stop.notificationDisabled());
+    @Test public void physicalConfirmationRequired() {
+        MemoketStopProtocol p = new MemoketStopProtocol();
+        assertFalse(p.isStopConfirmed());
+        assertEquals(MemoketStopProtocol.Next.PHYSICAL_STOP_REQUIRED, p.requestStop());
+        assertFalse(p.isStopConfirmed());
+        assertEquals(MemoketStopProtocol.Next.READY_TO_RETRIEVE, p.confirmPhysicalStop());
+        assertTrue(p.isStopConfirmed());
     }
-
-    @Test(expected = IllegalStateException.class)
-    public void forbidsImmediateReenableWhichRestartedRecordingOnGem() {
-        MemoketStopProtocol stop = new MemoketStopProtocol();
-        stop.begin();
-        stop.onDataNotificationWriteSucceeded(false);
-        stop.onDataNotificationWriteSucceeded(true);
+    @Test(expected=IllegalStateException.class) public void refusesUnrequestedConfirmation() {
+        new MemoketStopProtocol().confirmPhysicalStop();
     }
-
-    @Test(expected = IllegalStateException.class)
-    public void rejectsOnBeforeOff() {
-        MemoketStopProtocol stop = new MemoketStopProtocol();
-        stop.begin();
-        stop.onDataNotificationWriteSucceeded(true);
-    }
-
-    @Test(expected = IllegalStateException.class)
-    public void rejectsDuplicateOff() {
-        MemoketStopProtocol stop = new MemoketStopProtocol();
-        stop.begin();
-        stop.onDataNotificationWriteSucceeded(false);
-        stop.onDataNotificationWriteSucceeded(false);
+    @Test(expected=IllegalStateException.class) public void refusesDuplicateConfirmation() {
+        MemoketStopProtocol p = new MemoketStopProtocol();
+        p.requestStop(); p.confirmPhysicalStop(); p.confirmPhysicalStop();
     }
 }

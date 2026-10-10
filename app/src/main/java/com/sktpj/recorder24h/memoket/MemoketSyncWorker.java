@@ -26,6 +26,7 @@ public final class MemoketSyncWorker extends Worker {
         String gemRecordingState = MemoketSettings.remoteRecordingState(context);
         if ("録音中".equals(gemRecordingState) || "接続中".equals(gemRecordingState)
                 || "停止処理中".equals(gemRecordingState)
+                || "Gem本体停止待ち".equals(gemRecordingState) && !afterStop
                 || "停止操作済・取得待ち".equals(gemRecordingState) && !afterStop
                 || "ファイル取得中".equals(gemRecordingState)) {
             MemoketSettings.saveResult(context, "録音操作中は別のGem同期を実行しません");
