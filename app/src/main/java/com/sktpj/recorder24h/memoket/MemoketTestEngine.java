@@ -146,6 +146,7 @@ public final class MemoketTestEngine {
                 runFileCase(context, transferSession, "FILE_THREE", "", transferResult, listener);
                 downloaded = transferResult.optInt("downloadedFiles", 0);
                 discoveredFile = transferSession.firstAnnouncedFile;
+                transferSession.debug.completed(new JSONObject().put("downloadedFiles", downloaded));
             } catch (Exception error) {
                 transferError = error.getMessage() == null ? error.toString() : error.getMessage();
                 errors++;
@@ -191,14 +192,14 @@ public final class MemoketTestEngine {
                     item.put("savedFiles", transferResult.optJSONArray("savedFiles"));
                     item.put("trace", transferResult.optJSONArray("trace"));
                     item.put("error", transferResult.optString("error"));
-                    item.put("status", !transferError.isEmpty() ? "FAILED"
-                            : downloaded > 0 ? "SAVED" : "NO_FILE_RECEIVED");
+                    item.put("status", MemoketBatchAssessment.fileState(downloaded,
+                            transferError, transferSession == null ? -1 : transferSession.firstDataSequence));
                 }
                 cases.put(item);
             }
             report.put("fileTransferCaseMethod", "ONE_CONTINUOUS_GATT_SESSION");
-            report.put("fileTransferResult", downloaded > 0 ? "AUDIO_SAVED"
-                    : (transferError.isEmpty() ? "NO_FILE_RECEIVED" : "FAILED"));
+            report.put("fileTransferResult", MemoketBatchAssessment.fileState(downloaded,
+                    transferError, transferSession == null ? -1 : transferSession.firstDataSequence));
             if (downloaded == 0 && transferSession != null && transferSession.firstDataSequence > 0) {
                 report.put("fileStreamState", "PARTIAL_STREAM_ALREADY_ACTIVE");
                 report.put("fileStreamFirstSequence", transferSession.firstDataSequence);
