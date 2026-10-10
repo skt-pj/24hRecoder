@@ -349,7 +349,7 @@ public final class MemoketRemoteRecordingService extends Service {
         setNotification(data, false);
     }
 
-    private void beginStoppedRecordingTransfer() {
+    private void beginStoppedRecordingTransfer() throws Exception {
         long startedAt = MemoketSettings.recordingStartedAt(this);
         String zoneId = MemoketSettings.recordingStartedZone(this);
         MemoketRecordingWindow recording = new MemoketRecordingWindow(startedAt, stopRequestedAtMs, zoneId);
