@@ -57,14 +57,14 @@ public final class MemoketTestEngine {
             result.put("startedAtMs", startedAt);
             result.put("vibration", -1);
             result.put("status", "RUNNING");
-            progress(listener, "接続準備", "Gemへ接続しています", false);
+            progress(listener, "����", "Ge}x��Wvt~Y", false);
 
             if (Build.VERSION.SDK_INT >= 31 &&
                     context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                throw new SecurityException("Bluetooth接続権限がありません");
+                throw new SecurityException("Bluetootk���pLr�~{�");
             }
             String address = MemoketSettings.address(context);
-            if (address.isEmpty()) throw new IllegalStateException("Memoket Gemが選択されていません");
+            if (address.isEmpty()) throw new IllegalStateException("Memoket Gem�z�u�ft~[�");
 
             Set<String> before = localRawNames(context);
             session = new Session(context, address, result);
@@ -90,7 +90,7 @@ public final class MemoketTestEngine {
                 result.put("finishedAtMs", System.currentTimeMillis());
                 AppLogger.event(context, "MEMOKET_TEST_FAILED", compact(result));
             } catch (Exception ignored) { }
-            progress(listener, "テスト失敗", result.optString("error", "不明なエラー"), false);
+            progress(listener, 2ƹ�1W", result.optString("error", noz���"), false);
         } finally {
             if (session != null) session.close();
             MemoketTestStore.save(context, result);
@@ -106,7 +106,7 @@ public final class MemoketTestEngine {
             JSONObject result,
             ProgressListener listener
     ) throws Exception {
-        progress(listener, "通知設定", startLabel(caseId), false);
+        progress(listener, ���", startLabel(caseId), false);
 
         if ("START_OFFICIAL".equals(caseId)) {
             s.enableResponse(true);
@@ -131,7 +131,7 @@ public final class MemoketTestEngine {
             }
         }
 
-        progress(listener, "録音開始コマンド", "0x03 を送信します。今この瞬間の振動回数を覚えてください", true);
+        progress(listener, ���������", "0x03 �O�w~YN�S��o��p��xfpUD", true);
         long commandAt = System.currentTimeMillis();
         s.write(new byte[]{0x03});
         if (s.responseEnabled) {
@@ -141,10 +141,10 @@ public final class MemoketTestEngine {
             result.put("startResponseHex", "notification disabled");
         }
 
-        progress(listener, "録音確認", "5秒間録音します。最後の安全停止の振動は開始時の振動回数に含めないでください", false);
+        progress(listener, ���", "}ד��W~y_�n�x\ro/����rn��p+�zDw`uD", false);
         Thread.sleep(5_000);
 
-        progress(listener, "安全停止", "既知の OFF→ON→01 00 00 で録音を確定し、音声を取得します", false);
+        progress(listener, {�xb", g��n OFg�Oo�01 00 00 ������w����ַw~Y", false);
         ensureForCleanup(s);
         s.enableData(false);
         Thread.sleep(150);
@@ -157,9 +157,9 @@ public final class MemoketTestEngine {
         attachAudioResult(result, newest);
         long duration = result.optLong("audioDurationMs", 0);
         result.put("recordingVerified", duration >= 3_000);
-        progress(listener, "結果解析", duration >= 3_000
-                ? "新しい録音ファイルを確認しました"
-                : "3秒以上の新規録音を確認できませんでした", false);
+        progress(listener, "w��", duration >= 3_000
+                ? g�w�2��������W~w_"
+                : "{��:o�������w}~{�gw_", false);
     }
 
     private static void runStopCase(
@@ -170,7 +170,7 @@ public final class MemoketTestEngine {
             JSONObject result,
             ProgressListener listener
     ) throws Exception {
-        progress(listener, "テスト用録音開始", "標準接続で5秒のテスト録音を開始します", false);
+        progress(listener, 2ƹ�(����", j���g}�~��۷���w~Y", false);
         s.enableData(true);
         s.enableResponse(true);
         s.handshakeStandard();
@@ -178,17 +178,17 @@ public final class MemoketTestEngine {
         result.put("startResponseHex", hex(started.value));
         Thread.sleep(5_000);
 
-        progress(listener, "停止候補を実行", stopLabel(caseId) + "。今この瞬間の振動回数を覚えてください", true);
+        progress(listener, r\r��۟L", stopLabel(caseId) + "N�S��o��p��xfpUD", true);
         long candidateAt = System.currentTimeMillis();
         executeStopCandidate(s, caseId);
         result.put("candidateAtMs", candidateAt);
 
-        progress(listener, "候補操作後を観測", "3秒待ちます。この後の安全停止の振動はテスト結果に含めないでください", false);
+        progress(listener, "���_���,", "{߅q~Y2sn��xbo����w�;�ztgpUD", false);
         Thread.sleep(3_000);
 
         long cleanupAt = System.currentTimeMillis();
         result.put("cleanupAtMs", cleanupAt);
-        progress(listener, "安全停止・取得", "既知の停止手順で復旧し、新規録音を取得します", false);
+        progress(listener, {�hr�ߗ", "��nbK6��w��2��ַw~Y", false);
         ensureForCleanup(s);
         s.enableData(false);
         Thread.sleep(150);
@@ -203,14 +203,14 @@ public final class MemoketTestEngine {
         long candidateExpected = candidateAt - result.optLong("startedAtMs", candidateAt);
         // The connection/handshake time is outside audio duration. Compare against the controlled 5s + 3s windows.
         if (duration > 0 && duration <= 6_700) {
-            result.put("stopInference", "候補操作で停止した可能性が高い");
+            result.put("stopInference", r��\wbw_��7L�D");
         } else if (duration >= 7_200) {
-            result.put("stopInference", "候補操作後も録音が継続した可能性が高い");
+            result.put("stopInference", "���_����L��W_��7��D");
         } else {
-            result.put("stopInference", "録音時間からは判定不能");
+            result.put("stopInference", "��B�{����");
         }
         result.put("recordingVerified", duration >= 3_000);
-        progress(listener, "結果解析", result.optString("stopInference"), false);
+        progress(listener, P��", result.optString("stopInference"), false);
     }
 
     private static void executeStopCandidate(Session s, String caseId) throws Exception {
@@ -261,7 +261,7 @@ public final class MemoketTestEngine {
             JSONObject result,
             ProgressListener listener
     ) throws Exception {
-        progress(listener, "接続・認証", "ファイル取得用セッションを準備します", false);
+        progress(listener, c����<", 2ձ����(����ֹW~Y", false);
         s.enableData(true);
         s.enableResponse(true);
         s.handshakeStandard();
@@ -271,22 +271,22 @@ public final class MemoketTestEngine {
             result.put("listResponseHex", hex(event.value));
             result.put("listedFile", parseListName(event.value));
             result.put("downloadedFiles", 0);
-            progress(listener, "一覧取得", result.optString("listedFile", "ファイルなし"), false);
+            progress(listener, n��ߗ", result.optString("listedFile", 2����jW"), false);
             return;
         }
 
         int max = "FILE_THREE".equals(caseId) ? 3 : "FILE_SPECIFIC".equals(caseId) ? 50 : 1;
         String target = "FILE_SPECIFIC".equals(caseId) ? requestedFile : null;
         if (target != null && target.trim().isEmpty()) {
-            throw new IllegalArgumentException("取得するファイル名を入力してください");
+            throw new IllegalArgumentException("߷Y������w�wvOpuD");
         }
-        progress(listener, "ファイル取得", target == null
-                ? max + "件まで取得します"
-                : "指定ファイルに到達するまで順に取得します", false);
+        progress(listener, "����ߗ", target == null
+                ? max + n�~wߗw~Y"
+                : "_�ձ��{�Ty�~�6k߷W~Y", false);
         int downloaded = s.downloadPending(context, max, target);
         result.put("downloadedFiles", downloaded);
         if (target != null) result.put("requestedFile", target);
-        progress(listener, "取得完了", downloaded + "件取得しました", false);
+        progress(listener, sߗΆ", downloaded + n�ַw~w_", false);
     }
 
     private static void ensureForCleanup(Session s) throws Exception {
@@ -350,27 +350,27 @@ public final class MemoketTestEngine {
 
     public static String startLabel(String id) {
         switch (id) {
-            case "START_CURRENT": return "現在の実装（DATA + RESPONSE）";
-            case "START_OFFICIAL": return "公式アプリ相当（0036/0039を含む）";
-            case "START_DATA_ONLY": return "開始直前はDATA通知のみ";
-            case "START_RESPONSE_ONLY": return "開始直前はRESPONSE通知のみ";
+            case "START_CURRENT": return s�8��DATA + RESPONS�	";
+            case "START_OFFICIAL": return s�����0036/0039�;�	";
+            case "START_DATA_ONLY": return "���}oDATA�n";
+            case "START_RESPONSE_ONLY": return ����}oRESPONS��~";
             case "START_EXTRA5": return "DATA + RESPONSE + 0036";
             case "START_EXTRA56": return "DATA + RESPONSE + 0036 + 0039";
-            case "START_NONE": return "開始直前は通知なし";
+            case "START_NONE": return ����M��zW";
             default: return id;
         }
     }
 
     public static String stopLabel(String id) {
         switch (id) {
-            case "STOP_A": return "A: DATA通知OFFのみ";
-            case "STOP_B": return "B: DATA通知ONのみ";
-            case "STOP_C": return "C: 01 00 00のみ";
-            case "STOP_AB": return "A→B: OFF→ON";
-            case "STOP_AC": return "A→C: OFF→01 00 00";
-            case "STOP_BC": return "B→C: ON→01 00 00";
-            case "STOP_ABC": return "A→B→C: OFF→ON→01 00 00";
-            case "STOP_OFFICIAL_TIMING": return "公式相当: OFF→400ms→ON→270ms→01 00 00";
+            case "STOP_A": return "A: DAT��OFF~";
+            case "STOP_B": return "B: DAT��ON~";
+            case "STOP_C": return "C: 01 00 00~";
+            case "STOP_AB": return "A�B: OFg�ON";
+            case "STOP_AC": return "a�C: OFF�01 00 00";
+            case "STOP_BC": return "c�C: Oo�01 00 00";
+            case "STOP_ABC": return "A�c�C: OFF�ON�01 00 00";
+            case "STOP_OFFICIAL_TIMING": return s�S: OFg�400ms�Oo�270ms�01 00 00";
             default: return id;
         }
     }
@@ -402,6 +402,7 @@ public final class MemoketTestEngine {
         final BlockingQueue<Integer> descriptorStatuses = new LinkedBlockingQueue<>();
         final BlockingQueue<Integer> writeStatuses = new LinkedBlockingQueue<>();
         final CountDownLatch connected = new CountDownLatch(1);
+        final CountDownLatch mtuReady = new CountDownLatch(1);
         final CountDownLatch servicesReady = new CountDownLatch(1);
 
         BluetoothGatt gatt;
@@ -413,6 +414,8 @@ public final class MemoketTestEngine {
         volatile int connectionStatus = Integer.MIN_VALUE;
         volatile int connectionState = BluetoothProfile.STATE_DISCONNECTED;
         volatile int serviceStatus = Integer.MIN_VALUE;
+        volatile int mtuStatus = Integer.MIN_VALUE;
+        volatile int negotiatedMtu = 23;
         boolean dataEnabled;
         boolean responseEnabled;
 
@@ -425,27 +428,33 @@ public final class MemoketTestEngine {
         void connect() throws Exception {
             BluetoothManager manager = context.getSystemService(BluetoothManager.class);
             BluetoothAdapter adapter = manager == null ? null : manager.getAdapter();
-            if (adapter == null || !adapter.isEnabled()) throw new IllegalStateException("Bluetoothが無効です");
+            if (adapter == null || !adapter.isEnabled()) throw new IllegalStateException("BluetootxLs�gY");
             BluetoothDevice device = adapter.getRemoteDevice(address);
             gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE);
-            if (gatt == null) throw new IllegalStateException("GATT接続を開始できません");
-            if (!connected.await(15, TimeUnit.SECONDS)) throw new IllegalStateException("GATT接続がタイムアウトしました");
+            if (gatt == null) throw new IllegalStateException("GATw�����w}~{�");
+            if (!connected.await(15, TimeUnit.SECONDS)) throw new IllegalStateException("GATT��L��ಶ�w~W_");
             if (connectionStatus != BluetoothGatt.GATT_SUCCESS || connectionState != BluetoothProfile.STATE_CONNECTED) {
-                throw new IllegalStateException("GATT接続エラー: " + connectionStatus);
+                throw new IllegalStateException("GATw�����: " + connectionStatus);
             }
-            if (!gatt.discoverServices()) throw new IllegalStateException("GATTサービス探索を開始できません");
-            if (!servicesReady.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("GATTサービス探索がタイムアウトしました");
-            if (serviceStatus != BluetoothGatt.GATT_SUCCESS) throw new IllegalStateException("GATTサービス探索エラー: " + serviceStatus);
+            if (!gatt.requestMtu(513)) throw new IllegalStateException("Memoket MTU�r���g}~[�");
+            if (!mtuReady.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("Memoket MT_�	|����w~w_");
+            if (mtuStatus != BluetoothGatt.GATT_SUCCESS || negotiatedMtu < 488) {
+                throw new IllegalStateException("Memoket MT_�	uW status=" + mtuStatus + " mtu=" + negotiatedMtu);
+            }
+            result.put("negotiatedMtu", negotiatedMtu);
+            if (!gatt.discoverServices()) throw new IllegalStateException("GATT�����"���w}~{�");
+            if (!servicesReady.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("GATt�����2|����W~w_");
+            if (serviceStatus != BluetoothGatt.GATT_SUCCESS) throw new IllegalStateException("GATT�����"���: " + serviceStatus);
 
             BluetoothGattService service = gatt.getService(MemoketGattSync.SERVICE);
-            if (service == null) throw new IllegalStateException("Memoketサービスがありません");
+            if (service == null) throw new IllegalStateException("Memoket���Lr�~{�");
             data = service.getCharacteristic(MemoketGattSync.DATA);
             control = service.getCharacteristic(MemoketGattSync.CONTROL);
             response = service.getCharacteristic(MemoketGattSync.RESPONSE);
             extra5 = service.getCharacteristic(EXTRA5);
             extra6 = service.getCharacteristic(EXTRA6);
             if (data == null || control == null || response == null) {
-                throw new IllegalStateException("Memoket必須Characteristicが不足しています");
+                throw new IllegalStateException("Memoke�CharacteristisL��Wvt~Y");
             }
             result.put("extra0036Available", extra5 != null && extra5.getDescriptor(CCCD) != null);
             result.put("extra0039Available", extra6 != null && extra6.getDescriptor(CCCD) != null);
@@ -463,30 +472,30 @@ public final class MemoketTestEngine {
         }
 
         void enableExtra5(boolean enabled) throws Exception {
-            if (extra5 == null) throw new IllegalStateException("0x0036 characteristicが見つかりません");
+            if (extra5 == null) throw new IllegalStateException("0x0036 characteristicͻd{�~{�");
             setNotify(extra5, enabled, "0036");
         }
 
         void enableExtra6(boolean enabled) throws Exception {
-            if (extra6 == null) throw new IllegalStateException("0x0039 characteristicが見つかりません");
+            if (extra6 == null) throw new IllegalStateException("0x0039 characteristicͻd{�~{�");
             setNotify(extra6, enabled, "0039");
         }
 
         void setNotify(BluetoothGattCharacteristic characteristic, boolean enabled, String label) throws Exception {
             if (!gatt.setCharacteristicNotification(characteristic, enabled)) {
-                throw new IllegalStateException(label + " notification切替に失敗しました");
+                throw new IllegalStateException(label + " notificatio~�{1ww~w_");
             }
             BluetoothGattDescriptor descriptor = characteristic.getDescriptor(CCCD);
-            if (descriptor == null) throw new IllegalStateException(label + " CCCDがありません");
+            if (descriptor == null) throw new IllegalStateException(label + " CCCt|B�~[�");
             descriptorStatuses.clear();
             descriptor.setValue(enabled
                     ? BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                     : BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE);
             addTrace("CCCD", label + "=" + (enabled ? "ON" : "OFF"));
-            if (!gatt.writeDescriptor(descriptor)) throw new IllegalStateException(label + " CCCD writeを開始できません");
+            if (!gatt.writeDescriptor(descriptor)) throw new IllegalStateException(label + " CCCD write���w}~{�");
             Integer status = descriptorStatuses.poll(5, TimeUnit.SECONDS);
             if (status == null || status != BluetoothGatt.GATT_SUCCESS) {
-                throw new IllegalStateException(label + " CCCD write失敗: " + status);
+                throw new IllegalStateException(label + " CCCD writ}uW: " + status);
             }
         }
 
@@ -502,7 +511,7 @@ public final class MemoketTestEngine {
             exchange(new byte[]{(byte)0xe3,0x01}, 0xe3, 4_000);
             Event challenge = exchange(new byte[]{(byte)0xff,0x68}, 0xff, 4_000);
             if (challenge.value.length < 6 || (challenge.value[1] & 0xff) != 0x68) {
-                throw new IllegalStateException("ff68 challenge応答が不正です: " + hex(challenge.value));
+                throw new IllegalStateException("ff68 challeng�TNocwY: " + hex(challenge.value));
             }
             byte[] token = Arrays.copyOfRange(challenge.value, 2, 6);
             incrementBigEndian(token);
@@ -524,10 +533,10 @@ public final class MemoketTestEngine {
             control.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
             control.setValue(command);
             addTrace("WRITE", hex(command));
-            if (!gatt.writeCharacteristic(control)) throw new IllegalStateException("control writeを開始できません: " + hex(command));
+            if (!gatt.writeCharacteristic(control)) throw new IllegalStateException("control writu���g}~[�: " + hex(command));
             Integer status = writeStatuses.poll(5, TimeUnit.SECONDS);
             if (status == null || status != BluetoothGatt.GATT_SUCCESS) {
-                throw new IllegalStateException("control write失敗 status=" + status + " command=" + hex(command));
+                throw new IllegalStateException("control writeuW status=" + status + " command=" + hex(command));
             }
         }
 
@@ -556,18 +565,33 @@ public final class MemoketTestEngine {
 
             byte[] next = MemoketTransfer.initialCommand();
             long deadline = System.currentTimeMillis() + 90_000;
+            long lastActivity = System.currentTimeMillis();
             while (System.currentTimeMillis() < deadline) {
                 if (next != null) {
                     write(next);
                     next = null;
                 }
-                Event event = notifications.poll(8, TimeUnit.SECONDS);
-                if (event == null) throw new IllegalStateException("ファイル転送応答がタイムアウトしました");
+
+                Event event = notifications.poll(300, TimeUnit.MILLISECONDS);
+                if (event == null) {
+                    if (transfer.shouldRequestMetadata()) {
+                        next = MemoketTransfer.metadataCommand();
+                        continue;
+                    }
+                    if (System.currentTimeMillis() - lastActivity > 8_000) {
+                        throw new IllegalStateException(2ձ���_�t|����W~w_");
+                    }
+                    continue;
+                }
+                lastActivity = System.currentTimeMillis();
+
                 if (MemoketGattSync.DATA.equals(event.uuid)) {
-                    transfer.onData(event.value);
+                    byte[] candidate = transfer.onData(event.value);
+                    if (candidate != null) next = candidate;
                     continue;
                 }
                 if (!MemoketGattSync.RESPONSE.equals(event.uuid)) continue;
+
                 byte[] candidate = transfer.onControl(event.value);
                 if (candidate != null && candidate.length > 0 && candidate[0] == 0x05) {
                     write(candidate);
@@ -576,6 +600,7 @@ public final class MemoketTestEngine {
                     boolean targetReached = targetName != null && saved.contains(targetName);
                     if (saved.size() >= maxFiles || targetReached) break;
                     next = following;
+                    lastActivity = System.currentTimeMillis();
                 } else {
                     next = candidate;
                 }
@@ -610,6 +635,14 @@ public final class MemoketTestEngine {
                 connectionState = newState;
                 addTrace("CONNECTION", "status=" + status + " state=" + newState);
                 connected.countDown();
+            }
+
+            @Override
+            public void onMtuChanged(BluetoothGatt connection, int mtu, int status) {
+                mtuStatus = status;
+                negotiatedMtu = mtu;
+                addTrace("MTU", "status=" + status + " mtu=" + mtu);
+                mtuReady.countDown();
             }
 
             @Override
