@@ -185,6 +185,10 @@ public final class MemoketTransfer {
             throw new IllegalStateException("Memoket block order mismatch expected=" + nextSequence + " actual=" + sequence);
         }
         int size = payload.length - 5;
+        if ((long) buffer.size() + size > MAX_BYTES) {
+            throw new IllegalStateException("Memoket file exceeded diagnostic memory limit "
+                    + MAX_BYTES + " bytes before verified metadata and CRC");
+        }
         if (expectedSize > 0 && (long) buffer.size() + size > expectedSize) {
             throw new IllegalStateException("Memoket file length exceeded expected=" + expectedSize
                     + " actualAfterBlock=" + ((long) buffer.size() + size));
