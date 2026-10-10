@@ -23,6 +23,15 @@ public final class MemoketDebugTrace {
     private volatile long dataBlocks;
     private volatile long dataBytes;
     private volatile long lastDataSequence = -1;
+    private volatile String lastSessionStep = "";
+    private volatile String lastTransferState = "";
+    private volatile String lastFileName = "";
+    private volatile int lastBufferedBytes;
+    private volatile long lastExpectedSize = -1;
+    private volatile String lastExpectedCrcHex = "";
+    private volatile int lastGattStatus = Integer.MIN_VALUE;
+    private volatile int lastGattState = Integer.MIN_VALUE;
+    private volatile int lastDescriptorStatus = Integer.MIN_VALUE;
 
     public MemoketDebugTrace(Context context, String route) {
         this.context = context.getApplicationContext();
@@ -55,6 +64,8 @@ public final class MemoketDebugTrace {
     }
 
     public void gattConnection(int status, int newState) {
+        lastGattStatus = status;
+        lastGattState = newState;
         JSONObject d = base();
         put(d, "status", status);
         put(d, "newState", newState);
@@ -84,6 +95,7 @@ public final class MemoketDebugTrace {
     }
 
     public void descriptorResult(String characteristicUuid, int status) {
+        lastDescriptorStatus = status;
         JSONObject d = base();
         put(d, "characteristicUuid", characteristicUuid);
         put(d, "status", status);
@@ -116,6 +128,8 @@ public final class MemoketDebugTrace {
 
     public void response(byte[] value, String sessionStep, String transferState) {
         lastResponseHex = hex(value);
+        lastSessionStep = sessionStep == null ? "" : sessionStep;
+        lastTransferState = transferState == null ? "" : transferState;
         JSONObject d = base();
         put(d, "responseHex", lastResponseHex);
         put(d, "sessionStep", sessionStep);
@@ -136,6 +150,8 @@ public final class MemoketDebugTrace {
         dataBlocks++;
         dataBytes += payloadBytes;
         lastDataSequence = sequence;
+        lastTransferState = transferState == null ? "" : transferState;
+        lastBufferedBytes = bufferedBytes;
 
         JSONObject d = base();
         put(d, "sequence", sequence);
@@ -168,11 +184,16 @@ public final class MemoketDebugTrace {
         JSONObject d = base();
         put(d, "reason", reason);
         if (transfer != null) {
-            put(d, "transferState", transfer.debugState());
-            put(d, "fileName", transfer.debugFileName());
-            put(d, "expectedSize", transfer.debugExpectedSize());
-            put(d, "expectedCrcHex", transfer.debugExpectedCrcHex());
-            put(d, "bufferedBytes", transfer.bufferedBytes());
+            lastTransferState = transfer.debugState();
+            lastFileName = transfer.debugFileName();
+            lastExpectedSize = transfer.debugExpectedSize();
+            lastExpectedCrcHex = transfer.debugExpectedCrcHex();
+            lastBufferedBytes = transfer.bufferedBytes();
+            put(d, "transferState", lastTransferState);
+            put(d, "fileName", lastFileName);
+            put(d, "expectedSize", lastExpectedSize);
+            put(d, "expectedCrcHex", lastExpectedCrcHex);
+            put(d, "bufferedBytes", lastBufferedBytes);
             put(d, "dataBlocks", transfer.dataBlockCount());
             put(d, "completedCount", transfer.completedCount());
         }
@@ -187,6 +208,15 @@ public final class MemoketDebugTrace {
         put(d, "dataBlocks", dataBlocks);
         put(d, "dataBytes", dataBytes);
         put(d, "lastDataSequence", lastDataSequence);
+        put(d, "lastSessionStep", lastSessionStep);
+        put(d, "lastTransferState", lastTransferState);
+        put(d, "lastFileName", lastFileName);
+        put(d, "lastBufferedBytes", lastBufferedBytes);
+        put(d, "lastExpectedSize", lastExpectedSize);
+        put(d, "lastExpectedCrcHex", lastExpectedCrcHex);
+        put(d, "lastGattStatus", lastGattStatus);
+        put(d, "lastGattState", lastGattState);
+        put(d, "lastDescriptorStatus", lastDescriptorStatus);
         if (throwable != null) {
             put(d, "exceptionClass", throwable.getClass().getName());
             put(d, "exceptionMessage", throwable.getMessage());
@@ -205,6 +235,15 @@ public final class MemoketDebugTrace {
         put(d, "dataBlocks", dataBlocks);
         put(d, "dataBytes", dataBytes);
         put(d, "lastDataSequence", lastDataSequence);
+        put(d, "lastSessionStep", lastSessionStep);
+        put(d, "lastTransferState", lastTransferState);
+        put(d, "lastFileName", lastFileName);
+        put(d, "lastBufferedBytes", lastBufferedBytes);
+        put(d, "lastExpectedSize", lastExpectedSize);
+        put(d, "lastExpectedCrcHex", lastExpectedCrcHex);
+        put(d, "lastGattStatus", lastGattStatus);
+        put(d, "lastGattState", lastGattState);
+        put(d, "lastDescriptorStatus", lastDescriptorStatus);
         return d;
     }
 
