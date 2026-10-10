@@ -29,8 +29,6 @@ public final class MemoketGattSync {
     public static final UUID RESPONSE = UUID.fromString("a1b2c303-4f5c-6e7d-df23-ab12cd34ef56");
     private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
     private static final long TIMEOUT_SECONDS = 120;
-    private static final int REQUESTED_MTU = 513;
-    private static final int MIN_DATA_MTU = 488;
     private static final long DATA_QUIET_MS = 250;
 
     private final Context context;
@@ -90,20 +88,11 @@ public final class MemoketGattSync {
                 return;
             }
             if (newState == android.bluetooth.BluetoothProfile.STATE_CONNECTED) {
-                if (!connection.requestMtu(REQUESTED_MTU)) fail("Memoket MTU request rejected");
+                if (!connection.discoverServices()) fail("GATT service discovery failed");
             } else if (newState == android.bluetooth.BluetoothProfile.STATE_DISCONNECTED) {
                 if (!protocol.isDone()) fail("Gem disconnected before transfer completed");
                 else finished.countDown();
             }
-        }
-
-        @Override
-        public void onMtuChanged(BluetoothGatt connection, int mtu, int status) {
-            if (status != BluetoothGatt.GATT_SUCCESS || mtu < MIN_DATA_MTU) {
-                fail("Memoket MTU negotiation failed status=" + status + " mtu=" + mtu);
-                return;
-            }
-            if (!connection.discoverServices()) fail("GATT service discovery failed");
         }
 
         @Override

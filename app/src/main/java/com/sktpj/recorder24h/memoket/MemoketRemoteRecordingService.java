@@ -40,8 +40,6 @@ public final class MemoketRemoteRecordingService extends Service {
     private static final String CHANNEL_ID = "memoket_remote_recording";
     private static final int NOTIFICATION_ID = 3401;
     private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
-    private static final int REQUESTED_MTU = 513;
-    private static final int MIN_DATA_MTU = 488;
     private static final long DATA_QUIET_MS = 250;
 
     private final Deque<byte[]> commands = new ArrayDeque<>();
@@ -141,19 +139,10 @@ public final class MemoketRemoteRecordingService extends Service {
                 return;
             }
             if (newState == android.bluetooth.BluetoothProfile.STATE_CONNECTED) {
-                if (!connection.requestMtu(REQUESTED_MTU)) finishWithError("Memoket MTU要求を開始できません");
+                if (!connection.discoverServices()) finishWithError("GATTサービス探索を開始できません");
             } else if (newState == android.bluetooth.BluetoothProfile.STATE_DISCONNECTED && !stopPending) {
                 finishWithError("Gemとの接続が切れました");
             }
-        }
-
-        @Override
-        public void onMtuChanged(BluetoothGatt connection, int mtu, int status) {
-            if (status != BluetoothGatt.GATT_SUCCESS || mtu < MIN_DATA_MTU) {
-                finishWithError("Memoket MTU交渉失敗: status=" + status + " mtu=" + mtu);
-                return;
-            }
-            if (!connection.discoverServices()) finishWithError("GATTサービス探索を開始できません");
         }
 
         @Override

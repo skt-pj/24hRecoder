@@ -402,7 +402,6 @@ public final class MemoketTestEngine {
         final BlockingQueue<Integer> descriptorStatuses = new LinkedBlockingQueue<>();
         final BlockingQueue<Integer> writeStatuses = new LinkedBlockingQueue<>();
         final CountDownLatch connected = new CountDownLatch(1);
-        final CountDownLatch mtuReady = new CountDownLatch(1);
         final CountDownLatch servicesReady = new CountDownLatch(1);
 
         BluetoothGatt gatt;
@@ -414,8 +413,6 @@ public final class MemoketTestEngine {
         volatile int connectionStatus = Integer.MIN_VALUE;
         volatile int connectionState = BluetoothProfile.STATE_DISCONNECTED;
         volatile int serviceStatus = Integer.MIN_VALUE;
-        volatile int mtuStatus = Integer.MIN_VALUE;
-        volatile int negotiatedMtu = 23;
         boolean dataEnabled;
         boolean responseEnabled;
 
@@ -436,12 +433,6 @@ public final class MemoketTestEngine {
             if (connectionStatus != BluetoothGatt.GATT_SUCCESS || connectionState != BluetoothProfile.STATE_CONNECTED) {
                 throw new IllegalStateException("GATT接続エラー: " + connectionStatus);
             }
-            if (!gatt.requestMtu(513)) throw new IllegalStateException("Memoket MTU要求を開始できません");
-            if (!mtuReady.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("Memoket MTU交渉がタイムアウトしました");
-            if (mtuStatus != BluetoothGatt.GATT_SUCCESS || negotiatedMtu < 488) {
-                throw new IllegalStateException("Memoket MTU交渉失敗 status=" + mtuStatus + " mtu=" + negotiatedMtu);
-            }
-            result.put("negotiatedMtu", negotiatedMtu);
             if (!gatt.discoverServices()) throw new IllegalStateException("GATTサービス探索を開始できません");
             if (!servicesReady.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("GATTサービス探索がタイムアウトしました");
             if (serviceStatus != BluetoothGatt.GATT_SUCCESS) throw new IllegalStateException("GATTサービス探索エラー: " + serviceStatus);
@@ -635,14 +626,6 @@ public final class MemoketTestEngine {
                 connectionState = newState;
                 addTrace("CONNECTION", "status=" + status + " state=" + newState);
                 connected.countDown();
-            }
-
-            @Override
-            public void onMtuChanged(BluetoothGatt connection, int mtu, int status) {
-                mtuStatus = status;
-                negotiatedMtu = mtu;
-                addTrace("MTU", "status=" + status + " mtu=" + mtu);
-                mtuReady.countDown();
             }
 
             @Override
