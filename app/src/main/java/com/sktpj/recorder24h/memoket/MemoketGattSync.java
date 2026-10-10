@@ -12,6 +12,8 @@ import android.bluetooth.BluetoothManager;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 
 import java.util.ArrayDeque;
 import java.util.Arrays;
@@ -27,6 +29,9 @@ public final class MemoketGattSync {
     public static final UUID RESPONSE = UUID.fromString("a1b2c303-4f5c-6e7d-df23-ab12cd34ef56");
     private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
     private static final long TIMEOUT_SECONDS = 120;
+    private static final int REQUESTED_MTU = 513;
+    private static final int MIN_DATA_MTU = 488;
+    private static final long DATA_QUIET_MS = 250;
 
     private final Context context;
     private final String address;
@@ -34,6 +39,10 @@ public final class MemoketGattSync {
     private final MemoketSessionProtocol session = new MemoketSessionProtocol();
     private final CountDownLatch finished = new CountDownLatch(1);
     private final Deque<byte[]> commands = new ArrayDeque<>();
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable metadataProbe = () -> {
+        if (protocol.shouldRequestMetadata()) queue(MemoketTransfer.metadataCommand());
+    };
     private BluetoothGatt gatt;
     private BluetoothGattCharacteristic commandCharacteristic;
     private BluetoothGattCharacteristic dataCharacteristic;
@@ -41,6 +50,7 @@ public final class MemoketGattSync {
     private int notifyStep = 0;
     private boolean busy;
     private volatile String error;
+    private byte[] lastCommand;
 
     public MemoketGattSync(Context context, String address) {
         this.context = context.getApplicationContext();
@@ -64,6 +74,7 @@ public final class MemoketGattSync {
             if (error != null) throw new IllegalStateException(error);
             return protocol.completedCount();
         } finally {
+            handler.removeCallbacks(metadataProbe);
             if (gatt != null) {
                 try { gatt.disconnect(); } catch (Exception ignored) { }
                 gatt.close();
@@ -79,11 +90,20 @@ public final class MemoketGattSync {
                 return;
             }
             if (newState == android.bluetooth.BluetoothProfile.STATE_CONNECTED) {
-                if (!connection.discoverServices()) fail("GATT service discovery failed");
+                if (!connection.requestMtu(REQUESTED_MTU)) fail("Memoket MTU request rejected");
             } else if (newState == android.bluetooth.BluetoothProfile.STATE_DISCONNECTED) {
                 if (!protocol.isDone()) fail("Gem disconnected before transfer completed");
                 else finished.countDown();
             }
+        }
+
+        @Override
+        public void onMtuChanged(BluetoothGatt connection, int mtu, int status) {
+            if (status != BluetoothGatt.GATT_SUCCESS || mtu < MIN_DATA_MTU) {
+                fail("Memoket MTU negotiation failed status=" + status + " mtu=" + mtu);
+                return;
+            }
+            if (!connection.discoverServices()) fail("GATT service discovery failed");
         }
 
         @Override
@@ -119,7 +139,7 @@ public final class MemoketGattSync {
         @Override
         public void onCharacteristicWrite(BluetoothGatt connection, BluetoothGattCharacteristic characteristic, int status) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                fail("Memoket command write failed " + status);
+                fail("Memoket command write failed status=" + status + " command=" + hex(lastCommand));
                 return;
             }
             synchronized (MemoketGattSync.this) {
@@ -158,7 +178,9 @@ public final class MemoketGattSync {
     private void handleNotification(UUID uuid, byte[] value) {
         try {
             if (uuid.equals(DATA)) {
-                protocol.onData(value);
+                byte[] next = protocol.onData(value);
+                if (next != null) queue(next);
+                if (protocol.shouldRequestMetadata()) scheduleMetadata(DATA_QUIET_MS);
             } else if (uuid.equals(RESPONSE)) {
                 byte[] next;
                 if (!session.isReady()) {
@@ -166,6 +188,9 @@ public final class MemoketGattSync {
                     if (next == null && session.isReady()) next = MemoketTransfer.initialCommand();
                 } else {
                     next = protocol.onControl(value);
+                    if (isShortMetadataStatus(value) && protocol.shouldRequestMetadata()) {
+                        scheduleMetadata(300);
+                    }
                 }
                 if (next != null) queue(next);
                 if (protocol.isDone()) finished.countDown();
@@ -173,6 +198,15 @@ public final class MemoketGattSync {
         } catch (Exception cause) {
             fail(cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage());
         }
+    }
+
+    private void scheduleMetadata(long delayMs) {
+        handler.removeCallbacks(metadataProbe);
+        handler.postDelayed(metadataProbe, delayMs);
+    }
+
+    private static boolean isShortMetadataStatus(byte[] value) {
+        return value != null && value.length <= 4 && value.length > 0 && (value[0] & 0xff) == 2;
     }
 
     private synchronized void queue(byte[] bytes) {
@@ -183,17 +217,26 @@ public final class MemoketGattSync {
     private void sendNext() {
         if (busy || commands.isEmpty() || gatt == null || commandCharacteristic == null) return;
         byte[] command = commands.removeFirst();
+        lastCommand = Arrays.copyOf(command, command.length);
         busy = true;
         commandCharacteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
         commandCharacteristic.setValue(command);
         if (!gatt.writeCharacteristic(commandCharacteristic)) {
             busy = false;
-            fail("Memoket command not accepted");
+            fail("Memoket command not accepted command=" + hex(command));
         }
     }
 
     private void fail(String message) {
+        handler.removeCallbacks(metadataProbe);
         if (error == null) error = message;
         finished.countDown();
+    }
+
+    private static String hex(byte[] bytes) {
+        if (bytes == null) return "";
+        StringBuilder out = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) out.append(String.format("%02x", b & 0xff));
+        return out.toString();
     }
 }
