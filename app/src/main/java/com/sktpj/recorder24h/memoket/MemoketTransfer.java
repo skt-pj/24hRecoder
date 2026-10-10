@@ -176,6 +176,12 @@ public final class MemoketTransfer {
 
     public synchronized boolean isDone() { return state == State.DONE; }
     public synchronized int completedCount() { return completedCount; }
+    public synchronized String debugState() { return state.name(); }
+    public synchronized String debugFileName() { return name == null ? "" : name; }
+    public synchronized long debugExpectedSize() { return expectedSize; }
+    public synchronized String debugExpectedCrcHex() {
+        return expectedCrc < 0 ? "" : Long.toHexString(expectedCrc);
+    }
 
     private byte[] finalizeIfComplete() {
         if (expectedSize <= 0 || buffer == null || buffer.size() < expectedSize) return null;
