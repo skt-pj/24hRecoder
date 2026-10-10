@@ -75,7 +75,7 @@ public final class MemoketRemoteRecordingService extends Service {
         String action = intent == null ? null : intent.getAction();
         if (ACTION_STOP_RECORDING.equals(action)) {
             stopPending = true;
-            updateState(r\s�-");
+            updateState("停止処理中");
             if (gatt != null && data != null) beginStopSequence();
             return START_NOT_STICKY;
         }
@@ -83,23 +83,23 @@ public final class MemoketRemoteRecordingService extends Service {
 
         if (Build.VERSION.SDK_INT >= 31 &&
                 checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            finishWithError("Bluetooth��)p|B�~[�");
+            finishWithError("Bluetooth接続権限がありません");
             return START_NOT_STICKY;
         }
         String address = MemoketSettings.address(this);
         if (address.isEmpty()) {
-            finishWithError("Memoket Ge}�x�u�vt~{�");
+            finishWithError("Memoket Gemが選択されていません");
             return START_NOT_STICKY;
         }
 
         recordingStartPending = true;
-        startForegroundCompat(buildNotification("Gem{��-"));
-        updateState("��-");
+        startForegroundCompat(buildNotification("Gemへ接続中"));
+        updateState("接続中");
 
         BluetoothManager manager = getSystemService(BluetoothManager.class);
         BluetoothAdapter adapter = manager == null ? null : manager.getAdapter();
         if (adapter == null || !adapter.isEnabled()) {
-            finishWithError("BluetootxLs�gY");
+            finishWithError("Bluetoothが無効です");
             return START_NOT_STICKY;
         }
         new Thread(() -> {
@@ -109,12 +109,12 @@ public final class MemoketRemoteRecordingService extends Service {
                 BluetoothDevice device = adapter.getRemoteDevice(address);
                 BluetoothGatt connection = device.connectGatt(this, false, callback, BluetoothDevice.TRANSPORT_LE);
                 if (connection == null) {
-                    finishWithError("Ge}{��wM~{�ww_");
+                    finishWithError("Gemへ接続できませんでした");
                     return;
                 }
                 gatt = connection;
             } catch (Exception error) {
-                finishWithError(error.getMessage() == null ? "Ge}{��wM~{�ww_" : error.getMessage());
+                finishWithError(error.getMessage() == null ? "Gemへ接続できませんでした" : error.getMessage());
             }
         }, "memoket-connect").start();
         return START_NOT_STICKY;
@@ -137,41 +137,41 @@ public final class MemoketRemoteRecordingService extends Service {
         @Override
         public void onConnectionStateChange(BluetoothGatt connection, int status, int newState) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                finishWithError("GATT�����: " + status);
+                finishWithError("GATT接続エラー: " + status);
                 return;
             }
             if (newState == android.bluetooth.BluetoothProfile.STATE_CONNECTED) {
-                if (!connection.requestMtu(REQUESTED_MTU)) finishWithError("Memoket MT݁r���wM~{�");
+                if (!connection.requestMtu(REQUESTED_MTU)) finishWithError("Memoket MTU要求を開始できません");
             } else if (newState == android.bluetooth.BluetoothProfile.STATE_DISCONNECTED && !stopPending) {
-                finishWithError("Ge}xn��L7�~w_");
+                finishWithError("Gemとの接続が切れました");
             }
         }
 
         @Override
         public void onMtuChanged(BluetoothGatt connection, int mtu, int status) {
             if (status != BluetoothGatt.GATT_SUCCESS || mtu < MIN_DATA_MTU) {
-                finishWithError("Memoket MT_�	uW: status=" + status + " mtu=" + mtu);
+                finishWithError("Memoket MTU交渉失敗: status=" + status + " mtu=" + mtu);
                 return;
             }
-            if (!connection.discoverServices()) finishWithError("GATT�����"���w}~{�");
+            if (!connection.discoverServices()) finishWithError("GATTサービス探索を開始できません");
         }
 
         @Override
         public void onServicesDiscovered(BluetoothGatt connection, int status) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                finishWithError("Memoket����{1W: " + status);
+                finishWithError("Memoketサービス探索失敗: " + status);
                 return;
             }
             BluetoothGattService service = connection.getService(MemoketGattSync.SERVICE);
             if (service == null) {
-                finishWithError("Memoket GATT��ӹ͋t{�~{�");
+                finishWithError("Memoket GATTサービスが見つかりません");
                 return;
             }
             data = service.getCharacteristic(MemoketGattSync.DATA);
             control = service.getCharacteristic(MemoketGattSync.CONTROL);
             response = service.getCharacteristic(MemoketGattSync.RESPONSE);
             if (data == null || control == null || response == null) {
-                finishWithError("Memoket GATT characteristisN�wft~Y");
+                finishWithError("Memoket GATT characteristicが不足しています");
                 return;
             }
             enableInitialNotifications();
@@ -180,7 +180,7 @@ public final class MemoketRemoteRecordingService extends Service {
         @Override
         public void onDescriptorWrite(BluetoothGatt connection, BluetoothGattDescriptor descriptor, int status) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                finishWithError(���kuwW~w_: " + status);
+                finishWithError("通知設定に失敗しました: " + status);
                 return;
             }
             if (stopPending && stopNotifyStep > 0) {
@@ -193,7 +193,7 @@ public final class MemoketRemoteRecordingService extends Service {
         @Override
         public void onCharacteristicWrite(BluetoothGatt connection, BluetoothGattCharacteristic characteristic, int status) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                finishWithError("Gem����O�{uWw~W_: status=" + status + " command=" + hex(lastCommand));
+                finishWithError("Gemコマンド送信に失敗しました: status=" + status + " command=" + hex(lastCommand));
                 return;
             }
             synchronized (MemoketRemoteRecordingService.this) {
@@ -246,8 +246,8 @@ public final class MemoketRemoteRecordingService extends Service {
             if (!recordingActive && value != null && value.length == 2 &&
                     value[0] == 0x03 && (value[1] & 0xff) == 0xff) {
                 recordingActive = true;
-                updateState(�2�-");
-                updateNotification("Memoket Gem ��-");
+                updateState("録音中");
+                updateNotification("Memoket Gem 録音中");
                 log("MEMOKET_REMOTE_RECORDING_STARTED", null);
                 return;
             }
@@ -259,12 +259,12 @@ public final class MemoketRemoteRecordingService extends Service {
             if (next != null) queue(next);
             if (transfer.isDone() && stopPending) {
                 int count = transfer.completedCount();
-                MemoketSettings.saveResult(this, count + "��2��ַw~w_");
+                MemoketSettings.saveResult(this, count + "件の録音を取得しました");
                 log("MEMOKET_REMOTE_RECORDING_STOPPED",
                         new JSONObject().put("downloadedFiles", count));
                 stopPending = false;
                 recordingActive = false;
-                updateState(r\b");
+                updateState("停止");
                 stopForeground(STOP_FOREGROUND_REMOVE);
                 stopSelf();
             }
@@ -275,7 +275,7 @@ public final class MemoketRemoteRecordingService extends Service {
 
     private void beginStopSequence() {
         if (!recordingActive || data == null) {
-            finishWithError("Ge���=o��|B�~[�");
+            finishWithError("Gem録音中の接続がありません");
             return;
         }
         stopNotifyStep = 1;
@@ -297,18 +297,18 @@ public final class MemoketRemoteRecordingService extends Service {
     private void setNotification(BluetoothGattCharacteristic characteristic, boolean enabled) {
         if (gatt == null || characteristic == null ||
                 !gatt.setCharacteristicNotification(characteristic, enabled)) {
-            finishWithError("Gem��{1ww~w_");
+            finishWithError("Gem通知切替に失敗しました");
             return;
         }
         BluetoothGattDescriptor descriptor = characteristic.getDescriptor(CCCD);
         if (descriptor == null) {
-            finishWithError("Gem�descriptor|r�~{�");
+            finishWithError("Gem通知descriptorがありません");
             return;
         }
         descriptor.setValue(enabled
                 ? BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                 : BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE);
-        if (!gatt.writeDescriptor(descriptor)) finishWithError("Gem�descriptor��kuwW~w_");
+        if (!gatt.writeDescriptor(descriptor)) finishWithError("Gem通知descriptor書込に失敗しました");
     }
 
     private void scheduleMetadata(long delayMs) {
@@ -334,7 +334,7 @@ public final class MemoketRemoteRecordingService extends Service {
         control.setValue(command);
         if (!gatt.writeCharacteristic(control)) {
             commandBusy = false;
-            finishWithError("Ge}������w}~{�gw_ command=" + hex(command));
+            finishWithError("Gemコマンドを受理できませんでした command=" + hex(command));
         }
     }
 
@@ -345,8 +345,8 @@ public final class MemoketRemoteRecordingService extends Service {
     }
 
     private void finishWithError(String message) {
-        MemoketSettings.saveResult(this, "Ge�2��\uW: " + message);
-        updateState("���");
+        MemoketSettings.saveResult(this, "Gem録音操作失敗: " + message);
+        updateState("エラー");
         try { log("MEMOKET_REMOTE_RECORDING_FAILED", new JSONObject().put("error", message)); }
         catch (Exception ignored) { }
         stopForeground(STOP_FOREGROUND_REMOVE);
@@ -380,7 +380,7 @@ public final class MemoketRemoteRecordingService extends Service {
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) {
             manager.createNotificationChannel(new NotificationChannel(
-                    CHANNEL_ID, "Memoket Gem ��", NotificationManager.IMPORTANCE_LOW));
+                    CHANNEL_ID, "Memoket Gem 録音", NotificationManager.IMPORTANCE_LOW));
         }
     }
 
