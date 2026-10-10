@@ -281,7 +281,6 @@ private fun MenuScreen(modifier: Modifier, onStart: () -> Unit, onStop: () -> Un
                 }
             }
         }
-        item { MenuCard("公式アプリHCI採取", "本体の録音操作を公式アプリの通信ログで調査", onOfficial) }
         item { MenuCard("録音開始テスト", "開始時の振動と録音成立を調査", onStart) }
         item { MenuCard("録音停止テスト", "BLE候補を比較し録音ファイルの長さで検証", onStop) }
         item { MenuCard("ファイル取得テスト", "一覧・メタデータ・ダウンロードを確認", onFile) }
