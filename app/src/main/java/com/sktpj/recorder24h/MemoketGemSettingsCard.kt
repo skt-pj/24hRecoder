@@ -260,11 +260,6 @@ fun MemoketGemSettingsCard() {
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("停止確認後に保存済み録音を取得（過去分含む）") }
                 Text("端末内保存: ${fileCount}件 / 最新結果: $result")
-                Text(
-                    "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
                 Button(
                     enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中" && remoteState != "ファイル取得中" && remoteState != "停止操作済・取得待ち" && remoteState != "Gem本体停止待ち",
                     onClick = {
