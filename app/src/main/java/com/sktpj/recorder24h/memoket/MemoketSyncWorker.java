@@ -39,7 +39,8 @@ public final class MemoketSyncWorker extends Worker {
                     new JSONObject()
                             .put("sessionId", sync.sessionId())
                             .put("manual", manual)
-                            .put("attempt", getRunAttemptCount()));
+                            .put("attempt", getRunAttemptCount())
+                            .put("workId", getId().toString()));
             int files = sync.sync();
             String message = files + "件の録音を取得しました";
             MemoketSettings.saveResult(context, message);
@@ -47,7 +48,8 @@ public final class MemoketSyncWorker extends Worker {
                     .put("fileCount", files)
                     .put("sessionId", sync.sessionId())
                     .put("manual", manual)
-                    .put("attempt", getRunAttemptCount());
+                    .put("attempt", getRunAttemptCount())
+                    .put("workId", getId().toString());
             AppLogger.event(context, "MEMOKET_SYNC_COMPLETED", details);
             return Result.success();
         } catch (Exception exception) {
@@ -57,7 +59,8 @@ public final class MemoketSyncWorker extends Worker {
                 JSONObject failed = new JSONObject()
                         .put("error", message)
                         .put("attempt", getRunAttemptCount())
-                        .put("manual", manual);
+                        .put("manual", manual)
+                        .put("workId", getId().toString());
                 if (sync != null) failed.put("sessionId", sync.sessionId());
                 AppLogger.event(context, "MEMOKET_SYNC_FAILED", failed);
             } catch (Exception ignored) { }
