@@ -47,6 +47,7 @@ public final class MemoketRemoteRecordingService extends Service {
     private final MemoketSessionProtocol session = new MemoketSessionProtocol();
     private MemoketDebugTrace trace;
     private MemoketTransfer transfer;
+    private MemoketStopTransferGuard stopGuard;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable metadataProbe = () -> {
         if (transfer != null && transfer.shouldRequestMetadata()) queue(MemoketTransfer.metadataCommand());
@@ -285,6 +286,20 @@ public final class MemoketRemoteRecordingService extends Service {
                 armStopTimeout();
                 trace.data(value, transfer.debugState(), transfer.bufferedBytes());
                 byte[] next = transfer.onData(value);
+                if (stopGuard != null &&
+                        stopGuard.exceedsRecordedWindow(transfer.bufferedBytes())) {
+                    trace.phase("STOP_NOT_CONFIRMED_EXCESS_AUDIO",
+                            new JSONObject()
+                                    .put("recordingDurationMs", stopGuard.recordedDurationMs())
+                                    .put("receivedBytes", transfer.bufferedBytes())
+                                    .put("safeLimitBytes", stopGuard.limitBytes())
+                                    .put("fileName", transfer.debugFileName()));
+                    finishWithError("録音停止を確認できません。停止前の録音は約"
+                            + (stopGuard.recordedDurationMs() / 1000L)
+                            + "秒ですが、受信した音声が" + transfer.bufferedBytes()
+                            + "バイトに達しました。Gem本体の赤LEDを確認し、点灯中は本体の録音ボタンを1回押してください。対象ファイルはGemから削除していません");
+                    return;
+                }
                 trace.transferState(transfer, "DATA_RECEIVED");
                 if (next != null) queue(next);
                 if (transfer.shouldRequestMetadata()) scheduleMetadata(DATA_QUIET_MS);
@@ -353,6 +368,7 @@ public final class MemoketRemoteRecordingService extends Service {
         long startedAt = MemoketSettings.recordingStartedAt(this);
         String zoneId = MemoketSettings.recordingStartedZone(this);
         MemoketRecordingWindow recording = new MemoketRecordingWindow(startedAt, stopRequestedAtMs, zoneId);
+        stopGuard = new MemoketStopTransferGuard(startedAt, stopRequestedAtMs);
         stopNotifyStep = 0;
         // DATA notification OFF -> ON is only a BLE signal. Do not call it
         // recording/deletion complete before this recording is saved and ACKed.
@@ -391,6 +407,7 @@ public final class MemoketRemoteRecordingService extends Service {
         handler.removeCallbacks(stopTransferTimeout);
         updateState("停止");
         String filename = transfer.debugFileName();
+        stopGuard = null;
         try {
             JSONObject details = new JSONObject()
                     .put("fileName", filename)
@@ -465,6 +482,7 @@ public final class MemoketRemoteRecordingService extends Service {
 
     private void finishWithError(String message) {
         handler.removeCallbacks(stopTransferTimeout);
+        stopGuard = null;
         if (trace != null) {
             trace.transferState(transfer, "FAILURE");
             trace.failure(message, null);

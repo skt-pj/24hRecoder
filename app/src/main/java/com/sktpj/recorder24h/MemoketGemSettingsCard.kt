@@ -223,7 +223,7 @@ fun MemoketGemSettingsCard() {
                     ) { Text("Gem録音停止") }
                 }
                 Text("Gem録音状態: $remoteState")
-                Text("録音停止ボタンは、その録音の確定・1ファイル取得・Gemでの確認応答までを実行します。古いファイルは自動削除しません。")
+                Text("録音停止のBLE通知切替だけでは、Gem本体の録音停止は確認できません。録音時間に対して音声が増え続けた場合は取得を中止し、未保存ファイルへの削除通知は送りません。")
                 Button(
                     enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中" && remoteState != "ファイル取得中",
                     onClick = {
