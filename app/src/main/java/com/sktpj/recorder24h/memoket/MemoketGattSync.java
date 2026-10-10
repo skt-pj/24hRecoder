@@ -38,9 +38,7 @@ public final class MemoketGattSync {
     private final CountDownLatch finished = new CountDownLatch(1);
     private final Deque<byte[]> commands = new ArrayDeque<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final Runnable metadataProbe = () -> {
-        if (protocol.shouldRequestMetadata()) queue(MemoketTransfer.metadataCommand());
-    };
+    private final Runnable metadataProbe;
     private BluetoothGatt gatt;
     private BluetoothGattCharacteristic commandCharacteristic;
     private BluetoothGattCharacteristic dataCharacteristic;
@@ -54,6 +52,9 @@ public final class MemoketGattSync {
         this.context = context.getApplicationContext();
         this.address = address;
         this.protocol = new MemoketTransfer(new MemoketRecordingStore(this.context)::persist);
+        this.metadataProbe = () -> {
+            if (protocol.shouldRequestMetadata()) queue(MemoketTransfer.metadataCommand());
+        };
     }
 
     public int sync() throws Exception {
