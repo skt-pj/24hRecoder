@@ -52,11 +52,19 @@ public final class MemoketGattSync {
     public MemoketGattSync(Context context, String address) {
         this.context = context.getApplicationContext();
         this.address = address;
-        this.protocol = new MemoketTransfer(new MemoketRecordingStore(this.context)::persist);
         this.trace = new MemoketDebugTrace(this.context, "SYNC_WORKER");
+        MemoketRecordingStore store = new MemoketRecordingStore(this.context);
+        this.protocol = new MemoketTransfer((name, payload, crc) -> {
+            store.persist(name, payload, crc);
+            trace.filePersisted(name, payload.length, crc);
+        });
         this.metadataProbe = () -> {
             if (protocol.shouldRequestMetadata()) queue(MemoketTransfer.metadataCommand());
         };
+    }
+
+    public String sessionId() {
+        return trace.sessionId();
     }
 
     public int sync() throws Exception {
