@@ -9,6 +9,8 @@ import android.os.Handler
 import android.os.Looper
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -57,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import com.sktpj.recorder24h.memoket.MemoketSettings
 import com.sktpj.recorder24h.memoket.MemoketTestEngine
 import com.sktpj.recorder24h.memoket.MemoketTestStore
+import com.sktpj.recorder24h.memoket.MemoketStopAudioVerifier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -141,6 +144,30 @@ private fun TestApp(onClose: () -> Unit) {
     var vibration by remember { mutableStateOf(-1) }
     var physicalReady by remember { mutableStateOf(false) }
     var stopObserved by remember { mutableStateOf("UNSET") }
+    var verificationError by remember { mutableStateOf("") }
+    val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            try {
+                val original = result
+                if (original != null && original.optString("caseId").startsWith("STOP_")) {
+                    val verified = MemoketStopAudioVerifier.verify(context, uri, original)
+                    result = JSONObject(original.toString()).apply {
+                        put("audioFile", verified.optString("fileName"))
+                        put("audioDurationMs", verified.optLong("durationMs"))
+                        put("audioBytes", verified.optLong("fileBytes"))
+                        put("audioFileCrc32", verified.optString("localFileCrc32"))
+                        put("fileMatchesTrial", verified.optBoolean("fileMatchesTrial"))
+                        put("stopInference", verified.optString("inference"))
+                        put("audioVerification", verified)
+                    }
+                    MemoketTestStore.save(context, result)
+                    verificationError = ""
+                }
+            } catch (error: Exception) {
+                verificationError = error.message ?: "音声ファイルを解析できませんでした"
+            }
+        }
+    }
 
     fun reloadHistory() { history = toList(MemoketTestStore.history(context)) }
 
@@ -154,6 +181,7 @@ private fun TestApp(onClose: () -> Unit) {
         steps = emptyList()
         vibration = -1
         stopObserved = "UNSET"
+        verificationError = ""
         screen = Screen.RUNNING
         scope.launch {
             val r = withContext(Dispatchers.IO) {
@@ -217,7 +245,7 @@ private fun TestApp(onClose: () -> Unit) {
             )
             Screen.RUNNING -> RunningScreen(Modifier.padding(pad), selected, steps)
             Screen.RESULT -> ResultScreen(
-                Modifier.padding(pad), selected, result, vibration, stopObserved,
+                Modifier.padding(pad), selected, result, vibration, stopObserved, verificationError,
                 { value ->
                     vibration = value
                     val id = result?.optString("id").orEmpty()
@@ -229,6 +257,7 @@ private fun TestApp(onClose: () -> Unit) {
                     val id = result?.optString("id").orEmpty()
                     if (id.isNotEmpty()) MemoketTestStore.updateStopObservation(context, id, value)
                 },
+                { audioPicker.launch(arrayOf("*/*")) },
                 { reloadHistory(); screen = Screen.HISTORY },
                 { screen = Screen.MENU }
             )
@@ -291,7 +320,7 @@ private fun StopCaseScreen(modifier: Modifier, cases: List<CaseUi>, selected: Ca
     onSelect: (CaseUi) -> Unit, ready: Boolean, onReady: (Boolean) -> Unit, onRun: () -> Unit) {
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { Text("03で録音開始→5秒待機→停止仮説1種類→観測・切断。停止は未確認です。ファイル取得/05 ACKは行いません。Gemが録音中なら本体ボタンで停止してください。", color = MaterialTheme.colorScheme.error) }
+        item { Text("03で録音開始→約5秒後に停止候補を1回送信→10秒観測→切断。録音が続けばGem本体ボタンで停止し、ファイルを取得して長さを検証します。テスト自体はファイル取得・削除ACKを行いません。", color = MaterialTheme.colorScheme.error) }
         items(cases) { c -> CaseCard(c, selected.id == c.id) { onSelect(c) } }
         item {
             Row {
@@ -352,14 +381,14 @@ private fun RunningScreen(modifier: Modifier, selected: CaseUi, steps: List<Step
 }
 
 @Composable
-private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObject?, vibration: Int, stopObserved: String, onVibration: (Int) -> Unit, onStopObserved: (String) -> Unit, onHistory: () -> Unit, onMenu: () -> Unit) {
+private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObject?, vibration: Int, stopObserved: String, verificationError: String, onVibration: (Int) -> Unit, onStopObserved: (String) -> Unit, onImportFile: () -> Unit, onHistory: () -> Unit, onMenu: () -> Unit) {
     val ok = result?.optString("status") == "COMPLETED"
     val context = LocalContext.current
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Card(colors = CardDefaults.cardColors(containerColor = if (ok) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(if (ok) "通信が終了しました（停止未判定）" else "テストに失敗しました", fontWeight = FontWeight.Bold)
+                    Text(if (ok) "BLE候補を実行しました（音声検証待ち）" else "BLEテストに失敗しました", fontWeight = FontWeight.Bold)
                     Text(selected.title)
                     if (!ok) Text(result?.optString("error").orEmpty())
                 }
@@ -381,7 +410,7 @@ private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObjec
                 }
             }
         }
-        if (selected.id.startsWith("START_") || selected.id.startsWith("STOP_")) {
+        if (selected.id.startsWith("START_")) {
             item {
                 Card {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -401,11 +430,21 @@ private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObjec
             item {
                 Card {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Gem本体の目視結果", fontWeight = FontWeight.Bold)
-                        Text("赤LEDが点灯している場合は、本体ボタンを1回押して停止してください。")
-                        FilterChip(selected = stopObserved == "STOPPED", onClick = { onStopObserved("STOPPED") }, label = { Text("消灯・停止") })
-                        FilterChip(selected = stopObserved == "RECORDING", onClick = { onStopObserved("RECORDING") }, label = { Text("点灯・継続") })
-                        FilterChip(selected = stopObserved == "UNKNOWN", onClick = { onStopObserved("UNKNOWN") }, label = { Text("不明") })
+                        Text("音声ファイルによる停止検証", fontWeight = FontWeight.Bold)
+                        Text("候補操作後も10秒観測しています。Gemが録音中なら本体ボタンで停止し、該当する録音を公式アプリまたは24hRecoderで保存・書き出してください。")
+                        Text("約5秒の音声なら候補時の停止と整合、約15秒以上なら録音継続と整合します。どちらも別ファイルの混入・再録音がないか確認が必要です。")
+                        Button(onClick = onImportFile, modifier = Modifier.fillMaxWidth()) {
+                            Text("今回の録音ファイルを選択して検証")
+                        }
+                        if (verificationError.isNotEmpty()) Text("検証エラー: " + verificationError, color = MaterialTheme.colorScheme.error)
+                        val info = result?.optJSONObject("audioVerification")
+                        if (info != null) {
+                            Text("読み取った長さ: " + String.format(Locale.JAPAN, "%.2f秒", info.optLong("durationMs") / 1000.0))
+                            Text("候補前: " + String.format(Locale.JAPAN, "%.2f秒", info.optLong("candidateElapsedMs") / 1000.0))
+                            Text("観測終了まで: " + String.format(Locale.JAPAN, "%.2f秒", info.optLong("observedElapsedMs") / 1000.0))
+                            Text("ファイル名・時刻照合: " + if (info.optBoolean("fileMatchesTrial")) "一致" else "未一致／判定不能")
+                            Text("比較結果: " + info.optString("inference"))
+                        }
                     }
                 }
             }
@@ -432,7 +471,9 @@ private fun HistoryScreen(modifier: Modifier, history: List<JSONObject>) {
                     Text(labelFor(row.optString("caseId")), fontWeight = FontWeight.Bold)
                     Text(formatTime(row.optLong("startedAtMs")))
                     val vib = row.optInt("vibration", -1)
-                    Text("振動: " + if (vib < 0) "未入力" else if (vib >= 3) "その他" else vib.toString() + "回")
+                    if (!row.optString("caseId").startsWith("STOP_")) {
+                        Text("振動: " + if (vib < 0) "未入力" else if (vib >= 3) "その他" else vib.toString() + "回")
+                    }
                     val duration = row.optLong("audioDurationMs", 0L)
                     if (duration > 0) Text(String.format(Locale.JAPAN, "録音: %.1f秒", duration / 1000.0))
                     val inference = row.optString("stopInference")

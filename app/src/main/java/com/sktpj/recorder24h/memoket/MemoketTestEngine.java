@@ -176,27 +176,25 @@ public final class MemoketTestEngine {
         s.enableData(true);
         s.enableResponse(true);
         s.handshakeStandard();
-        progress(listener, "録音開始", "03を送信します。開始時の赤LED・振動を確認してください", true);
+        progress(listener, "録音開始", "03を送信し、5秒録音します", false);
         long startAt = System.currentTimeMillis();
         Event started = s.exchange(new byte[]{0x03}, 0x03, 4_000);
         result.put("startCommandAtMs", startAt);
         result.put("startResponseHex", hex(started.value));
         result.put("startAckIsStopProof", false);
         Thread.sleep(5_000);
-        progress(listener, "停止候補", stopLabel(caseId) + "。LED・振動を観察してください", true);
+        progress(listener, "停止候補", stopLabel(caseId) + " を1回実行します", false);
         result.put("candidateAtMs", System.currentTimeMillis());
         result.put("candidateLabel", stopLabel(caseId));
         executeStopCandidate(s, caseId);
-        if (!"STOP_DISCONNECT".equals(caseId) && !"STOP_OFF_DISCONNECT".equals(caseId)) {
-            progress(listener, "3秒観測", "赤LEDが点灯したままならテスト後に本体ボタンで停止してください", false);
-            Thread.sleep(3_000);
-        }
+        progress(listener, "10秒間観測", "この間、候補以外のBLEコマンドは送りません", false);
+        Thread.sleep(10_000);
         result.put("observationEndedAtMs", System.currentTimeMillis());
-        result.put("stopInference", "未判定：BLE書込や03ffは停止の証明ではありません");
+        result.put("stopInference", "録音ファイルの検証待ち：BLE応答だけでは停止を証明できません");
         result.put("stopObserved", "UNSET");
         result.put("downloadedFiles", 0);
         result.put("gemFileAckSent", false);
-        progress(listener, "操作終了", "ファイル取得・05 ACKは未実施。Gemが録音中なら本体ボタンで停止してください", false);
+        progress(listener, "観測終了", "Gemが録音中なら本体ボタンで停止後、今回の録音ファイルを取り込み、結果画面で長さを検証してください", false);
     }
 
     private static void executeStopCandidate(Session s, String id) throws Exception {
