@@ -384,13 +384,14 @@ private fun RunningScreen(modifier: Modifier, selected: CaseUi, steps: List<Step
 @Composable
 private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObject?, vibration: Int, stopObserved: String, verificationError: String, onVibration: (Int) -> Unit, onStopObserved: (String) -> Unit, onImportFile: () -> Unit, onHistory: () -> Unit, onMenu: () -> Unit) {
     val batch = selected.id == "BATCH_ALL"
-    val ok = result?.optString("status") == "COMPLETED" || (batch && result?.optString("status") == "PARTIAL")
+    val ok = result?.optString("status") == "COMPLETED"
+    val savedButUnacked = result?.optString("status") == "SAVED_ACK_UNVERIFIED"
     val context = LocalContext.current
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Card(colors = CardDefaults.cardColors(containerColor = if (ok) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(if (batch && ok) "停止済み音声1件の取得・CRC・保存・ACKが完了しました" else if (ok) "BLE候補を実行しました（音声検証待ち）" else "BLEテストに失敗しました", fontWeight = FontWeight.Bold)
+                    Text(if (batch && ok) "停止済み音声1件の取得・CRC・保存・ACKが完了しました" else if (savedButUnacked) "音声は端末保存済み／Gem完了ACK未確認" else if (ok) "音声取得が完了しました" else "BLEファイル取得が未完了です", fontWeight = FontWeight.Bold)
                     Text(selected.title)
                     if (!ok) Text(result?.optString("error").orEmpty())
                 }
@@ -420,7 +421,8 @@ private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObjec
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("一括診断結果", fontWeight = FontWeight.Bold)
                         Text("停止候補: 実行しない（未検証コマンド）")
-                        Text("ファイル取得: ${result?.optInt("downloadedFiles", 0) ?: 0}件")
+                        Text("端末への保存: ${result?.optInt("downloadedFiles", 0) ?: 0}件")
+                        Text("Gem完了ACK: " + if (result?.optBoolean("gemAckAccepted") == true) "確認済み" else "未確認")
                         Text("失敗: ${result?.optInt("failedCases", 0) ?: 0}件")
                         Text("停止確認: " + if (result?.optBoolean("physicalStopUserConfirmed") == true) "本体停止をユーザー確認" else "未確認")
                         if (result?.optBoolean("requiresPhysicalStop") == true) {
