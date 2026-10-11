@@ -187,20 +187,30 @@ public final class MemoketTestEngine {
             file.put("finishedAtMs", System.currentTimeMillis());
             report.put("status", "COMPLETED");
             report.put("fileAcquisitionVerified", true);
+            report.put("fileLocallySaved", true);
+            report.put("failedCases", 0);
             report.put("downloadedFiles", downloaded);
             report.put("gemAckAccepted", true);
             progress(listener, "取得完了", "音声1件のCRC・永続保存・Gem ACKを確認しました", false);
         } catch (Exception error) {
             String why = error.getMessage() == null ? error.toString() : error.getMessage();
+            // A file may be durably saved before the Gem's 05 ACK fails.
+            // Preserve that fact instead of falsely claiming zero local files.
+            downloaded = session == null ? 0 : session.savedFileNames.size();
             try {
-                report.put("status", CANCEL_REQUESTED.get() ? "CANCELLED" : "FAILED");
+                report.put("status", CANCEL_REQUESTED.get() ? "CANCELLED"
+                        : downloaded > 0 ? "SAVED_ACK_UNVERIFIED" : "FAILED");
                 report.put("error", why);
                 report.put("downloadedFiles", downloaded);
+                report.put("fileLocallySaved", downloaded > 0);
+                report.put("failedCases", 1);
                 report.put("fileAcquisitionVerified", false);
                 report.put("gemAckAccepted", false);
                 if (cases.length() > 0) {
                     JSONObject file = cases.optJSONObject(0);
-                    file.put("status", CANCEL_REQUESTED.get() ? "CANCELLED" : "FAILED");
+                    file.put("status", CANCEL_REQUESTED.get() ? "CANCELLED"
+                            : downloaded > 0 ? "SAVED_ACK_UNVERIFIED" : "FAILED");
+                    file.put("downloadedFiles", downloaded);
                     file.put("error", why);
                     file.put("finishedAtMs", System.currentTimeMillis());
                 }
