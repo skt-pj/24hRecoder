@@ -28,7 +28,8 @@ public final class MemoketGattSync {
     public static final UUID CONTROL = UUID.fromString("a1b2c302-4f5c-6e7d-df23-ab12cd34ef56");
     public static final UUID RESPONSE = UUID.fromString("a1b2c303-4f5c-6e7d-df23-ab12cd34ef56");
     private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
-    private static final long TIMEOUT_SECONDS = 120;
+    private static final long NO_ACTIVITY_STALL_MS = 60_000L;
+    private volatile long lastActivityAtMs = System.currentTimeMillis();
     private static final long DATA_QUIET_MS = 250;
 
     private final Context context;
@@ -89,7 +90,16 @@ public final class MemoketGattSync {
             trace.phase("GATT_CONNECT_REQUESTED");
             gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE);
             if (gatt == null) throw new IllegalStateException("Cannot open GATT connection");
-            if (!finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)) throw new IllegalStateException("Memoket sync timed out");
+            // No absolute download time limit. The Gem officially supports
+            // long recordings, so only a stalled connection should fail.
+            while (!finished.await(1, TimeUnit.SECONDS)) {
+                if (Thread.currentThread().isInterrupted()) {
+                    throw new InterruptedException("Memoket synchronization cancelled");
+                }
+                if (System.currentTimeMillis() - lastActivityAtMs > NO_ACTIVITY_STALL_MS) {
+                    throw new IllegalStateException("Memoket GATT通信が60秒以上進んでいません");
+                }
+            }
             if (error != null) throw new IllegalStateException(error);
             int count = protocol.completedCount();
             trace.completed(new org.json.JSONObject().put("completedCount", count));
@@ -106,6 +116,7 @@ public final class MemoketGattSync {
     private final BluetoothGattCallback callback = new BluetoothGattCallback() {
         @Override
         public void onConnectionStateChange(BluetoothGatt connection, int status, int newState) {
+            lastActivityAtMs = System.currentTimeMillis();
             trace.gattConnection(status, newState);
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 fail("GATT connection error " + status);
@@ -200,6 +211,7 @@ public final class MemoketGattSync {
     }
 
     private void handleNotification(UUID uuid, byte[] value) {
+        lastActivityAtMs = System.currentTimeMillis();
         try {
             if (uuid.equals(DATA)) {
                 trace.data(value, protocol.debugState(), protocol.bufferedBytes());

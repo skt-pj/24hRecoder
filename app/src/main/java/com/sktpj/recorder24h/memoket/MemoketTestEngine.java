@@ -30,6 +30,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class MemoketTestEngine {
     public interface ProgressListener {
@@ -38,16 +39,26 @@ public final class MemoketTestEngine {
 
     public static final UUID EXTRA5 = UUID.fromString("a1b2c305-4f5c-6e7d-df23-ab12cd34ef56");
     public static final UUID EXTRA6 = UUID.fromString("a1b2c306-4f5c-6e7d-df23-ab12cd34ef56");
+    private static final AtomicBoolean BATCH_RUNNING = new AtomicBoolean(false);
+    private static final AtomicBoolean CANCEL_REQUESTED = new AtomicBoolean(false);
+
+    /** User cancellation, never a fixed transfer-duration limit. */
+    public static void cancelActiveTest() {
+        CANCEL_REQUESTED.set(true);
+    }
     private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
 
     private MemoketTestEngine() {}
 
-    public static JSONObject run(
-            Context context,
-            String caseId,
-            String requestedFile,
-            ProgressListener listener
-    ) {
+    /** No BLE operation without confirmed device stop. Legacy callers are denied. */
+    public static JSONObject run(Context context, String caseId, String requestedFile,
+            ProgressListener listener) {
+        return run(context, caseId, requestedFile, listener, false);
+    }
+
+    public static JSONObject run(Context context, String caseId, String requestedFile,
+            ProgressListener listener, boolean userConfirmedPhysicalStop) {
+        CANCEL_REQUESTED.set(false);
         long startedAt = System.currentTimeMillis();
         JSONObject result = new JSONObject();
         Session session = null;
@@ -57,7 +68,15 @@ public final class MemoketTestEngine {
             result.put("startedAtMs", startedAt);
             result.put("vibration", -1);
             result.put("status", "RUNNING");
-            progress(listener, "接続準備", "Gemへ接続しています", false);
+            result.put("physicalStopUserConfirmed", userConfirmedPhysicalStop);
+            if (!userConfirmedPhysicalStop) {
+                throw new IllegalStateException("Gem本体が停止したことを確認するまでBLE試験は実行できません");
+            }
+            if (!"FILE_ONE".equals(caseId)) {
+                throw new IllegalStateException("未検証の録音開始/停止候補と一覧だけの切断試験は無効です。"
+                        + "公式HCI由来の停止済みファイル1件取得だけを実行してください");
+            }
+            progress(listener, "接続準備", "Gem停止をユーザーが確認済み。ファイル1件のBLE転送を開始します", false);
 
             if (Build.VERSION.SDK_INT >= 31 &&
                     context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
@@ -66,20 +85,12 @@ public final class MemoketTestEngine {
             String address = MemoketSettings.address(context);
             if (address.isEmpty()) throw new IllegalStateException("Memoket Gemが選択されていません");
 
-            Set<String> before = localRawNames(context);
             session = new Session(context, address, result);
             session.connect();
-
-            if (caseId.startsWith("START_")) {
-                runStartCase(context, session, caseId, before, result, listener);
-            } else if (caseId.startsWith("STOP_")) {
-                runStopCase(context, session, caseId, before, result, listener);
-            } else if (caseId.startsWith("FILE_")) {
-                runFileCase(context, session, caseId, requestedFile, result, listener);
-            } else {
-                throw new IllegalArgumentException("Unknown Memoket test case: " + caseId);
+            runFileCase(context, session, "FILE_ONE", "", result, listener);
+            if (result.optInt("downloadedFiles", 0) != 1) {
+                throw new IllegalStateException("CRC照合・端末保存・Gem ACKまで完了したファイルが0件です");
             }
-
             result.put("status", "COMPLETED");
             result.put("finishedAtMs", System.currentTimeMillis());
             if (session != null) session.debug.completed(
@@ -89,172 +100,185 @@ public final class MemoketTestEngine {
             if (session != null) session.debug.failure(
                     error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage(), error);
             try {
-                result.put("status", "FAILED");
+                result.put("status", CANCEL_REQUESTED.get() ? "CANCELLED" : "FAILED");
                 result.put("error", error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage());
                 result.put("finishedAtMs", System.currentTimeMillis());
                 AppLogger.event(context, "MEMOKET_TEST_FAILED", compact(result));
             } catch (Exception ignored) { }
             progress(listener, "テスト失敗", result.optString("error", "不明なエラー"), false);
         } finally {
-            if (session != null) session.close();
+            if (session != null) {
+                attachOfficialComparison(context, result, session.trace, session.firstDataSequence);
+                session.close();
+            } else {
+                attachOfficialComparison(context, result, new JSONArray(), -1);
+            }
             MemoketTestStore.save(context, result);
         }
         return result;
     }
 
-    private static void runStartCase(
-            Context context,
-            Session s,
-            String caseId,
-            Set<String> before,
-            JSONObject result,
-            ProgressListener listener
-    ) throws Exception {
-        progress(listener, "通知設定", startLabel(caseId), false);
-
-        if ("START_OFFICIAL".equals(caseId)) {
-            s.enableResponse(true);
-            s.enableExtra5(true);
-            s.enableResponse(true);
-            s.enableData(true);
-            s.exchange(new byte[]{0x00}, 0x00, 4_000);
-            s.enableExtra6(true);
-            s.handshakeFrom27();
-        } else {
-            if ("START_EXTRA5".equals(caseId) || "START_EXTRA56".equals(caseId)) s.enableExtra5(true);
-            if ("START_EXTRA56".equals(caseId)) s.enableExtra6(true);
-            s.enableData(true);
-            s.enableResponse(true);
-            s.handshakeStandard();
-
-            if ("START_DATA_ONLY".equals(caseId)) s.enableResponse(false);
-            if ("START_RESPONSE_ONLY".equals(caseId)) s.enableData(false);
-            if ("START_NONE".equals(caseId)) {
-                s.enableData(false);
-                s.enableResponse(false);
-            }
-        }
-
-        progress(listener, "録音開始コマンド", "0x03 を送信します。今この瞬間の振動回数を覚えてください", true);
-        long commandAt = System.currentTimeMillis();
-        s.write(new byte[]{0x03});
-        if (s.responseEnabled) {
-            Event response = s.waitResponse(0x03, commandAt, 4_000);
-            result.put("startResponseHex", hex(response.value));
-        } else {
-            result.put("startResponseHex", "notification disabled");
-        }
-
-        progress(listener, "録音確認", "5秒間録音します。最後の未検証の停止手順の振動は開始時の振動回数に含めないでください", false);
-        Thread.sleep(5_000);
-
-        progress(listener, "未検証の停止手順", "既知の OFF→ON→01 00 00 で録音を確定し、音声を取得します", false);
-        ensureForCleanup(s);
-        s.enableData(false);
-        Thread.sleep(150);
-        s.enableData(true);
-        Thread.sleep(150);
-        int downloaded = s.downloadPending(context, 50, null);
-        result.put("downloadedFiles", downloaded);
-
-        File newest = newestNewRaw(context, before);
-        attachAudioResult(result, newest);
-        long duration = result.optLong("audioDurationMs", 0);
-        result.put("recordingVerified", duration >= 3_000);
-        progress(listener, "結果解析", duration >= 3_000
-                ? "新しい録音ファイルを確認しました"
-                : "3秒以上の新規録音を確認できませんでした", false);
-    }
-
     /**
-     * Independent hypothesis trial. Never auto-retrieve, auto-finalize, or send
-     * 0x05 ACK: CCCD switching is not proven to stop hardware recording.
+     * A batch never guesses any Gem stop command and never starts recording.
+     * The physical stop confirmation is a strict prerequisite, not proof
+     * inferred from DATA/CCCD/0x03 responses.
      */
-    private static void runStopCase(Context context, Session s, String caseId,
-            Set<String> before, JSONObject result, ProgressListener listener) throws Exception {
-        progress(listener, "接続・認証", "Gem本体が停止していることを事前に確認してください", false);
-        s.enableData(true);
-        s.enableResponse(true);
-        s.handshakeStandard();
-        progress(listener, "録音開始", "03を送信し、5秒録音します", false);
-        long startAt = System.currentTimeMillis();
-        Event started = s.exchange(new byte[]{0x03}, 0x03, 4_000);
-        result.put("startCommandAtMs", startAt);
-        result.put("startResponseHex", hex(started.value));
-        result.put("startAckIsStopProof", false);
-        Thread.sleep(5_000);
-        progress(listener, "停止候補", stopLabel(caseId) + " を1回実行します", false);
-        result.put("candidateAtMs", System.currentTimeMillis());
-        result.put("candidateLabel", stopLabel(caseId));
-        executeStopCandidate(s, caseId);
-        progress(listener, "10秒間観測", "この間、候補以外のBLEコマンドは送りません", false);
-        Thread.sleep(10_000);
-        result.put("observationEndedAtMs", System.currentTimeMillis());
-        result.put("stopInference", "録音ファイルの検証待ち：BLE応答だけでは停止を証明できません");
-        result.put("stopObserved", "UNSET");
-        result.put("downloadedFiles", 0);
-        result.put("gemFileAckSent", false);
-        progress(listener, "観測終了", "Gemが録音中なら本体ボタンで停止後、今回の録音ファイルを取り込み、結果画面で長さを検証してください", false);
+    public static JSONObject runBatch(Context context, ProgressListener listener) {
+        return runBatch(context, listener, false);
     }
 
-    private static void executeStopCandidate(Session s, String id) throws Exception {
-        switch (id) {
-            case "STOP_A": s.enableData(false); break;
-            case "STOP_B": s.enableData(true); break;
-            case "STOP_C": s.write(new byte[]{0x01,0x00,0x00}); break;
-            case "STOP_AB": s.enableData(false); s.enableData(true); break;
-            case "STOP_AC": s.enableData(false); s.write(new byte[]{0x01,0x00,0x00}); break;
-            case "STOP_BC": s.enableData(true); s.write(new byte[]{0x01,0x00,0x00}); break;
-            case "STOP_ABC": s.enableData(false); s.enableData(true); s.write(new byte[]{0x01,0x00,0x00}); break;
-            case "STOP_OFFICIAL_TIMING":
-                s.enableData(false); Thread.sleep(400); s.enableData(true); Thread.sleep(270);
-                s.write(new byte[]{0x01,0x00,0x00}); break;
-            case "STOP_OFF_WAIT_ON": s.enableData(false); Thread.sleep(1000); s.enableData(true); break;
-            case "STOP_ON_OFF": s.enableData(true); Thread.sleep(400); s.enableData(false); break;
-            case "STOP_LIST_DELAY":
-                s.enableData(false); Thread.sleep(1000); s.enableData(true); Thread.sleep(1000);
-                s.write(new byte[]{0x01,0x00,0x00}); break;
-            case "STOP_03_REPEAT": s.write(new byte[]{0x03}); break;
-            case "STOP_DISCONNECT": s.close(); break;
-            case "STOP_OFF_DISCONNECT": s.enableData(false); s.close(); break;
-            default: throw new IllegalArgumentException("Unknown stop case " + id);
+    public static JSONObject runBatch(Context context, ProgressListener listener,
+            boolean userConfirmedPhysicalStop) {
+        long began = System.currentTimeMillis();
+        JSONObject report = new JSONObject();
+        if (!BATCH_RUNNING.compareAndSet(false, true)) {
+            try {
+                report.put("id", began + "-BATCH_ALL");
+                report.put("caseId", "BATCH_ALL");
+                report.put("status", "BUSY_ALREADY_RUNNING");
+                report.put("error", "別のGem診断が実行中です");
+            } catch (Exception ignored) { }
+            return report;
         }
+
+        CANCEL_REQUESTED.set(false);
+        Session session = null;
+        JSONArray cases = new JSONArray();
+        int downloaded = 0;
+        try {
+            report.put("id", began + "-BATCH_ALL");
+            report.put("caseId", "BATCH_ALL");
+            report.put("startedAtMs", began);
+            report.put("status", "RUNNING");
+            report.put("cases", cases);
+            report.put("physicalStopUserConfirmed", userConfirmedPhysicalStop);
+            report.put("gemStopVerifiedByDevice", false);
+            report.put("recordingStartAttempted", false);
+            report.put("remoteStopAttempted", false);
+            report.put("executedStopCandidates", 0);
+            report.put("officialReference", "PRIOR_CAPTURED_HCI_PARTIAL");
+            report.put("fileTransferMethod", "BLE_ONE_GATT_SESSION_ONE_FILE");
+            report.put("gemFileAckPolicy", "CRC verified and persisted before 0x05 ACK");
+            if (!userConfirmedPhysicalStop) {
+                throw new IllegalStateException(
+                        "Gem本体で録音停止し、赤LED消灯と停止の振動を確認するまで診断を開始できません");
+            }
+            if (Build.VERSION.SDK_INT >= 31
+                    && context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
+                    != PackageManager.PERMISSION_GRANTED) {
+                throw new SecurityException("Bluetooth接続権限がありません");
+            }
+            String address = MemoketSettings.address(context);
+            if (address.isEmpty()) throw new IllegalStateException("Memoket Gemが選択されていません");
+            JSONObject file = new JSONObject();
+            file.put("caseId", "FILE_ONE");
+            file.put("startedAtMs", System.currentTimeMillis());
+            cases.put(file);
+            session = new Session(context, address, file);
+            progress(listener, "既知の公式HCI手順", "通知ON→認証→待機00 00の確認→音声1件受信。停止候補は実行しません", false);
+            session.connect();
+            runFileCase(context, session, "FILE_ONE", "", file, listener);
+            downloaded = file.optInt("downloadedFiles", 0);
+            if (downloaded != 1) {
+                throw new IllegalStateException(
+                        "停止済みファイルのサイズ・CRC・端末保存・Gem ACKが完了していません");
+            }
+            file.put("status", "SAVED_AND_ACKED");
+            file.put("finishedAtMs", System.currentTimeMillis());
+            report.put("status", "COMPLETED");
+            report.put("fileAcquisitionVerified", true);
+            report.put("fileLocallySaved", true);
+            report.put("failedCases", 0);
+            report.put("downloadedFiles", downloaded);
+            report.put("gemAckAccepted", true);
+            progress(listener, "取得完了", "音声1件のCRC・永続保存・Gem ACKを確認しました", false);
+        } catch (Exception error) {
+            String why = error.getMessage() == null ? error.toString() : error.getMessage();
+            // A file may be durably saved before the Gem's 05 ACK fails.
+            // Preserve that fact instead of falsely claiming zero local files.
+            downloaded = session == null ? 0 : session.savedFileNames.size();
+            try {
+                report.put("status", CANCEL_REQUESTED.get() ? "CANCELLED"
+                        : downloaded > 0 ? "SAVED_ACK_UNVERIFIED" : "FAILED");
+                report.put("error", why);
+                report.put("downloadedFiles", downloaded);
+                report.put("fileLocallySaved", downloaded > 0);
+                report.put("failedCases", 1);
+                report.put("fileAcquisitionVerified", false);
+                report.put("gemAckAccepted", false);
+                if (cases.length() > 0) {
+                    JSONObject file = cases.optJSONObject(0);
+                    file.put("status", CANCEL_REQUESTED.get() ? "CANCELLED"
+                            : downloaded > 0 ? "SAVED_ACK_UNVERIFIED" : "FAILED");
+                    file.put("downloadedFiles", downloaded);
+                    file.put("error", why);
+                    file.put("finishedAtMs", System.currentTimeMillis());
+                }
+            } catch (Exception ignored) { }
+            if (session != null) session.debug.failure(why, error);
+            progress(listener, "取得未完了", why, false);
+        } finally {
+            try {
+                JSONArray trace = session == null ? new JSONArray() : session.trace;
+                long firstSeq = session == null ? -1 : session.firstDataSequence;
+                report.put("traceSessionId", session == null ? "" : session.debug.sessionId());
+                report.put("firstDataSequence", firstSeq);
+                report.put("dataBlockCount", session == null ? 0 : session.observedDataBlocks);
+                report.put("listedFile", session == null ? "" : session.firstAnnouncedFile);
+                report.put("listResponseHex", session == null ? "" : session.lastListResponseHex);
+                report.put("lastMetadataResponseHex", session == null ? "" : session.lastMetadataResponseHex);
+                report.put("savedFiles", new JSONArray(session == null
+                        ? java.util.Collections.emptyList() : session.savedFileNames));
+                report.put("trace", trace);
+                attachOfficialComparison(context, report, trace, firstSeq);
+                if (cases.length() > 0) {
+                    JSONObject item = cases.optJSONObject(0);
+                    item.put("traceSessionId", report.optString("traceSessionId"));
+                    item.put("firstDataSequence", firstSeq);
+                    item.put("officialComparison", report.optJSONObject("officialComparison"));
+                }
+                report.put("finishedAtMs", System.currentTimeMillis());
+                AppLogger.event(context, "MEMOKET_BATCH_COMPLETED", new JSONObject()
+                        .put("status", report.optString("status"))
+                        .put("downloadedFiles", downloaded)
+                        .put("physicalStopUserConfirmed", userConfirmedPhysicalStop)
+                        .put("stopCandidates", 0));
+            } catch (Exception ignored) { }
+            if (session != null) session.close();
+            MemoketTestStore.save(context, report);
+            BATCH_RUNNING.set(false);
+        }
+        return report;
     }
 
-    private static void runFileCase(
-            Context context,
-            Session s,
-            String caseId,
-            String requestedFile,
-            JSONObject result,
-            ProgressListener listener
-    ) throws Exception {
-        progress(listener, "接続・認証", "ファイル取得用セッションを準備します", false);
-        s.enableData(true);
-        s.enableResponse(true);
-        s.handshakeStandard();
+    private static void attachOfficialComparison(Context context, JSONObject target,
+            JSONArray trace, long firstSeq) {
+        try {
+            JSONObject comparison = MemoketOfficialHciComparator.compare(
+                    trace, target.optString("caseId"), target.optInt("downloadedFiles", 0), firstSeq);
+            target.put("officialComparison", comparison);
+            AppLogger.event(context, "MEMOKET_OFFICIAL_HCI_COMPARISON", comparison);
+        } catch (Exception ignored) { }
+    }
 
-        if ("FILE_LIST".equals(caseId)) {
-            Event event = s.exchange(new byte[]{0x01, 0x00, 0x00}, 0x01, 5_000);
-            result.put("listResponseHex", hex(event.value));
-            result.put("listedFile", parseListName(event.value));
-            result.put("downloadedFiles", 0);
-            progress(listener, "一覧取得", result.optString("listedFile", "ファイルなし"), false);
-            return;
+    /** A list-only command may start DATA streaming; never issue it then disconnect. */
+    private static void runFileCase(Context context, Session session, String caseId,
+            String requestedFile, JSONObject result, ProgressListener listener) throws Exception {
+        if (!"FILE_ONE".equals(caseId)) {
+            throw new IllegalStateException("ファイルは一接続で先頭から末尾まで1件ずつ取得します");
         }
-
-        int max = "FILE_THREE".equals(caseId) ? 3 : "FILE_SPECIFIC".equals(caseId) ? 50 : 1;
-        String target = "FILE_SPECIFIC".equals(caseId) ? requestedFile : null;
-        if (target != null && target.trim().isEmpty()) {
-            throw new IllegalArgumentException("取得するファイル名を入力してください");
-        }
-        progress(listener, "ファイル取得", target == null
-                ? max + "件まで取得します"
-                : "指定ファイルに到達するまで順に取得します", false);
-        int downloaded = s.downloadPending(context, max, target);
+        progress(listener, "接続・認証", "公式HCIで観測した通知・認証手順を使用します", false);
+        session.enableData(true);
+        session.enableResponse(true);
+        session.handshakeStandard();
+        progress(listener, "音声ファイル取得", "01一覧→DATA連番0から→02メタデータ→CRC検証→03確定→保存→05 ACK", false);
+        int downloaded = session.downloadPending(context, 1, null);
         result.put("downloadedFiles", downloaded);
-        if (target != null) result.put("requestedFile", target);
-        progress(listener, "取得完了", downloaded + "件取得しました", false);
+        result.put("listedFile", session.firstAnnouncedFile);
+        if (downloaded != 1) {
+            throw new IllegalStateException("停止済みGem音声ファイルの保存を完了できませんでした");
+        }
+        progress(listener, "ファイル保存", "端末に1件保存しGem完了応答を確認しました", false);
     }
 
     private static void ensureForCleanup(Session s) throws Exception {
@@ -378,6 +402,9 @@ public final class MemoketTestEngine {
         final JSONArray trace = new JSONArray();
         final MemoketDebugTrace debug;
         final BlockingQueue<Event> notifications = new LinkedBlockingQueue<>();
+        // DATA can arrive during the session handshake, before 01 announces a
+        // filename. Preserve those original blocks until transfer state is ready.
+        final BlockingQueue<Event> earlyAudio = new LinkedBlockingQueue<>();
         final BlockingQueue<Integer> descriptorStatuses = new LinkedBlockingQueue<>();
         final BlockingQueue<Integer> writeStatuses = new LinkedBlockingQueue<>();
         final CountDownLatch connected = new CountDownLatch(1);
@@ -394,6 +421,13 @@ public final class MemoketTestEngine {
         volatile int serviceStatus = Integer.MIN_VALUE;
         boolean dataEnabled;
         boolean responseEnabled;
+        String firstAnnouncedFile = "";
+        String lastListResponseHex = "";
+        final List<String> savedFileNames = new ArrayList<>();
+        volatile long firstDataSequence = -1L;
+        volatile int observedDataBlocks = 0;
+        volatile int metadataProbeCount = 0;
+        volatile String lastMetadataResponseHex = "";
 
         Session(Context context, String address, JSONObject result) {
             this.context = context.getApplicationContext();
@@ -476,7 +510,19 @@ public final class MemoketTestEngine {
         }
 
         void handshakeStandard() throws Exception {
-            exchange(new byte[]{0x00}, 0x00, 4_000);
+            Event status = exchange(new byte[]{0x00}, 0x00, 4_000);
+            if (status.value.length < 2) {
+                throw new IllegalStateException("Gemの00応答が短すぎます: " + hex(status.value));
+            }
+            // 00 01+filename was observed during an interrupted transfer, but
+            // its meaning for a physically stopped, pending file is UNPROVEN.
+            // Record this official-reference difference without inventing a
+            // stop-state interpretation. Require physical confirmation and
+            // validate DATA sequence zero before starting any file command.
+            if (status.value[1] != 0) {
+                addTrace("OFFICIAL_STATUS_DIFF", "reference=0000 actual=" + hex(status.value)
+                        + " meaning=UNVERIFIED; physical stop confirmed by user");
+            }
             handshakeFrom27();
         }
 
@@ -523,7 +569,10 @@ public final class MemoketTestEngine {
                 long remain = Math.max(1, deadline - System.currentTimeMillis());
                 Event event = notifications.poll(remain, TimeUnit.MILLISECONDS);
                 if (event == null) break;
-                if (!MemoketGattSync.RESPONSE.equals(event.uuid)) continue;
+                if (!MemoketGattSync.RESPONSE.equals(event.uuid)) {
+                    if (MemoketGattSync.DATA.equals(event.uuid)) earlyAudio.offer(event);
+                    continue;
+                }
                 if (event.atMs < afterMs || event.value.length == 0) continue;
                 if ((event.value[0] & 0xff) == opcode) return event;
             }
@@ -539,39 +588,93 @@ public final class MemoketTestEngine {
                 store.persist(name, payload, crc);
                 debug.filePersisted(name, payload.length, crc);
                 saved.add(name);
+                savedFileNames.add(name);
             });
 
+            // If the Gem is already streaming from a previous connection,
+            // the initial audio bytes have been lost. Never pretend a new
+            // file-list cycle will recover an intact file.
+            if (firstDataSequence > 0) {
+                throw new IllegalStateException("公式アプリと比較: Gemの先行転送が継続中です。"
+                        + "接続直後のDATA連番=" + firstDataSequence
+                        + "（先頭0がないためCRC照合できません）。"
+                        + "既存ファイルの削除ACKは行いません。");
+            }
             byte[] next = MemoketTransfer.initialCommand();
-            long deadline = System.currentTimeMillis() + 90_000;
+            final long METADATA_PROBE_INTERVAL_MS = 1_000L;
+            // Detect a genuinely stalled BLE session, not the duration of an active transfer.
+            final long NO_DATA_OR_RESPONSE_STALL_MS = 60_000L;
+            long lastMetadataProbeAt = System.currentTimeMillis();
             long lastActivity = System.currentTimeMillis();
-            while (System.currentTimeMillis() < deadline) {
+            while (true) {
+                if (CANCEL_REQUESTED.get() || Thread.currentThread().isInterrupted()) {
+                    throw new InterruptedException("ファイル取得をユーザー操作で中止しました。未検証のデータはACKしません");
+                }
+                if (connectionState != BluetoothProfile.STATE_CONNECTED) {
+                    throw new IllegalStateException("ファイル転送中にGemのBLE接続が切断されました");
+                }
                 if (next != null) {
+                    if (next.length > 0 && next[0] == 0x02) {
+                        metadataProbeCount++;
+                        lastMetadataProbeAt = System.currentTimeMillis();
+                    }
                     write(next);
                     next = null;
                 }
 
-                Event event = notifications.poll(300, TimeUnit.MILLISECONDS);
+                Event event = "WAIT_LIST".equals(transfer.debugState())
+                        ? null : earlyAudio.poll();
+                if (event == null) event = notifications.poll(300, TimeUnit.MILLISECONDS);
                 if (event == null) {
-                    if (transfer.shouldRequestMetadata()) {
+                    long now = System.currentTimeMillis();
+                    if (transfer.shouldRequestMetadata()
+                            && now - lastMetadataProbeAt >= METADATA_PROBE_INTERVAL_MS) {
                         next = MemoketTransfer.metadataCommand();
-                        continue;
                     }
-                    if (System.currentTimeMillis() - lastActivity > 8_000) {
-                        throw new IllegalStateException("ファイル転送応答がタイムアウトしました");
+                    if (now - lastActivity > NO_DATA_OR_RESPONSE_STALL_MS) {
+                        throw new IllegalStateException("Gemからデータ・応答が60秒間届かず通信が停止しました"
+                                + " state=" + transfer.debugState()
+                                + " saved=" + saved.size()
+                                + " bufferedBytes=" + transfer.bufferedBytes());
                     }
                     continue;
                 }
-                lastActivity = System.currentTimeMillis();
 
                 if (MemoketGattSync.DATA.equals(event.uuid)) {
+                    lastActivity = System.currentTimeMillis();
+                    if ("WAIT_LIST".equals(transfer.debugState())) {
+                        earlyAudio.offer(event);
+                        continue;
+                    }
                     byte[] candidate = transfer.onData(event.value);
                     debug.transferState(transfer, "TEST_DATA_PARSED");
                     if (candidate != null) next = candidate;
+                    // Match the existing HCI-derived flow: finish the DATA
+                    // stream, then request metadata after a quiet interval.
+                    // Do not inject speculative periodic commands mid-stream.
                     continue;
                 }
                 if (!MemoketGattSync.RESPONSE.equals(event.uuid)) continue;
+                lastActivity = System.currentTimeMillis();
 
+                if (event.value.length > 0 && (event.value[0] & 0xff) == 1) {
+                    lastListResponseHex = hex(event.value);
+                }
+                if (event.value.length > 0 && (event.value[0] & 0xff) == 2) {
+                    lastMetadataResponseHex = hex(event.value);
+                }
                 byte[] candidate = transfer.onControl(event.value);
+                if (transfer.isDone() && saved.isEmpty()
+                        && (observedDataBlocks > 0 || firstDataSequence > 0)) {
+                    throw new IllegalStateException("DATA受信中の01 00 01をファイルなしと誤認しません。"
+                            + "進行中の旧転送があり、先頭データの回復が必要です。"
+                            + " firstSeq=" + firstDataSequence
+                            + " blocks=" + observedDataBlocks
+                            + " response=" + hex(event.value));
+                }
+                if (firstAnnouncedFile.isEmpty() && !transfer.debugFileName().isEmpty()) {
+                    firstAnnouncedFile = transfer.debugFileName();
+                }
                 debug.transferState(transfer, "TEST_RESPONSE_PARSED");
                 if (candidate != null && candidate.length > 0 && candidate[0] == 0x05) {
                     write(candidate);
@@ -661,6 +764,8 @@ public final class MemoketTestEngine {
                                 | ((long)(value[3] & 0xff) << 8)
                                 | (value[4] & 0xff);
                         sequence = " seq=" + seq;
+                        if (firstDataSequence < 0) firstDataSequence = seq;
+                        observedDataBlocks++;
                     }
                     addTrace("DATA", "bytes=" + (value == null ? 0 : value.length) + sequence);
                 } else {

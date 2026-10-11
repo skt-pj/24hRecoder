@@ -92,22 +92,9 @@ private val starts = listOf(
     CaseUi("START_NONE", "通知なし", "認証後に通知をOFFにして03")
 )
 
-private val stops = listOf(
-    CaseUi("STOP_A", "通知OFFのみ（A）", "DATA通知OFF"),
-    CaseUi("STOP_B", "通知ONのみ（B）", "DATA通知ON"),
-    CaseUi("STOP_C", "01 00 00 のみ（C）", "一覧要求のみ"),
-    CaseUi("STOP_AB", "OFF → ON（A→B）", "DATA OFF → ON"),
-    CaseUi("STOP_AC", "OFF → 01 00 00（A→C）", "DATA OFF → 一覧要求"),
-    CaseUi("STOP_BC", "ON → 01 00 00（B→C）", "DATA ON → 一覧要求"),
-    CaseUi("STOP_ABC", "OFF → ON → 01 00 00（A→B→C）", "現在の停止系列"),
-    CaseUi("STOP_OFFICIAL_TIMING", "公式ログ類似：時間差あり", "OFF→400ms→ON→270ms→一覧要求"),
-    CaseUi("STOP_OFF_WAIT_ON", "OFF→1秒→ON", "通知切替のみ"),
-    CaseUi("STOP_ON_OFF", "ON→OFF", "逆順"),
-    CaseUi("STOP_LIST_DELAY", "OFF→ON→1秒→一覧", "通知切替と一覧要求を分離"),
-    CaseUi("STOP_03_REPEAT", "録音中に03再送", "03の状態依存仮説"),
-    CaseUi("STOP_DISCONNECT", "通知操作なしで切断", "GATT切断のみ"),
-    CaseUi("STOP_OFF_DISCONNECT", "OFF→切断", "通知OFFの後、接続終了")
-)
+private val batchAll = CaseUi("BATCH_ALL", "停止済みGem音声1件の取得・公式差分診断", "物理停止確認後、確認済みBLE手順で1件保存。推測的な停止候補は実行しません")
+
+private val stops = emptyList<CaseUi>()
 
 private val files = listOf(
     CaseUi("FILE_ONE", "1件取得", "未取得ファイルを1件取得"),
@@ -185,16 +172,14 @@ private fun TestApp(onClose: () -> Unit) {
         screen = Screen.RUNNING
         scope.launch {
             val r = withContext(Dispatchers.IO) {
-                MemoketTestEngine.run(
-                    context,
-                    selected.id,
-                    specific,
-                    MemoketTestEngine.ProgressListener { title, detail, observe ->
-                        handler.post { steps = steps + StepUi(title, detail, observe) }
-                    }
-                )
+                val progress = MemoketTestEngine.ProgressListener { title, detail, observe ->
+                    handler.post { steps = steps + StepUi(title, detail, observe) }
+                }
+                if (selected.id == "BATCH_ALL") MemoketTestEngine.runBatch(context, progress, physicalReady)
+                else MemoketTestEngine.run(context, selected.id, specific, progress, false)
             }
             result = r
+            physicalReady = false
             vibration = r.optInt("vibration", -1)
             stopObserved = r.optString("stopObserved", "UNSET")
             reloadHistory()
@@ -224,7 +209,7 @@ private fun TestApp(onClose: () -> Unit) {
             Screen.MENU -> MenuScreen(
                 Modifier.padding(pad),
                 { selected = starts.first(); screen = Screen.START },
-                { selected = stops.first(); physicalReady = false; screen = Screen.STOP },
+                { selected = batchAll; physicalReady = false; screen = Screen.STOP },
                 { selected = files.first(); screen = Screen.FILE },
                 { reloadHistory(); screen = Screen.HISTORY },
                 { screen = Screen.OFFICIAL }
@@ -237,13 +222,21 @@ private fun TestApp(onClose: () -> Unit) {
             )
             Screen.STOP -> StopCaseScreen(
                 Modifier.padding(pad), stops, selected, { selected = it },
-                physicalReady, { physicalReady = it }, ::runCase
+                physicalReady, { physicalReady = it }, ::runCase,
+                {
+                    if (physicalReady) {
+                        selected = batchAll
+                        runCase()
+                    }
+                }
             )
             Screen.FILE -> FileScreen(
                 Modifier.padding(pad), selected, specific,
                 { selected = it }, { specific = it }, ::runCase
             )
-            Screen.RUNNING -> RunningScreen(Modifier.padding(pad), selected, steps)
+            Screen.RUNNING -> RunningScreen(Modifier.padding(pad), selected, steps) {
+                MemoketTestEngine.cancelActiveTest()
+            }
             Screen.RESULT -> ResultScreen(
                 Modifier.padding(pad), selected, result, vibration, stopObserved, verificationError,
                 { value ->
@@ -281,9 +274,7 @@ private fun MenuScreen(modifier: Modifier, onStart: () -> Unit, onStop: () -> Un
                 }
             }
         }
-        item { MenuCard("録音開始テスト", "開始時の振動と録音成立を調査", onStart) }
-        item { MenuCard("録音停止テスト", "BLE候補を比較し録音ファイルの長さで検証", onStop) }
-        item { MenuCard("ファイル取得テスト", "一覧・メタデータ・ダウンロードを確認", onFile) }
+        item { MenuCard("Gem停止確認→音声1件取得", "確認済みBLEコマンドのみ使用し、毎回公式HCI参照と照合", onStop) }
         item { MenuCard("テスト履歴", "候補の実行時刻・音声長・検証結果を確認", onHistory) }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
@@ -316,19 +307,28 @@ private fun CaseScreen(modifier: Modifier, intro: String, cases: List<CaseUi>, s
 
 @Composable
 private fun StopCaseScreen(modifier: Modifier, cases: List<CaseUi>, selected: CaseUi,
-    onSelect: (CaseUi) -> Unit, ready: Boolean, onReady: (Boolean) -> Unit, onRun: () -> Unit) {
+    onSelect: (CaseUi) -> Unit, ready: Boolean, onReady: (Boolean) -> Unit,
+    onRun: () -> Unit, onBatch: () -> Unit) {
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { Text("録音が続いている場合は本体ボタンで停止してください。", color = MaterialTheme.colorScheme.error) }
-        items(cases) { c -> CaseCard(c, selected.id == c.id) { onSelect(c) } }
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            Text("停止確認なしでは試験を実施しません。Gemの本体ボタンで録音を停止し、赤LEDが消灯したことと停止時の振動を確認してください。BLEだけで停止成功を判定できるコマンドは未確認です。",
+                color = MaterialTheme.colorScheme.error)
+        }
         item {
             Row {
                 Checkbox(checked = ready, onCheckedChange = onReady)
-                Text("現在Gem赤LEDが消灯し、本体ボタンで手動停止できることを確認した")
+                Text("Gem本体の録音停止、赤LED消灯、停止時の振動を確認した")
             }
         }
-        item { Button(onClick = { onReady(false); onRun() }, enabled = ready,
-            modifier = Modifier.fillMaxWidth()) { Text("この候補だけ実行") } }
+        item {
+            Button(onClick = onBatch, enabled = ready, modifier = Modifier.fillMaxWidth()) {
+                Text("停止済み音声1件をBLE取得・公式差分診断")
+            }
+        }
+        item {
+            Text("試験は1回のBLE接続のみ。認証→ファイル一覧→データ全量→サイズ・CRC照合→端末保存→ACKを検証します。録音開始や未確定の停止コマンドの組み合わせは一切実行しません。")
+        }
     }
 }
 
@@ -358,13 +358,15 @@ private fun FileScreen(modifier: Modifier, selected: CaseUi, specific: String, o
 }
 
 @Composable
-private fun RunningScreen(modifier: Modifier, selected: CaseUi, steps: List<StepUi>) {
+private fun RunningScreen(modifier: Modifier, selected: CaseUi, steps: List<StepUi>, onCancel: () -> Unit) {
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 CircularProgressIndicator()
                 Text("テストを実行しています…", fontWeight = FontWeight.Bold)
                 Text(selected.title)
+                Text("通信が進んでいる間、転送時間による自動打ち切りはしません。")
+                OutlinedButton(onClick = onCancel) { Text("診断・転送を中止") }
             }
         }
         items(steps) { step ->
@@ -381,19 +383,71 @@ private fun RunningScreen(modifier: Modifier, selected: CaseUi, steps: List<Step
 
 @Composable
 private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObject?, vibration: Int, stopObserved: String, verificationError: String, onVibration: (Int) -> Unit, onStopObserved: (String) -> Unit, onImportFile: () -> Unit, onHistory: () -> Unit, onMenu: () -> Unit) {
+    val batch = selected.id == "BATCH_ALL"
     val ok = result?.optString("status") == "COMPLETED"
+    val savedButUnacked = result?.optString("status") == "SAVED_ACK_UNVERIFIED"
     val context = LocalContext.current
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Card(colors = CardDefaults.cardColors(containerColor = if (ok) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(if (ok) "BLE候補を実行しました（音声検証待ち）" else "BLEテストに失敗しました", fontWeight = FontWeight.Bold)
+                    Text(if (batch && ok) "停止済み音声1件の取得・CRC・保存・ACKが完了しました" else if (savedButUnacked) "音声は端末保存済み／Gem完了ACK未確認" else if (ok) "音声取得が完了しました" else "BLEファイル取得が未完了です", fontWeight = FontWeight.Bold)
                     Text(selected.title)
                     if (!ok) Text(result?.optString("error").orEmpty())
                 }
             }
         }
         item {
+            val comparison = result?.optJSONObject("officialComparison")
+            Card {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("公式通信との差分チェック", fontWeight = FontWeight.Bold)
+                    Text("基準: 過去の公式HCI観測に由来する手順。今回の公式アプリ通信原本は未提供。")
+                    Text("比較状態: " + (comparison?.optString("result") ?: "未実施"))
+                    val checks = comparison?.optJSONArray("checks")
+                    if (checks != null) for (j in 0 until checks.length()) {
+                        val c = checks.optJSONObject(j) ?: continue
+                        Text(c.optString("label") + ": " + c.optString("status")
+                                + " / " + c.optString("observed"))
+                    }
+                    Text("未確認: 公式アプリによる転送完了・Wi-Fi経路・録音停止コマンド",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        if (batch) {
+            item {
+                Card {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("一括診断結果", fontWeight = FontWeight.Bold)
+                        Text("停止候補: 実行しない（未検証コマンド）")
+                        Text("端末への保存: ${result?.optInt("downloadedFiles", 0) ?: 0}件")
+                        Text("Gem完了ACK: " + if (result?.optBoolean("gemAckAccepted") == true) "確認済み" else "未確認")
+                        Text("失敗: ${result?.optInt("failedCases", 0) ?: 0}件")
+                        Text("停止確認: " + if (result?.optBoolean("physicalStopUserConfirmed") == true) "本体停止をユーザー確認" else "未確認")
+                        if (result?.optBoolean("requiresPhysicalStop") == true) {
+                            Text("録音が継続している場合はGem本体のボタンで停止してください。録音中の可能性があるため自動ファイル取得は実施していません。",
+                                color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
+            val entries = result?.optJSONArray("cases")
+            if (entries != null) for (i in 0 until entries.length()) {
+                val entry = entries.optJSONObject(i) ?: continue
+                item {
+                    Card {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("${i + 1}. ${labelFor(entry.optString("caseId"))}", fontWeight = FontWeight.Bold)
+                            Text("結果: ${entry.optString("status")}")
+                            if (entry.has("downloadedFiles")) Text("取得: ${entry.optInt("downloadedFiles")}件")
+                            if (entry.has("listedFile")) Text("ファイル: ${entry.optString("listedFile")}")
+                            if (entry.has("error")) Text("エラー: ${entry.optString("error")}", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
+        } else item {
             Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("自動判定", fontWeight = FontWeight.Bold)
@@ -453,7 +507,7 @@ private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObjec
                 context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(
                     ClipData.newPlainText("Memoketテスト結果", result?.toString(2) ?: "{}"))
                 Toast.makeText(context, "結果をコピーしました", Toast.LENGTH_SHORT).show()
-            }, modifier = Modifier.fillMaxWidth()) { Text("BLE結果・操作記録をコピー") }
+            }, modifier = Modifier.fillMaxWidth()) { Text(if (batch) "全候補の時系列ログ・結果をコピー" else "BLE結果・操作記録をコピー") }
         }
         item { OutlinedButton(onClick = onHistory, modifier = Modifier.fillMaxWidth()) { Text("テスト履歴を見る") } }
         item { Button(onClick = onMenu, modifier = Modifier.fillMaxWidth()) { Text("テストメニューへ戻る") } }
@@ -500,7 +554,7 @@ private fun titleFor(screen: Screen) = when (screen) {
     Screen.HISTORY -> "テスト履歴"
 }
 
-private fun labelFor(id: String) = (starts + stops + files).firstOrNull { it.id == id }?.title ?: id
+private fun labelFor(id: String) = (starts + stops + files + batchAll).firstOrNull { it.id == id }?.title ?: id
 private fun toList(array: JSONArray): List<JSONObject> {
     val out = mutableListOf<JSONObject>()
     for (i in 0 until array.length()) array.optJSONObject(i)?.let(out::add)
