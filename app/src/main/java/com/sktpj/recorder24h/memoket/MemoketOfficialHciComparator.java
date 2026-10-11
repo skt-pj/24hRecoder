@@ -20,8 +20,9 @@ public final class MemoketOfficialHciComparator {
         report.put("caseId", caseId);
         report.put("reference", "PROJECT_WIKI_PRIOR_OFFICIAL_HCI_OBSERVATION_PARTIAL");
         report.put("referenceRawHciInThisRun", false);
-        report.put("officialTransport", "Wi-Fi and BLE available; active path unknown");
+        report.put("officialTransport", "Wi-Fi and BLE supported; actual reference path not verified");
         report.put("appTransport", "BLE GATT");
+        report.put("transportAssessment", "BLE is appropriate for this small-file diagnostic; Wi-Fi not required");
         JSONArray checks = new JSONArray();
         report.put("checks", checks);
 

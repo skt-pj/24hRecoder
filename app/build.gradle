@@ -88,6 +88,7 @@ apply from: rootProject.file('gradle/memoket-version-0.7.96.gradle')
 apply from: rootProject.file('gradle/memoket-version-0.7.97.gradle')
 apply from: rootProject.file('gradle/memoket-version-0.7.98.gradle')
 apply from: rootProject.file('gradle/memoket-version-0.7.99.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.100.gradle')
 
 android {
     namespace 'com.sktpj.recorder24h'

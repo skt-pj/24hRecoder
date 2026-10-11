@@ -2,30 +2,20 @@ package com.sktpj.recorder24h.memoket;
 
 import static org.junit.Assert.*;
 import org.junit.Test;
-import java.util.HashSet;
 
 public class MemoketBatchPlanTest {
-    @Test public void fileTestsPrecedeRecordingAndCoverAllCases() {
-        assertEquals(4, MemoketBatchPlan.FILE_CASES.size());
-        assertEquals("FILE_LIST", MemoketBatchPlan.FILE_CASES.get(0));
-        assertTrue(MemoketBatchPlan.FILE_CASES.contains("FILE_SPECIFIC"));
-        assertTrue(MemoketBatchPlan.FILE_CASES.contains("FILE_ONE"));
-        assertTrue(MemoketBatchPlan.FILE_CASES.contains("FILE_THREE"));
+    @Test public void onlyKnownStoppedFileTransferIsEnabled() {
+        assertEquals(1, MemoketBatchPlan.FILE_CASES.size());
+        assertEquals("FILE_ONE", MemoketBatchPlan.FILE_CASES.get(0));
+        assertTrue(MemoketBatchPlan.isFileCase("FILE_ONE"));
+        assertFalse(MemoketBatchPlan.isFileCase("FILE_LIST"));
+        assertFalse(MemoketBatchPlan.isFileCase("FILE_THREE"));
+        assertFalse(MemoketBatchPlan.isFileCase("FILE_SPECIFIC"));
     }
-    @Test public void everyStopCandidateIsIncludedOnce() {
-        assertEquals(14, MemoketBatchPlan.STOP_CASES.size());
-        assertEquals(14, new HashSet<>(MemoketBatchPlan.STOP_CASES).size());
-        assertEquals("STOP_DISCONNECT", MemoketBatchPlan.STOP_CASES.get(13));
-        assertEquals("STOP_OFF_DISCONNECT", MemoketBatchPlan.STOP_CASES.get(12));
-    }
-    @Test public void batchDoesNotConfuseFileTestsWithStopTests() {
-        for (String id : MemoketBatchPlan.FILE_CASES) {
-            assertTrue(MemoketBatchPlan.isFileCase(id));
-            assertFalse(MemoketBatchPlan.isStopCase(id));
-        }
-        for (String id : MemoketBatchPlan.STOP_CASES) {
-            assertTrue(MemoketBatchPlan.isStopCase(id));
-            assertFalse(MemoketBatchPlan.isFileCase(id));
-        }
+    @Test public void noUnverifiedStopCandidateMayRun() {
+        assertEquals(0, MemoketBatchPlan.STOP_CASES.size());
+        assertFalse(MemoketBatchPlan.isStopCase("STOP_ABC"));
+        assertFalse(MemoketBatchPlan.isStopCase("STOP_03_REPEAT"));
+        assertFalse(MemoketBatchPlan.isStopCase("STOP_DISCONNECT"));
     }
 }
