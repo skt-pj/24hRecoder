@@ -625,6 +625,9 @@ public final class MemoketTestEngine {
         final JSONArray trace = new JSONArray();
         final MemoketDebugTrace debug;
         final BlockingQueue<Event> notifications = new LinkedBlockingQueue<>();
+        // DATA can arrive during the session handshake, before 01 announces a
+        // filename. Preserve those original blocks until transfer state is ready.
+        final BlockingQueue<Event> earlyAudio = new LinkedBlockingQueue<>();
         final BlockingQueue<Integer> descriptorStatuses = new LinkedBlockingQueue<>();
         final BlockingQueue<Integer> writeStatuses = new LinkedBlockingQueue<>();
         final CountDownLatch connected = new CountDownLatch(1);
@@ -777,7 +780,10 @@ public final class MemoketTestEngine {
                 long remain = Math.max(1, deadline - System.currentTimeMillis());
                 Event event = notifications.poll(remain, TimeUnit.MILLISECONDS);
                 if (event == null) break;
-                if (!MemoketGattSync.RESPONSE.equals(event.uuid)) continue;
+                if (!MemoketGattSync.RESPONSE.equals(event.uuid)) {
+                    if (MemoketGattSync.DATA.equals(event.uuid)) earlyAudio.offer(event);
+                    continue;
+                }
                 if (event.atMs < afterMs || event.value.length == 0) continue;
                 if ((event.value[0] & 0xff) == opcode) return event;
             }
@@ -827,7 +833,9 @@ public final class MemoketTestEngine {
                     next = null;
                 }
 
-                Event event = notifications.poll(300, TimeUnit.MILLISECONDS);
+                Event event = "WAIT_LIST".equals(transfer.debugState())
+                        ? null : earlyAudio.poll();
+                if (event == null) event = notifications.poll(300, TimeUnit.MILLISECONDS);
                 if (event == null) {
                     long now = System.currentTimeMillis();
                     if (transfer.shouldRequestMetadata()
@@ -845,6 +853,10 @@ public final class MemoketTestEngine {
 
                 if (MemoketGattSync.DATA.equals(event.uuid)) {
                     lastActivity = System.currentTimeMillis();
+                    if ("WAIT_LIST".equals(transfer.debugState())) {
+                        earlyAudio.offer(event);
+                        continue;
+                    }
                     byte[] candidate = transfer.onData(event.value);
                     debug.transferState(transfer, "TEST_DATA_PARSED");
                     if (candidate != null) next = candidate;
