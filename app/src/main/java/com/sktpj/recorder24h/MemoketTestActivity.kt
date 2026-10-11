@@ -243,7 +243,9 @@ private fun TestApp(onClose: () -> Unit) {
                 Modifier.padding(pad), selected, specific,
                 { selected = it }, { specific = it }, ::runCase
             )
-            Screen.RUNNING -> RunningScreen(Modifier.padding(pad), selected, steps)
+            Screen.RUNNING -> RunningScreen(Modifier.padding(pad), selected, steps) {
+                MemoketTestEngine.cancelActiveTest()
+            }
             Screen.RESULT -> ResultScreen(
                 Modifier.padding(pad), selected, result, vibration, stopObserved, verificationError,
                 { value ->
@@ -361,13 +363,15 @@ private fun FileScreen(modifier: Modifier, selected: CaseUi, specific: String, o
 }
 
 @Composable
-private fun RunningScreen(modifier: Modifier, selected: CaseUi, steps: List<StepUi>) {
+private fun RunningScreen(modifier: Modifier, selected: CaseUi, steps: List<StepUi>, onCancel: () -> Unit) {
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 CircularProgressIndicator()
                 Text("テストを実行しています…", fontWeight = FontWeight.Bold)
                 Text(selected.title)
+                Text("通信が進んでいる間、転送時間による自動打ち切りはしません。")
+                OutlinedButton(onClick = onCancel) { Text("診断・転送を中止") }
             }
         }
         items(steps) { step ->
