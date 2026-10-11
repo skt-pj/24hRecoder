@@ -237,7 +237,12 @@ private fun TestApp(onClose: () -> Unit) {
             Screen.STOP -> StopCaseScreen(
                 Modifier.padding(pad), stops, selected, { selected = it },
                 physicalReady, { physicalReady = it }, ::runCase,
-                { selected = batchAll; runCase() }
+                {
+                    if (physicalReady) {
+                        selected = batchAll
+                        runCase()
+                    }
+                }
             )
             Screen.FILE -> FileScreen(
                 Modifier.padding(pad), selected, specific,
@@ -323,7 +328,14 @@ private fun StopCaseScreen(modifier: Modifier, cases: List<CaseUi>, selected: Ca
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { Text("Gem本体の録音が停止している状態で実行してください。先に未取得ファイルの一覧・取得を確認し、続いて録音停止候補を一括実行します。保存・CRC確認済みの取得ファイルはGemへACKします。", color = MaterialTheme.colorScheme.error) }
-        item { Button(onClick = onBatch, modifier = Modifier.fillMaxWidth()) { Text("全項目を実行して診断ログを作成") } }
+        item {
+            Button(onClick = onBatch, enabled = ready, modifier = Modifier.fillMaxWidth()) {
+                Text("全項目を実行して診断ログを作成")
+            }
+        }
+        item {
+            Text("開始前にGem本体の録音停止を確認してください。音声送信が進行中の場合は中断せず、保存未確認のまま追加の停止候補試験はしません。")
+        }
         item { Text("個別候補の再検証", fontWeight = FontWeight.Bold) }
         items(cases) { c -> CaseCard(c, selected.id == c.id) { onSelect(c) } }
         item {
