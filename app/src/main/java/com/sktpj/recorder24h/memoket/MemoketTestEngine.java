@@ -105,7 +105,12 @@ public final class MemoketTestEngine {
             } catch (Exception ignored) { }
             progress(listener, "テスト失敗", result.optString("error", "不明なエラー"), false);
         } finally {
-            if (session != null) session.close();
+            if (session != null) {
+                attachOfficialComparison(context, result, session.trace, session.firstDataSequence);
+                session.close();
+            } else {
+                attachOfficialComparison(context, result, new JSONArray(), -1);
+            }
             MemoketTestStore.save(context, result);
         }
         return result;
@@ -185,6 +190,9 @@ public final class MemoketTestEngine {
                 }
                 transferResult.put("finishedAtMs", System.currentTimeMillis());
                 if (!transferError.isEmpty()) transferResult.put("error", transferError);
+                attachOfficialComparison(context, transferResult,
+                        transferSession == null ? new JSONArray() : transferSession.trace,
+                        transferSession == null ? -1 : transferSession.firstDataSequence);
             }
             for (String fileCase : MemoketBatchPlan.FILE_CASES) {
                 JSONObject item = new JSONObject();
@@ -193,6 +201,7 @@ public final class MemoketTestEngine {
                 item.put("finishedAtMs", transferResult.optLong("finishedAtMs"));
                 item.put("traceSessionId", transferResult.optString("traceSessionId"));
                 item.put("sharedGattSession", true);
+                item.put("officialComparison", transferResult.optJSONObject("officialComparison"));
                 item.put("dataBlockCount", transferResult.optInt("dataBlockCount"));
                 item.put("firstDataSequence", transferResult.optLong("firstDataSequence", -1));
                 if ("FILE_LIST".equals(fileCase)) {
@@ -218,6 +227,7 @@ public final class MemoketTestEngine {
                 }
                 cases.put(item);
             }
+            report.put("officialComparison", transferResult.optJSONObject("officialComparison"));
             report.put("fileTransferCaseMethod", "ONE_CONTINUOUS_GATT_SESSION");
             report.put("fileTransferResult", MemoketBatchAssessment.fileState(downloaded,
                     transferError, transferSession == null ? -1 : transferSession.firstDataSequence));
@@ -233,8 +243,13 @@ public final class MemoketTestEngine {
                 report.put("fileStreamFirstSequence", transferSession.firstDataSequence);
             }
 
+            // Do not reconnect repeatedly while an earlier file is still streaming.
+            // Reconnecting can discard its leading DATA and make a verified save impossible.
+            boolean ongoingUnverifiedTransfer = downloaded == 0 && transferSession != null
+                    && transferSession.observedDataBlocks > 0;
+            report.put("stopTestsSkippedForUnverifiedTransfer", ongoingUnverifiedTransfer);
             for (String id : MemoketBatchPlan.STOP_CASES) {
-                if (CANCEL_REQUESTED.get()) break;
+                if (CANCEL_REQUESTED.get() || ongoingUnverifiedTransfer) break;
                 JSONObject item = new JSONObject();
                 Session session = null;
                 item.put("caseId", id);
@@ -278,6 +293,7 @@ public final class MemoketTestEngine {
                     if (session != null) {
                         item.put("traceSessionId", session.debug.sessionId());
                         item.put("trace", session.trace);
+                        attachOfficialComparison(context, item, session.trace, session.firstDataSequence);
                         session.close();
                     }
                     item.put("finishedAtMs", System.currentTimeMillis());
@@ -321,6 +337,16 @@ public final class MemoketTestEngine {
             }
         }
         return report;
+    }
+
+    private static void attachOfficialComparison(Context context, JSONObject target,
+            JSONArray trace, long firstSeq) {
+        try {
+            JSONObject comparison = MemoketOfficialHciComparator.compare(
+                    trace, target.optString("caseId"), target.optInt("downloadedFiles", 0), firstSeq);
+            target.put("officialComparison", comparison);
+            AppLogger.event(context, "MEMOKET_OFFICIAL_HCI_COMPARISON", comparison);
+        } catch (Exception ignored) { }
     }
 
     private static void runStartCase(
@@ -770,8 +796,17 @@ public final class MemoketTestEngine {
                 savedFileNames.add(name);
             });
 
+            // If the Gem is already streaming from a previous connection,
+            // the initial audio bytes have been lost. Never pretend a new
+            // file-list cycle will recover an intact file.
+            if (firstDataSequence > 0) {
+                throw new IllegalStateException("公式アプリと比較: Gemの先行転送が継続中です。"
+                        + "接続直後のDATA連番=" + firstDataSequence
+                        + "（先頭0がないためCRC照合できません）。"
+                        + "既存ファイルの削除ACKは行いません。");
+            }
             byte[] next = MemoketTransfer.initialCommand();
-            final long METADATA_PROBE_INTERVAL_MS = 10_000L;
+            final long METADATA_PROBE_INTERVAL_MS = 1_000L;
             // Detect a genuinely stalled BLE session, not the duration of an active transfer.
             final long NO_DATA_OR_RESPONSE_STALL_MS = 60_000L;
             long lastMetadataProbeAt = System.currentTimeMillis();
@@ -813,13 +848,9 @@ public final class MemoketTestEngine {
                     byte[] candidate = transfer.onData(event.value);
                     debug.transferState(transfer, "TEST_DATA_PARSED");
                     if (candidate != null) next = candidate;
-                    // Probe metadata while DATA is active, never limiting total
-                    // transfer duration. Throttle queries to one per 10 seconds.
-                    if (next == null && transfer.shouldRequestMetadata()
-                            && System.currentTimeMillis() - lastMetadataProbeAt
-                            >= METADATA_PROBE_INTERVAL_MS) {
-                        next = MemoketTransfer.metadataCommand();
-                    }
+                    // Match the existing HCI-derived flow: finish the DATA
+                    // stream, then request metadata after a quiet interval.
+                    // Do not inject speculative periodic commands mid-stream.
                     continue;
                 }
                 if (!MemoketGattSync.RESPONSE.equals(event.uuid)) continue;
@@ -832,6 +863,14 @@ public final class MemoketTestEngine {
                     lastMetadataResponseHex = hex(event.value);
                 }
                 byte[] candidate = transfer.onControl(event.value);
+                if (transfer.isDone() && saved.isEmpty()
+                        && (observedDataBlocks > 0 || firstDataSequence > 0)) {
+                    throw new IllegalStateException("DATA受信中の01 00 01をファイルなしと誤認しません。"
+                            + "進行中の旧転送があり、先頭データの回復が必要です。"
+                            + " firstSeq=" + firstDataSequence
+                            + " blocks=" + observedDataBlocks
+                            + " response=" + hex(event.value));
+                }
                 if (firstAnnouncedFile.isEmpty() && !transfer.debugFileName().isEmpty()) {
                     firstAnnouncedFile = transfer.debugFileName();
                 }

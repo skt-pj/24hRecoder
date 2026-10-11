@@ -401,6 +401,24 @@ private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObjec
                 }
             }
         }
+        item {
+            val comparison = result?.optJSONObject("officialComparison")
+            Card {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("公式通信との差分チェック", fontWeight = FontWeight.Bold)
+                    Text("基準: 過去の公式HCI観測に由来する手順。今回の公式アプリ通信原本は未提供。")
+                    Text("比較状態: " + (comparison?.optString("result") ?: "未実施"))
+                    val checks = comparison?.optJSONArray("checks")
+                    if (checks != null) for (j in 0 until checks.length()) {
+                        val c = checks.optJSONObject(j) ?: continue
+                        Text(c.optString("label") + ": " + c.optString("status")
+                                + " / " + c.optString("observed"))
+                    }
+                    Text("未確認: 公式アプリによる転送完了・Wi-Fi経路・録音停止コマンド",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
         if (batch) {
             item {
                 Card {
