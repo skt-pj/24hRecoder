@@ -501,12 +501,17 @@ public final class MemoketTestEngine {
 
         void handshakeStandard() throws Exception {
             Event status = exchange(new byte[]{0x00}, 0x00, 4_000);
-            // The captured idle response in the previous official-HCI reference
-            // is 00 00. 00 01 + filename indicates a previous stream is active.
-            if (status.value.length < 2 || status.value[1] != 0) {
-                throw new IllegalStateException("公式HCI基準の待機応答00 00ではありません。実機="
-                        + hex(status.value) + "。先行転送または録音継続の可能性があるため"
-                        + "ファイル要求と停止候補の追加試験を中止しました");
+            if (status.value.length < 2) {
+                throw new IllegalStateException("Gemの00応答が短すぎます: " + hex(status.value));
+            }
+            // 00 01+filename was observed during an interrupted transfer, but
+            // its meaning for a physically stopped, pending file is UNPROVEN.
+            // Record this official-reference difference without inventing a
+            // stop-state interpretation. Require physical confirmation and
+            // validate DATA sequence zero before starting any file command.
+            if (status.value[1] != 0) {
+                addTrace("OFFICIAL_STATUS_DIFF", "reference=0000 actual=" + hex(status.value)
+                        + " meaning=UNVERIFIED; physical stop confirmed by user");
             }
             handshakeFrom27();
         }
