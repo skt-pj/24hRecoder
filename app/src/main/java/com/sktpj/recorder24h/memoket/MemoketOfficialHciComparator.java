@@ -49,6 +49,23 @@ public final class MemoketOfficialHciComparator {
         add(checks, "通知設定", "DATA/RESPONSE通知ON",
                 dataOn && responseOn ? "一致" : "未確認",
                 "DATA=" + dataOn + " RESPONSE=" + responseOn);
+        // The reference handshake expects 00 00 in idle state.
+        // Latest Gem logs emit 00 01 + a filename while a prior stream is
+        // still in progress. That difference must not be hidden by an
+        // opcode-only handshake comparison.
+        String session00 = "";
+        for (String notify : notifications) {
+            int colon = notify.indexOf(':');
+            String hex = colon < 0 ? notify : notify.substring(colon + 1);
+            if (hex.startsWith("0000") || hex.startsWith("0001")) {
+                session00 = hex;
+                break;
+            }
+        }
+        add(checks, "00待機状態", "00 00（既存公式HCI参照の待機応答）",
+                session00.startsWith("0000") ? "一致"
+                        : session00.startsWith("0001") ? "差分あり（先行転送中）" : "未確認",
+                session00.isEmpty() ? "応答なし" : session00);
         String[] reference = {"00", "2701", "e1", "f300", "e301", "ff68", "e5", "e8"};
         int pos = 0;
         for (String written : writes) {
