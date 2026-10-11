@@ -65,7 +65,7 @@ public final class MemoketOfficialHciComparator {
         }
         add(checks, "00待機状態", "00 00（既存公式HCI参照の待機応答）",
                 session00.startsWith("0000") ? "一致"
-                        : session00.startsWith("0001") ? "差分あり（先行転送中）" : "未確認",
+                        : session00.startsWith("0001") ? "差分あり（意味未確定・実DATA連番で追加検証）" : "未確認",
                 session00.isEmpty() ? "応答なし" : session00);
         String[] reference = {"00", "2701", "e1", "f300", "e301", "ff68", "e5", "e8"};
         int pos = 0;
