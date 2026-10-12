@@ -92,7 +92,7 @@ private val starts = listOf(
     CaseUi("START_NONE", "通知なし", "認証後に通知をOFFにして03")
 )
 
-private val batchAll = CaseUi("BATCH_ALL", "停止済みGem音声1件の取得・公式差分診断", "物理停止確認後、確認済みBLE手順で1件保存。推測的な停止候補は実行しません")
+private val batchAll = CaseUi("BATCH_ALL", "停止済み音声の取得診断（遠隔停止ではない）", "Gem本体を停止してから実行。公式HCIのDATA OFF→ON→一覧→DATA→CRC→保存→ACKを試験します。遠隔開始・停止は設定画面の別ボタンです。")
 
 private val stops = emptyList<CaseUi>()
 
