@@ -115,6 +115,13 @@ public final class MemoketTransfer {
                 }
                 verifiedRemovals++;
                 lastDeletionAckFile = null;
+                // A new file is present, but this operation was only for the
+                // single recording chosen before the first transfer.
+                // Never auto-download or delete a second, unselected recording.
+                if (completedCount >= maxFiles) {
+                    state = State.DONE;
+                    return null;
+                }
             }
             if (selector != null && !selector.accept(incoming)) {
                 // A list request may begin streaming a different recording. Never ACK
