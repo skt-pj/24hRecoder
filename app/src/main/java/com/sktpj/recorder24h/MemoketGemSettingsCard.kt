@@ -199,10 +199,12 @@ fun MemoketGemSettingsCard() {
                 Text("定期取得は、Gemの録音中・停止中を安全に判別できるようになるまで無効です。")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
-                        enabled = false,
-                        onClick = {},
+                        enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中",
+                        onClick = {
+                            context.startForegroundService(android.content.Intent(context, MemoketRemoteRecordingService::class.java).setAction(MemoketRemoteRecordingService.ACTION_START_RECORDING))
+                        },
                         modifier = Modifier.weight(1f)
-                    ) { Text("遠隔開始（検証待ち）") }
+                    ) { Text("遠隔開始（公式HCI検証）") }
                     OutlinedButton(
                         enabled = remoteState == "録音中",
                         onClick = {
@@ -215,7 +217,7 @@ fun MemoketGemSettingsCard() {
                     ) { Text("録音操作を終了") }
                 }
                 Text("Gem録音状態: $remoteState")
-                Text("遠隔停止は利用できません。本体で停止後に録音を取得してください。")
+                Text("公式HCIによる停止・音声取得を試行します。停止成功は赤LEDで確認してください。")
                 if (remoteState == "Gem本体停止待ち" ||
                     (remoteState == "エラー" && MemoketSettings.recordingStopRequestedAt(context) > 0L)) {
                     Button(
