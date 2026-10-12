@@ -4,8 +4,8 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public final class MemoketFlowPolicyTest {
-    @Test public void cannotRemotelyStartWithoutVerifiedRemoteStop() {
-        assertFalse(MemoketFlowPolicy.remoteStartAllowed());
+    @Test public void explicitOfficialHciRecordingCanBeStartedForVerification() {
+        assertTrue(MemoketFlowPolicy.remoteStartAllowed());
     }
     @Test public void noUnattendedTransferWhenRecordingStatusIsUnknown() {
         assertFalse(MemoketFlowPolicy.periodicTransferAllowed());
