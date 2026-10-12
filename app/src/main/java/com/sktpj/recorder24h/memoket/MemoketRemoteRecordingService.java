@@ -329,9 +329,13 @@ public final class MemoketRemoteRecordingService extends Service {
         if (stopCompleted) return;
         try {
             if (stopPending) {
-                if (stopNotifyStep == 0 && uuid.equals(MemoketGattSync.RESPONSE)
-                        && value != null && value.length == 2
-                        && value[0] == 0x03 && (value[1] & 0xff) == 0xff) {
+                if (stopNotifyStep == 0) {
+                    if (!uuid.equals(MemoketGattSync.RESPONSE)
+                            || value == null || value.length == 0) return;
+                    if (value[0] != 0x03) return;
+                    if (value.length != 2 || (value[1] & 0xff) != 0xff) {
+                        throw new IllegalStateException("録音停止操作03の応答を確認できません: " + hex(value));
+                    }
                     trace.phase("OFFICIAL_STOP_03FF_RECEIVED");
                     stopNotifyStep = 1;
                     setNotification(data, false);
@@ -385,6 +389,8 @@ public final class MemoketRemoteRecordingService extends Service {
         if (value == null) return;
         long now = System.currentTimeMillis();
         if (uuid.equals(MemoketGattSync.DATA)) {
+            // Ignore pre-list audio until both CCCD writes and the 01 request finish.
+            if (stopNotifyStep != 3) return;
             lastStopActivityAtMs = now;
             lastStopDataAtMs = now;
             if (stopTransfer == null) return;
