@@ -81,7 +81,7 @@ public final class MemoketRemoteRecordingService extends Service {
         trace = new MemoketDebugTrace(this, "REMOTE_RECORDING");
         trace.phase("SERVICE_CREATED");
         createChannel();
-        // Recording control and file transfer intentionally use separate BLE connections.
+        // Keep one BLE connection for recording control, file acquisition and deletion.
     }
 
     @Override
@@ -411,19 +411,15 @@ public final class MemoketRemoteRecordingService extends Service {
                 inFlightMetadata = false;
                 trace.phase("METADATA_RESPONSE_TIMEOUT_CONTINUE");
             }
+            // The official capture reads final size/CRC after the DATA stream
+            // has ended. Do not finalize a still-growing recording mid-stream.
             boolean dataQuiet = now - lastStopDataAtMs >= 1_000L;
-            boolean inStreamProbeDue = now - stopRequestedAtMs >= 10_000L
-                    && now - lastMetadataRequestAtMs >= 10_000L
-                    && stopTransfer.dataBlockCount() >= 32;
-            boolean afterQuietProbeDue = dataQuiet
-                    && now - lastMetadataRequestAtMs >= 1_000L;
             if (stopNotifyStep == 3 && !commandBusy && commands.isEmpty()
                     && stopTransfer.shouldRequestMetadata() && !inFlightMetadata
-                    && (afterQuietProbeDue || inStreamProbeDue)) {
+                    && dataQuiet && now - lastMetadataRequestAtMs >= 1_000L) {
                 inFlightMetadata = true;
                 lastMetadataRequestAtMs = now;
-                trace.phase(dataQuiet ? "OFFICIAL_METADATA_REQUESTED"
-                        : "IN_STREAM_METADATA_PROBE");
+                trace.phase("OFFICIAL_METADATA_AFTER_DATA");
                 queue(MemoketTransfer.metadataCommand());
             }
             stopHandler.postDelayed(stopWatchdog, 500);
@@ -440,12 +436,11 @@ public final class MemoketRemoteRecordingService extends Service {
         stopHandler.removeCallbacks(stopWatchdog);
         trace.phase("OFFICIAL_TRANSFER_ACK_CONFIRMED",
                 stateDetails());
-        // The HCI only proves transfer and 05 ACK, NOT red-LED / recording stop.
-        updateState("取得完了・Gem停止は要確認");
+        updateState("データ取得・Gemファイル削除完了");
         MemoketSettings.saveResult(this,
-                "公式HCI順で1ファイルCRC照合・端末保存・05 ACK完了。録音停止（赤LED消灯）は実機で確認してください");
-        log("MEMOKET_OFFICIAL_TRANSFER_SAVED_ACKED", stateDetails());
-        updateNotification("Memoket音声を保存しました（Gem停止は要確認）");
+                "録音" + stopSavedFiles + "件のCRC照合・端末保存・Gem 05 ACK・再一覧照合まで完了");
+        log("MEMOKET_OFFICIAL_FILE_DELETE_CONFIRMED", stateDetails());
+        updateNotification("Memoket " + stopSavedFiles + "件を保存し、Gem上の削除を照合しました");
         stopForeground(STOP_FOREGROUND_REMOVE);
         closeGatt();
         stopSelf();
@@ -533,6 +528,7 @@ public final class MemoketRemoteRecordingService extends Service {
             d.put("sessionStep", session.debugStep());
             d.put("stopCccdStep", stopNotifyStep);
             d.put("savedFiles", stopSavedFiles);
+            d.put("deviceFilesRemoved", stopTransfer == null ? 0 : stopTransfer.verifiedRemovals());
             d.put("transferState", stopTransfer == null ? "NONE" : stopTransfer.debugState());
         } catch (Exception ignored) { }
         return d;
