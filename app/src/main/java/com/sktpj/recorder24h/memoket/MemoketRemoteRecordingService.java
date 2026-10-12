@@ -105,7 +105,7 @@ public final class MemoketRemoteRecordingService extends Service {
                 log("MEMOKET_OFFICIAL_FILE_DURABLY_SAVED",
                         new JSONObject().put("filename", name)
                                 .put("bytes", payload.length).put("crc32", Long.toHexString(crc)));
-            }, null, 1);
+            }, null, Integer.MAX_VALUE, true);
             lastStopActivityAtMs = System.currentTimeMillis();
             lastStopDataAtMs = lastStopActivityAtMs;
             lastMetadataRequestAtMs = 0;
@@ -113,9 +113,9 @@ public final class MemoketRemoteRecordingService extends Service {
             sentMidTransferStatus = false;
             updateState("停止操作中（実機確認待ち）");
             MemoketSettings.recordingStopRequested(this, stopRequestedAtMs);
-            trace.phase("OFFICIAL_DATA_CCCD_OFF_REQUESTED");
-            stopNotifyStep = 1;
-            setNotification(data, false);
+            trace.phase("OFFICIAL_STOP_03_COMMAND_REQUESTED");
+            stopNotifyStep = 0;
+            queue(new byte[]{0x03});
             stopHandler.removeCallbacks(stopWatchdog);
             stopHandler.postDelayed(stopWatchdog, 500);
             return START_NOT_STICKY;
@@ -294,6 +294,14 @@ public final class MemoketRemoteRecordingService extends Service {
         if (stopCompleted) return;
         try {
             if (stopPending) {
+                if (stopNotifyStep == 0 && uuid.equals(MemoketGattSync.RESPONSE)
+                        && value != null && value.length == 2
+                        && value[0] == 0x03 && (value[1] & 0xff) == 0xff) {
+                    trace.phase("OFFICIAL_STOP_03FF_RECEIVED");
+                    stopNotifyStep = 1;
+                    setNotification(data, false);
+                    return;
+                }
                 onOfficialStopNotification(uuid, value);
                 return;
             }
@@ -370,8 +378,9 @@ public final class MemoketRemoteRecordingService extends Service {
             queue(next);
         }
         if (stopTransfer != null && stopTransfer.isDone()) {
-            if (stopSavedFiles != 1) {
-                throw new IllegalStateException("05 ACKに至ったが音声保存件数が不正です: " + stopSavedFiles);
+            if (stopSavedFiles < 1 || stopTransfer.verifiedRemovals() != stopSavedFiles) {
+                throw new IllegalStateException("Gem保存・削除確認件数が一致しません: saved="
+                        + stopSavedFiles + ", removed=" + stopTransfer.verifiedRemovals());
             }
             finishOfficialTransfer();
         }
