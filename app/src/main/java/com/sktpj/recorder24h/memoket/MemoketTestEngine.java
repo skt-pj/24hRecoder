@@ -62,21 +62,28 @@ public final class MemoketTestEngine {
         long startedAt = System.currentTimeMillis();
         JSONObject result = new JSONObject();
         Session session = null;
+        boolean ownsOneShotGuard = false;
         try {
+            if ("OFFICIAL_ONE_SHOT".equals(caseId)) {
+                ownsOneShotGuard = BATCH_RUNNING.compareAndSet(false, true);
+                if (!ownsOneShotGuard) throw new IllegalStateException("別のGem診断が進行中です");
+            }
             result.put("id", startedAt + "-" + caseId);
             result.put("caseId", caseId);
             result.put("startedAtMs", startedAt);
             result.put("vibration", -1);
             result.put("status", "RUNNING");
             result.put("physicalStopUserConfirmed", userConfirmedPhysicalStop);
-            if (!userConfirmedPhysicalStop) {
-                throw new IllegalStateException("Gem本体が停止したことを確認するまでBLE試験は実行できません");
+            boolean officialOneShot = "OFFICIAL_ONE_SHOT".equals(caseId);
+            if (!officialOneShot && !userConfirmedPhysicalStop) {
+                throw new IllegalStateException("保存済みファイルの直接取得はGem本体の停止確認が必要です");
             }
-            if (!"FILE_ONE".equals(caseId)) {
-                throw new IllegalStateException("未検証の録音開始/停止候補と一覧だけの切断試験は無効です。"
-                        + "公式HCI由来の停止済みファイル1件取得だけを実行してください");
+            if (!officialOneShot && !"FILE_ONE".equals(caseId)) {
+                throw new IllegalStateException("未対応の診断です。公式HCI 1回試験または停止済み1件取得を選択してください");
             }
-            progress(listener, "接続準備", "Gem停止をユーザーが確認済み。ファイル1件のBLE転送を開始します", false);
+            progress(listener, "接続準備",
+                    officialOneShot ? "公式HCIの開始→約5秒録音→通知OFF/ON→取得を1回だけ実行"
+                            : "Gem停止確認後、ファイル1件のBLE転送を開始", false);
 
             if (Build.VERSION.SDK_INT >= 31 &&
                     context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
@@ -87,7 +94,8 @@ public final class MemoketTestEngine {
 
             session = new Session(context, address, result);
             session.connect();
-            runFileCase(context, session, "FILE_ONE", "", result, listener);
+            if (officialOneShot) runOfficialOneShot(context, session, result, listener);
+            else runFileCase(context, session, "FILE_ONE", "", result, listener);
             if (result.optInt("downloadedFiles", 0) != 1) {
                 throw new IllegalStateException("CRC照合・端末保存・Gem ACKまで完了したファイルが0件です");
             }
@@ -114,6 +122,7 @@ public final class MemoketTestEngine {
                 attachOfficialComparison(context, result, new JSONArray(), -1);
             }
             MemoketTestStore.save(context, result);
+            if (ownsOneShotGuard) BATCH_RUNNING.set(false);
         }
         return result;
     }
@@ -263,6 +272,51 @@ public final class MemoketTestEngine {
             target.put("officialComparison", comparison);
             AppLogger.event(context, "MEMOKET_OFFICIAL_HCI_COMPARISON", comparison);
         } catch (Exception ignored) { }
+    }
+
+    /**
+     * One reproducible START→transition→1 file trial from the official HCI.
+     * This never interprets a 03ff ACK or CCCD switch as physical stop proof.
+     * A 5-second trial is bounded by a 24-second audio-size safety check.
+     */
+    private static void runOfficialOneShot(Context context, Session s,
+            JSONObject result, ProgressListener listener) throws Exception {
+        s.enableData(true);
+        s.enableResponse(true);
+        if (s.extra5 != null && s.extra5.getDescriptor(CCCD) != null) s.enableExtra5(true);
+        if (s.extra6 != null && s.extra6.getDescriptor(CCCD) != null) s.enableExtra6(true);
+        s.handshakeStandard();
+        if (!"0000".equals(s.initialStatusHex)) {
+            throw new IllegalStateException("Gemが待機状態0000ではありません。録音中・転送中の既存ファイルを保護するため03開始を送信しません: "
+                    + s.initialStatusHex);
+        }
+        progress(listener, "公式HCI録音開始", "待機0000確認→03送信→03ff ACKを検証", false);
+        Event ack = s.exchange(new byte[] {0x03}, 0x03, 5_000L);
+        if (ack.value.length != 2 || ack.value[1] != (byte) 0xff) {
+            throw new IllegalStateException("公式HCIの03ff応答が確認できません: " + hex(ack.value));
+        }
+        result.put("recordingStartAck", hex(ack.value));
+        progress(listener, "5秒録音", "Gemへ開始03を送信済み。5秒後に公式HCIの通知OFF→ONを実行", false);
+        long target = System.currentTimeMillis() + 5_000L;
+        while (System.currentTimeMillis() < target) {
+            if (CANCEL_REQUESTED.get() || Thread.currentThread().isInterrupted()) {
+                throw new InterruptedException("録音テストを中止しました。自動削除ACKは送りません");
+            }
+            Thread.sleep(100L);
+        }
+        progress(listener, "公式HCI停止操作", "同一GATT接続でDATA CCCD OFF→ON（赤LED消灯は要実機確認）", false);
+        s.enableData(false);
+        s.enableData(true);
+        result.put("dataCccdStopSequenceSent", true);
+        result.put("gemStopVerifiedByDevice", false);
+        progress(listener, "録音の取得", "01→DATA連番0→02サイズCRC→03確定→永続保存→05 ACK", false);
+        // 5s at the measured ~4 KB/s is ~20 KB. More than 96 KB
+        // means the supposed stopped recording streamed >24s worth of audio.
+        // Avoid repeating multi-minute live-stream tests with no file finalize.
+        int saved = s.downloadPending(context, 1, null, listener, 96_000L);
+        result.put("downloadedFiles", saved);
+        result.put("listedFile", s.firstAnnouncedFile);
+        result.put("gemStopVerifiedByDevice", false);
     }
 
     /** A list-only command may start DATA streaming; never issue it then disconnect. */
@@ -437,6 +491,7 @@ public final class MemoketTestEngine {
         volatile int observedDataBlocks = 0;
         volatile int metadataProbeCount = 0;
         volatile String lastMetadataResponseHex = "";
+        volatile String initialStatusHex = "";
 
         Session(Context context, String address, JSONObject result) {
             this.context = context.getApplicationContext();
@@ -524,6 +579,7 @@ public final class MemoketTestEngine {
 
         void handshakeStandard() throws Exception {
             Event status = exchange(new byte[]{0x00}, 0x00, 4_000);
+            initialStatusHex = hex(status.value);
             if (status.value.length < 2) {
                 throw new IllegalStateException("Gemの00応答が短すぎます: " + hex(status.value));
             }
@@ -594,6 +650,11 @@ public final class MemoketTestEngine {
 
         int downloadPending(Context context, int maxFiles, String targetName,
                 ProgressListener listener) throws Exception {
+            return downloadPending(context, maxFiles, targetName, listener, Long.MAX_VALUE);
+        }
+
+        int downloadPending(Context context, int maxFiles, String targetName,
+                ProgressListener listener, long maxTrialAudioBytes) throws Exception {
             if (!dataEnabled) enableData(true);
             if (!responseEnabled) enableResponse(true);
             MemoketRecordingStore store = new MemoketRecordingStore(context);
@@ -665,6 +726,18 @@ public final class MemoketTestEngine {
                         continue;
                     }
                     byte[] candidate = transfer.onData(event.value);
+                    if (transfer.bufferedBytes() > maxTrialAudioBytes) {
+                        throw new IllegalStateException("公式HCIの5秒録音試験で音声が"
+                                + transfer.bufferedBytes() + "Bを超過。Gemがまだ録音中の可能性があります。"
+                                + "赤LED状態を確認してください。CRC未検証につき05 ACKしません");
+                    }
+                    if (maxTrialAudioBytes != Long.MAX_VALUE
+                            && transfer.dataBlockCount() == 19) {
+                        // Original official HCI interleaves 00 and e1 during DATA.
+                        write(new byte[] {0x00});
+                        write(new byte[] {(byte) 0xe1});
+                        addTrace("OFFICIAL_INTERLEAVED_STATUS", "00,e1 after seq18");
+                    }
                     long now = System.currentTimeMillis();
                     // A continuously growing recording stream never yields a 300ms
                     // quiet interval. Probe 02 conservatively, at most every 10s,
