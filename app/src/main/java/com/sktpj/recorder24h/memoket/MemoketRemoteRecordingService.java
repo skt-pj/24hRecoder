@@ -73,7 +73,7 @@ public final class MemoketRemoteRecordingService extends Service {
     private long lastMetadataRequestAtMs;
     private int stopSavedFiles;
     private boolean inFlightMetadata;
-    private boolean sentMidTransferStatus;
+    private int midTransferStatusStep;
     private boolean connectForStop;
 
     @Override
@@ -159,18 +159,33 @@ public final class MemoketRemoteRecordingService extends Service {
         recordingStartAwaitingAck = false;
         stopSavedFiles = 0;
         earlyAudio.clear();
+        String activeName = session.recordingFileHint();
+        long startedAt = MemoketSettings.recordingStartedAt(this);
+        MemoketTransfer.FileSelector latest;
+        if (!activeName.isEmpty()) {
+            latest = activeName::equals;
+        } else if (startedAt > 0 && startedAt <= stopRequestedAtMs
+                && !MemoketSettings.recordingStartedZone(this).isEmpty()) {
+            MemoketRecordingWindow window = new MemoketRecordingWindow(
+                    startedAt, stopRequestedAtMs, MemoketSettings.recordingStartedZone(this));
+            latest = window::matches;
+        } else {
+            finishWithError("Gemの最新録音ファイルを特定できません。過去ファイルの自動削除を防止しました");
+            return;
+        }
+        trace.phase("LATEST_RECORDING_IDENTIFIED");
         stopTransfer = new MemoketTransfer((name, payload, crc) -> {
             new MemoketRecordingStore(this).persist(name, payload, crc);
             stopSavedFiles++;
             log("MEMOKET_OFFICIAL_FILE_DURABLY_SAVED",
                     new JSONObject().put("filename", name)
                             .put("bytes", payload.length).put("crc32", Long.toHexString(crc)));
-        }, null, Integer.MAX_VALUE, true);
+        }, latest, 1, true);
         lastStopActivityAtMs = System.currentTimeMillis();
         lastStopDataAtMs = lastStopActivityAtMs;
         lastMetadataRequestAtMs = 0;
         inFlightMetadata = false;
-        sentMidTransferStatus = false;
+        midTransferStatusStep = 0;
         updateState("停止操作中（実機確認待ち）");
         MemoketSettings.recordingStopRequested(this, stopRequestedAtMs);
         trace.phase("OFFICIAL_STOP_03_COMMAND_REQUESTED");
@@ -375,6 +390,17 @@ public final class MemoketRemoteRecordingService extends Service {
         lastStopActivityAtMs = now;
         trace.response(value, "OFFICIAL_STOP_TRANSFER", "ONE_GATT");
         int opcode = value[0] & 0xff;
+        if (midTransferStatusStep == 1 && opcode == 0) {
+            if (value.length < 2 || value[1] != 0x01) {
+                throw new IllegalStateException("Gem中間状態応答が不正です: " + hex(value));
+            }
+            midTransferStatusStep = 2;
+            trace.phase("OFFICIAL_E1_STATUS_REQUESTED_AFTER_00_RESPONSE");
+            queue(new byte[]{(byte) 0xe1});
+        } else if (midTransferStatusStep == 2 && opcode == 0xe1) {
+            midTransferStatusStep = 3;
+            trace.phase("OFFICIAL_E1_STATUS_RECEIVED");
+        }
         if (opcode == 2) inFlightMetadata = false;
         byte[] next = stopTransfer == null ? null : stopTransfer.onControl(value);
         if (opcode == 1 && stopTransfer != null
@@ -401,12 +427,11 @@ public final class MemoketRemoteRecordingService extends Service {
     private void onOfficialData(byte[] value) {
         byte[] next = stopTransfer.onData(value);
         if (next != null) queue(next);
-        if (!sentMidTransferStatus && stopTransfer.dataBlockCount() >= 19) {
-            // Explicitly observed in official HCI while DATA was streaming.
-            sentMidTransferStatus = true;
-            trace.phase("OFFICIAL_INTERLEAVED_STATUS_REQUEST");
+        if (midTransferStatusStep == 0 && stopTransfer.dataBlockCount() >= 19) {
+            // Official HCI interleaving: wait for the 00 response BEFORE e1.
+            midTransferStatusStep = 1;
+            trace.phase("OFFICIAL_INTERLEAVED_STATUS_00_REQUESTED");
             queue(new byte[]{0x00});
-            queue(new byte[]{(byte) 0xe1});
         }
     }
 
@@ -446,11 +471,11 @@ public final class MemoketRemoteRecordingService extends Service {
         stopPending = false;
         recordingActive = false;
         stopHandler.removeCallbacks(stopWatchdog);
-        trace.phase("OFFICIAL_TRANSFER_ACK_CONFIRMED",
+        trace.phase("OFFICIAL_SELECTED_FILE_REMOVED_AND_VERIFIED",
                 stateDetails());
         updateState("データ取得・Gemファイル削除完了");
         MemoketSettings.saveResult(this,
-                "録音" + stopSavedFiles + "件のCRC照合・端末保存・Gem 05 ACK・再一覧照合まで完了");
+                "最新録音" + stopSavedFiles + "件のCRC照合・端末保存・Gem 05 ACK・再一覧照合まで完了");
         log("MEMOKET_OFFICIAL_FILE_DELETE_CONFIRMED", stateDetails());
         updateNotification("Memoket " + stopSavedFiles + "件を保存し、Gem上の削除を照合しました");
         stopForeground(STOP_FOREGROUND_REMOVE);
@@ -541,6 +566,7 @@ public final class MemoketRemoteRecordingService extends Service {
             d.put("stopCccdStep", stopNotifyStep);
             d.put("savedFiles", stopSavedFiles);
             d.put("deviceFilesRemoved", stopTransfer == null ? 0 : stopTransfer.verifiedRemovals());
+            d.put("midTransferStatusStep", midTransferStatusStep);
             d.put("transferState", stopTransfer == null ? "NONE" : stopTransfer.debugState());
         } catch (Exception ignored) { }
         return d;
