@@ -50,6 +50,8 @@ public final class MemoketRemoteRecordingService extends Service {
     private BluetoothGattCharacteristic data;
     private BluetoothGattCharacteristic control;
     private BluetoothGattCharacteristic response;
+    private BluetoothGattCharacteristic extraNotify5;
+    private BluetoothGattCharacteristic extraNotify6;
     private boolean commandBusy;
     private int notifySetupStep;
     private boolean recordingStartPending;
@@ -243,6 +245,8 @@ public final class MemoketRemoteRecordingService extends Service {
             data = service.getCharacteristic(MemoketGattSync.DATA);
             control = service.getCharacteristic(MemoketGattSync.CONTROL);
             response = service.getCharacteristic(MemoketGattSync.RESPONSE);
+            extraNotify5 = service.getCharacteristic(MemoketTestEngine.EXTRA5);
+            extraNotify6 = service.getCharacteristic(MemoketTestEngine.EXTRA6);
             trace.characteristicInventory(data != null, control != null, response != null);
             if (data == null || control == null || response == null) {
                 finishWithError("Memoket GATT characteristicが不足しています");
@@ -302,14 +306,23 @@ public final class MemoketRemoteRecordingService extends Service {
     };
 
     private void enableInitialNotifications() {
-        BluetoothGattCharacteristic next = notifySetupStep++ == 0 ? data :
-                notifySetupStep == 2 ? response : null;
+        BluetoothGattCharacteristic next = null;
+        while (notifySetupStep < 4 && next == null) {
+            switch (notifySetupStep++) {
+                case 0: next = data; break;
+                case 1: next = response; break;
+                case 2: next = extraNotify5; break;
+                case 3: next = extraNotify6; break;
+                default: break;
+            }
+            if (next != null && next.getDescriptor(CCCD) == null) next = null;
+        }
         if (next == null) {
             trace.phase("HANDSHAKE_STARTED");
             queue(session.firstCommand());
-            return;
+        } else {
+            setNotification(next, true);
         }
-        setNotification(next, true);
     }
 
     private synchronized void handleNotification(UUID uuid, byte[] value) {
