@@ -36,6 +36,9 @@ public final class MemoketTransfer {
     private final CompletedFile save;
     private final FileSelector selector;
     private final int maxFiles;
+    private final boolean verifyDeviceRemoval;
+    private String lastDeletionAckFile;
+    private int verifiedRemovals;
     private String name;
     private long expectedSize = -1;
     private long expectedCrc = -1;
@@ -56,10 +59,17 @@ public final class MemoketTransfer {
 
     /** maxFiles=1 for the Gem recording that the user explicitly stopped. */
     public MemoketTransfer(CompletedFile save, FileSelector selector, int maxFiles) {
-        if (maxFiles < 1 || maxFiles > 50) throw new IllegalArgumentException("Invalid file limit");
+        this(save, selector, maxFiles, false);
+    }
+
+    /** Verify a filename-specific 05 ACK by retrieving the next official 01 listing. */
+    public MemoketTransfer(CompletedFile save, FileSelector selector, int maxFiles,
+            boolean verifyDeviceRemoval) {
+        if (maxFiles < 1) throw new IllegalArgumentException("Invalid file limit");
         this.save = save;
         this.selector = selector;
         this.maxFiles = maxFiles;
+        this.verifyDeviceRemoval = verifyDeviceRemoval;
     }
 
     public static byte[] initialCommand() {
@@ -85,12 +95,27 @@ public final class MemoketTransfer {
 
         if (state == State.WAIT_LIST) {
             if (code != 1) return null;
-            if (payload.length < 4 || payload[1] != 1 || payload[2] != 1) {
+            if (payload.length >= 3 && payload[1] == 0 && payload[2] == 0) {
+                if (lastDeletionAckFile != null) {
+                    verifiedRemovals++;
+                    lastDeletionAckFile = null;
+                }
                 state = State.DONE;
                 return null;
             }
+            if (payload.length < 4 || payload[1] != 1 || payload[2] != 1) {
+                throw new IllegalStateException("Gem一覧が未確定です: " + hex(payload)
+                        + "。デバイスファイル削除を確認できません");
+            }
             String incoming = new String(payload, 3, payload.length - 3, StandardCharsets.US_ASCII);
             requireName(incoming);
+            if (lastDeletionAckFile != null) {
+                if (lastDeletionAckFile.equals(incoming)) {
+                    throw new IllegalStateException("05 ACK後もGemに同じファイルが残っています: " + incoming);
+                }
+                verifiedRemovals++;
+                lastDeletionAckFile = null;
+            }
             if (selector != null && !selector.accept(incoming)) {
                 // A list request may begin streaming a different recording. Never ACK
                 // it merely to advance a queue: an ACK may delete the Gem's source file.
@@ -159,7 +184,9 @@ public final class MemoketTransfer {
 
         if (state == State.WAIT_ACK) {
             if (code != 5 || payload.length < 2 || payload[1] != 1) return null;
-            if (completedCount >= maxFiles) {
+            if (verifyDeviceRemoval) {
+                lastDeletionAckFile = name;
+            } else if (completedCount >= maxFiles) {
                 state = State.DONE;
                 return null;
             }
@@ -214,6 +241,7 @@ public final class MemoketTransfer {
 
     public synchronized boolean isDone() { return state == State.DONE; }
     public synchronized int completedCount() { return completedCount; }
+    public synchronized int verifiedRemovals() { return verifiedRemovals; }
     public synchronized String debugState() { return state.name(); }
     public synchronized String debugFileName() { return name == null ? "" : name; }
     public synchronized long debugExpectedSize() { return expectedSize; }
