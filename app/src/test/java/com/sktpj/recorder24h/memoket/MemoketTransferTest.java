@@ -223,4 +223,63 @@ public class MemoketTransferTest {
         assertNull(transfer.onControl(listResult()));
     }
 
+    @Test
+    public void verifiesGemFileAbsentOnlyAfterPersistAndDeleteAck() throws Exception {
+        byte[] audio = new byte[480];
+        AtomicInteger saved = new AtomicInteger();
+        MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> {
+            assertEquals(NAME, name);
+            assertArrayEquals(audio, bytes);
+            saved.incrementAndGet();
+        }, null, Integer.MAX_VALUE, true);
+        transfer.onControl(listResult());
+        transfer.onData(block(0, audio));
+        assertArrayEquals(new byte[]{3}, transfer.onControl(metadata(audio)));
+        assertEquals(0, saved.get());
+        byte[] delete = transfer.onControl(new byte[]{3, (byte) 0xff});
+        assertEquals(5, delete[0]);
+        assertEquals(1, saved.get());
+        assertEquals(0, transfer.verifiedRemovals());
+        assertArrayEquals(new byte[]{1, 0, 0}, transfer.onControl(new byte[]{5, 1}));
+        assertFalse(transfer.isDone());
+        transfer.onControl(new byte[]{1, 0, 0});
+        assertEquals(1, transfer.verifiedRemovals());
+        assertTrue(transfer.isDone());
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void refusesToClaimGemRemovalWhileSameFileIsStillListed() throws Exception {
+        byte[] audio = new byte[480];
+        MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> {},
+                null, Integer.MAX_VALUE, true);
+        transfer.onControl(listResult());
+        transfer.onData(block(0, audio));
+        transfer.onControl(metadata(audio));
+        transfer.onControl(new byte[]{3, (byte) 0xff});
+        transfer.onControl(new byte[]{5, 1});
+        transfer.onControl(listResult());
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void neverTreatsAmbiguousBusyListAsDeletionVerification() throws Exception {
+        byte[] audio = new byte[480];
+        MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> {},
+                null, Integer.MAX_VALUE, true);
+        transfer.onControl(listResult());
+        transfer.onData(block(0, audio));
+        transfer.onControl(metadata(audio));
+        transfer.onControl(new byte[]{3, (byte) 0xff});
+        transfer.onControl(new byte[]{5, 1});
+        transfer.onControl(new byte[]{1, 0, 1});
+    }
+
+    @Test
+    public void acceptsActiveGemStatusOnlyWhenStopRequested() {
+        MemoketSessionProtocol session = new MemoketSessionProtocol();
+        session.allowActiveRecordingStatus(true);
+        session.firstCommand();
+        assertArrayEquals(new byte[]{0x27,0x01},
+                session.onResponse(new byte[]{0,1,0,'2'}));
+    }
+
 }
