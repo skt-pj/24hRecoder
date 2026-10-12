@@ -224,6 +224,10 @@ public final class MemoketTestEngine {
                 report.put("traceSessionId", session == null ? "" : session.debug.sessionId());
                 report.put("firstDataSequence", firstSeq);
                 report.put("dataBlockCount", session == null ? 0 : session.observedDataBlocks);
+                report.put("metadataProbeCount", session == null ? 0 : session.metadataProbeCount);
+                report.put("transferSpeedBytesPerSec",
+                        session == null ? 0 : Math.round(session.observedDataBlocks * 480.0
+                                / Math.max(1.0, (System.currentTimeMillis() - began) / 1000.0)));
                 report.put("listedFile", session == null ? "" : session.firstAnnouncedFile);
                 report.put("listResponseHex", session == null ? "" : session.lastListResponseHex);
                 report.put("lastMetadataResponseHex", session == null ? "" : session.lastMetadataResponseHex);
@@ -271,8 +275,13 @@ public final class MemoketTestEngine {
         session.enableData(true);
         session.enableResponse(true);
         session.handshakeStandard();
+        // Official HCI: DATA CCCD 0000 -> 0100 before requesting the file.
+        // This is a transport sequence, NOT independent proof of recording stop.
+        session.addTrace("OFFICIAL_DATA_TRANSITION", "CCCD DATA OFF then ON in same GATT session");
+        session.enableData(false);
+        session.enableData(true);
         progress(listener, "音声ファイル取得", "01一覧→DATA連番0から→02メタデータ→CRC検証→03確定→保存→05 ACK", false);
-        int downloaded = session.downloadPending(context, 1, null);
+        int downloaded = session.downloadPending(context, 1, null, listener);
         result.put("downloadedFiles", downloaded);
         result.put("listedFile", session.firstAnnouncedFile);
         if (downloaded != 1) {
@@ -449,6 +458,10 @@ public final class MemoketTestEngine {
             if (connectionStatus != BluetoothGatt.GATT_SUCCESS || connectionState != BluetoothProfile.STATE_CONNECTED) {
                 throw new IllegalStateException("GATT接続エラー: " + connectionStatus);
             }
+            // Best-effort BLE throughput request: firmware controls its actual DATA pacing.
+            boolean highPriorityRequested = gatt.requestConnectionPriority(
+                    BluetoothGatt.CONNECTION_PRIORITY_HIGH);
+            addTrace("CONNECTION_PRIORITY_HIGH", "requestAccepted=" + highPriorityRequested);
             debug.phase("SERVICE_DISCOVERY_REQUESTED");
             if (!gatt.discoverServices()) throw new IllegalStateException("GATTサービス探索を開始できません");
             if (!servicesReady.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("GATTサービス探索がタイムアウトしました");
@@ -579,7 +592,8 @@ public final class MemoketTestEngine {
             throw new IllegalStateException(String.format("response 0x%02x timeout", opcode));
         }
 
-        int downloadPending(Context context, int maxFiles, String targetName) throws Exception {
+        int downloadPending(Context context, int maxFiles, String targetName,
+                ProgressListener listener) throws Exception {
             if (!dataEnabled) enableData(true);
             if (!responseEnabled) enableResponse(true);
             MemoketRecordingStore store = new MemoketRecordingStore(context);
@@ -606,6 +620,10 @@ public final class MemoketTestEngine {
             final long NO_DATA_OR_RESPONSE_STALL_MS = 60_000L;
             long lastMetadataProbeAt = System.currentTimeMillis();
             long lastActivity = System.currentTimeMillis();
+            final long transferStartedAt = lastActivity;
+            long lastProgressNoticeAt = transferStartedAt;
+            // Reads metadata; never triggers delete, unlike filename-specific 05 ACK.
+            final long IN_STREAM_METADATA_INTERVAL_MS = 10_000L;
             while (true) {
                 if (CANCEL_REQUESTED.get() || Thread.currentThread().isInterrupted()) {
                     throw new InterruptedException("ファイル取得をユーザー操作で中止しました。未検証のデータはACKしません");
@@ -647,11 +665,39 @@ public final class MemoketTestEngine {
                         continue;
                     }
                     byte[] candidate = transfer.onData(event.value);
-                    debug.transferState(transfer, "TEST_DATA_PARSED");
-                    if (candidate != null) next = candidate;
-                    // Match the existing HCI-derived flow: finish the DATA
-                    // stream, then request metadata after a quiet interval.
-                    // Do not inject speculative periodic commands mid-stream.
+                    long now = System.currentTimeMillis();
+                    // A continuously growing recording stream never yields a 300ms
+                    // quiet interval. Probe 02 conservatively, at most every 10s,
+                    // to distinguish "busy" from a finished, finite file.
+                    if (candidate == null && next == null
+                            && transfer.shouldRequestMetadata()
+                            && transfer.dataBlockCount() >= 32
+                            && now - lastMetadataProbeAt >= IN_STREAM_METADATA_INTERVAL_MS) {
+                        next = MemoketTransfer.metadataCommand();
+                        addTrace("IN_STREAM_METADATA_PROBE",
+                                "blocks=" + transfer.dataBlockCount()
+                                + " bytes=" + transfer.bufferedBytes());
+                    } else if (candidate != null) {
+                        next = candidate;
+                    }
+                    // Avoid emitting a duplicate detailed transfer state for every
+                    // 120ms audio packet; the byte/sequence trace is retained.
+                    if (transfer.dataBlockCount() <= 3
+                            || transfer.dataBlockCount() % 20 == 0) {
+                        debug.transferState(transfer, "TEST_DATA_PARSED");
+                    }
+                    if (now - lastProgressNoticeAt >= 5_000L) {
+                        lastProgressNoticeAt = now;
+                        long elapsedSec = Math.max(1L, (now - transferStartedAt) / 1000L);
+                        long bytesPerSec = transfer.bufferedBytes() / elapsedSec;
+                        String detail = "受信 " + transfer.bufferedBytes()
+                                + "B / " + transfer.dataBlockCount() + "ブロック"
+                                + " / " + bytesPerSec + "B/s、02照会=" + metadataProbeCount
+                                + "回、最終02応答=" + lastMetadataResponseHex
+                                + "。実時間と同程度ならGemの録音継続の可能性があります";
+                        progress(listener, "Gem音声を受信中（未保存）", detail, false);
+                        addTrace("TRANSFER_PROGRESS", detail);
+                    }
                     continue;
                 }
                 if (!MemoketGattSync.RESPONSE.equals(event.uuid)) continue;
