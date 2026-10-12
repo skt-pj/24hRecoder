@@ -2,19 +2,19 @@ package com.sktpj.recorder24h.memoket;
 
 /**
  * Fail-closed feature gates based on currently verified Gem protocol evidence.
- * Only recording START (idle 0x03 -> 0x03ff) is known; STOP is unknown.
- *
- * Never enable one-sided remote START or unattended transfer until the Gem's
- * true recording state and stop transitions are independently verified.
+ * The official HCI sample supports explicit START + same-GATT transfer.
+ * A successful file ACK is NOT proof that the Gem stopped recording.
+ * Remote START is enabled only for user-initiated protocol verification.
+ * Automatic / unattended transfer remains disabled.
  */
 public final class MemoketFlowPolicy {
-    private static final boolean VERIFIED_REMOTE_STOP = false;
+    private static final boolean EXPLICIT_OFFICIAL_HCI_REPLAY = true;
     private static final boolean VERIFIED_RECORDING_STATUS_QUERY = false;
 
     private MemoketFlowPolicy() {}
 
     public static boolean remoteStartAllowed() {
-        return VERIFIED_REMOTE_STOP && VERIFIED_RECORDING_STATUS_QUERY;
+        return EXPLICIT_OFFICIAL_HCI_REPLAY;
     }
 
     public static boolean periodicTransferAllowed() {
