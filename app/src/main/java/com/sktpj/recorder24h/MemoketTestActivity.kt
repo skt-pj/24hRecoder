@@ -92,8 +92,6 @@ private val starts = listOf(
     CaseUi("START_NONE", "通知なし", "認証後に通知をOFFにして03")
 )
 
-private val officialOneShot = CaseUi("OFFICIAL_ONE_SHOT", "公式HCI 5秒開始→停止→取得の1回試験", "待機0000のみ開始03を送信。5秒後にDATA通知OFF→ON、音声CRC保存とACKを確認。停まらない場合は安全に失敗し、Gemのデータを削除しません。")
-
 private val batchAll = CaseUi("BATCH_ALL", "停止済み音声の取得診断（遠隔停止ではない）", "Gem本体を停止してから実行。公式HCIのDATA OFF→ON→一覧→DATA→CRC→保存→ACKを試験します。遠隔開始・停止は設定画面の別ボタンです。")
 
 private val stops = emptyList<CaseUi>()
@@ -230,10 +228,6 @@ private fun TestApp(onClose: () -> Unit) {
                         selected = batchAll
                         runCase()
                     }
-                },
-                {
-                    selected = officialOneShot
-                    runCase()
                 }
             )
             Screen.FILE -> FileScreen(
@@ -280,11 +274,11 @@ private fun MenuScreen(modifier: Modifier, onStart: () -> Unit, onStop: () -> Un
                 }
             }
         }
-        item { MenuCard("公式HCIの開始・停止・取得テスト／停止済み音声取得", "公式通信の1回試験と、物理停止後の取得診断を分けて実行", onStop) }
+        item { MenuCard("停止済み音声の取得診断", "通常の停止→取得→Gem削除は設定画面から実行", onStop) }
         item { MenuCard("テスト履歴", "候補の実行時刻・音声長・検証結果を確認", onHistory) }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                Text("公式HCIの1回試験は短い録音を新規作成します。CRC照合と保存に成功した場合のみGemへACKします。既存の重要な録音がある場合は注意してください。",
+                Text("診断専用です。通常の停止・音声取得・デバイスファイル削除は設定画面から実行します。",
                     Modifier.padding(16.dp))
             }
         }
@@ -314,17 +308,9 @@ private fun CaseScreen(modifier: Modifier, intro: String, cases: List<CaseUi>, s
 @Composable
 private fun StopCaseScreen(modifier: Modifier, cases: List<CaseUi>, selected: CaseUi,
     onSelect: (CaseUi) -> Unit, ready: Boolean, onReady: (Boolean) -> Unit,
-    onRun: () -> Unit, onBatch: () -> Unit, onOfficial: () -> Unit) {
+    onRun: () -> Unit, onBatch: () -> Unit) {
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item {
-            Text("公式HCIの5秒開始→停止→保存を1回検証します。待機0000以外では開始しません。完了後はGemの赤LED消灯も確認してください。")
-        }
-        item {
-            Button(onClick = onOfficial, modifier = Modifier.fillMaxWidth()) {
-                Text("公式HCI：5秒録音→停止→取得 1回試験")
-            }
-        }
         item {
             Text("以下は遠隔停止を行わず、Gem本体で停止済みのファイルを取得する従来の診断です。",
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -572,7 +558,7 @@ private fun titleFor(screen: Screen) = when (screen) {
     Screen.HISTORY -> "テスト履歴"
 }
 
-private fun labelFor(id: String) = (starts + stops + files + batchAll + officialOneShot).firstOrNull { it.id == id }?.title ?: id
+private fun labelFor(id: String) = (starts + stops + files + batchAll).firstOrNull { it.id == id }?.title ?: id
 private fun toList(array: JSONArray): List<JSONObject> {
     val out = mutableListOf<JSONObject>()
     for (i in 0 until array.length()) array.optJSONObject(i)?.let(out::add)
