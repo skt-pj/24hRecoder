@@ -284,7 +284,7 @@ private fun MenuScreen(modifier: Modifier, onStart: () -> Unit, onStop: () -> Un
         item { MenuCard("テスト履歴", "候補の実行時刻・音声長・検証結果を確認", onHistory) }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                Text("停止候補テスト自体はファイル取得・ACKをしません。ファイル取得テストは取得成功時にGemへACKを送るため、未取得の重要音声がある場合は注意してください。",
+                Text("公式HCIの1回試験は短い録音を新規作成します。CRC照合と保存に成功した場合のみGemへACKします。既存の重要な録音がある場合は注意してください。",
                     Modifier.padding(16.dp))
             }
         }
@@ -420,7 +420,7 @@ private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObjec
             Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("公式通信との差分チェック", fontWeight = FontWeight.Bold)
-                    Text("基準: 過去の公式HCI観測に由来する手順。今回の公式アプリ通信原本は未提供。")
+                    Text("基準: 公式アプリの生HCIから抽出した期待通信列。今回のGemとのバイト単位の再キャプチャ比較は未実施。")
                     Text("比較状態: " + (comparison?.optString("result") ?: "未実施"))
                     val checks = comparison?.optJSONArray("checks")
                     if (checks != null) for (j in 0 until checks.length()) {
@@ -428,7 +428,7 @@ private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObjec
                         Text(c.optString("label") + ": " + c.optString("status")
                                 + " / " + c.optString("observed"))
                     }
-                    Text("未確認: 公式アプリによる転送完了・Wi-Fi経路・録音停止コマンド",
+                    Text("未確認: Gem本体の赤LED消灯・遠隔停止成立・Wi-Fi経路",
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
