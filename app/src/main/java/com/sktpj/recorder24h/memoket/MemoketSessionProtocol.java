@@ -4,6 +4,8 @@ import java.util.Arrays;
 
 public final class MemoketSessionProtocol {
     private int step;
+    private boolean allowRecordingStatus;
+    public void allowActiveRecordingStatus(boolean allowed) { allowRecordingStatus = allowed; }
 
     public byte[] firstCommand() {
         step = 1;
@@ -19,7 +21,9 @@ public final class MemoketSessionProtocol {
                 return null;
             case 1:
                 if (opcode != 0x00) return null;
-                requirePrefix(value, new byte[]{0x00, 0x00}, "00");
+                if (!(allowRecordingStatus && value.length >= 2 && value[0] == 0 && value[1] == 1)) {
+                    requirePrefix(value, new byte[]{0x00, 0x00}, "00");
+                }
                 step = 2;
                 return new byte[]{0x27, 0x01};
             case 2:
