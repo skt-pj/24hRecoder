@@ -156,6 +156,12 @@ public final class MemoketRemoteRecordingService extends Service {
 
     private synchronized void beginOfficialStop() {
         if (stopPending || stopCompleted) return;
+        // 03 has different observed uses. Never issue it to an idle device
+        // simply because someone pressed STOP from the settings screen.
+        if (!recordingActive && !session.recordingReported()) {
+            finishWithError("Gemが録音中であることを確認できません。停止・削除コマンドは送信していません");
+            return;
+        }
         stopRequestedAtMs = System.currentTimeMillis();
         stopPending = true;
         recordingStartAwaitingAck = false;
