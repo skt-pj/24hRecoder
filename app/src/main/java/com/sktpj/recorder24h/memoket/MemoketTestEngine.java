@@ -298,9 +298,13 @@ public final class MemoketTestEngine {
         result.put("recordingStartAck", hex(ack.value));
         progress(listener, "5秒録音", "Gemへ開始03を送信済み。5秒後に公式HCIの通知OFF→ONを実行", false);
         long target = System.currentTimeMillis() + 5_000L;
+        boolean cancelDuringRecording = false;
         while (System.currentTimeMillis() < target) {
             if (CANCEL_REQUESTED.get() || Thread.currentThread().isInterrupted()) {
-                throw new InterruptedException("録音テストを中止しました。自動削除ACKは送りません");
+                // Do not abandon a recording that this trial has just started:
+                // attempt the observed CCCD stop sequence before disconnecting.
+                cancelDuringRecording = true;
+                break;
             }
             Thread.sleep(100L);
         }
@@ -309,6 +313,9 @@ public final class MemoketTestEngine {
         s.enableData(true);
         result.put("dataCccdStopSequenceSent", true);
         result.put("gemStopVerifiedByDevice", false);
+        if (cancelDuringRecording) {
+            throw new InterruptedException("録音中断操作を受け、GemへDATA OFF→ONを送信しました。赤LED消灯を確認してください。自動削除ACKは送信しません");
+        }
         progress(listener, "録音の取得", "01→DATA連番0→02サイズCRC→03確定→永続保存→05 ACK", false);
         // 5s at the measured ~4 KB/s is ~20 KB. More than 96 KB
         // means the supposed stopped recording streamed >24s worth of audio.
