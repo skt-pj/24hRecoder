@@ -397,13 +397,24 @@ public final class MemoketRemoteRecordingService extends Service {
             if (now - lastStopActivityAtMs > 60_000L) {
                 throw new IllegalStateException("Gemから60秒間DATA/RESPONSEがなく、処理を終了しました");
             }
+            if (inFlightMetadata && now - lastMetadataRequestAtMs > 5_000L) {
+                // A lost 02 response must not permanently block metadata queries.
+                inFlightMetadata = false;
+                trace.phase("METADATA_RESPONSE_TIMEOUT_CONTINUE");
+            }
+            boolean dataQuiet = now - lastStopDataAtMs >= 1_000L;
+            boolean inStreamProbeDue = now - stopRequestedAtMs >= 10_000L
+                    && now - lastMetadataRequestAtMs >= 10_000L
+                    && stopTransfer.dataBlockCount() >= 32;
+            boolean afterQuietProbeDue = dataQuiet
+                    && now - lastMetadataRequestAtMs >= 1_000L;
             if (stopNotifyStep == 3 && !commandBusy && commands.isEmpty()
-                    && stopTransfer.shouldRequestMetadata()
-                    && now - lastStopDataAtMs >= 1_000L
-                    && !inFlightMetadata && now - lastMetadataRequestAtMs >= 1_000L) {
+                    && stopTransfer.shouldRequestMetadata() && !inFlightMetadata
+                    && (afterQuietProbeDue || inStreamProbeDue)) {
                 inFlightMetadata = true;
                 lastMetadataRequestAtMs = now;
-                trace.phase("OFFICIAL_METADATA_REQUESTED");
+                trace.phase(dataQuiet ? "OFFICIAL_METADATA_REQUESTED"
+                        : "IN_STREAM_METADATA_PROBE");
                 queue(MemoketTransfer.metadataCommand());
             }
             stopHandler.postDelayed(stopWatchdog, 500);
