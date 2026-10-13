@@ -392,4 +392,21 @@ public class MemoketTransferTest {
         assertFalse(transfer.isDone());
     }
 
+    @Test(expected = IllegalStateException.class)
+    public void ut01RejectsExtraStatusBytesMasqueradingAsIdle0000() {
+        MemoketSessionProtocol protocol = new MemoketSessionProtocol();
+        protocol.firstCommand();
+        protocol.onResponse(new byte[]{0, 0, 1});
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void ut01RejectsIncorrectHandshakeF3Payload() {
+        MemoketSessionProtocol protocol = new MemoketSessionProtocol();
+        protocol.firstCommand();
+        protocol.onResponse(new byte[]{0,0});
+        protocol.onResponse(new byte[]{0x27,0x02});
+        protocol.onResponse(new byte[]{(byte)0xe1,0x3a,0x02});
+        protocol.onResponse(new byte[]{(byte)0xf3,0x01,0x00});
+    }
+
 }
