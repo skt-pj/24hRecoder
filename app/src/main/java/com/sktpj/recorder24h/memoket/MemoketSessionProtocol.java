@@ -6,6 +6,8 @@ public final class MemoketSessionProtocol {
     private int step;
     private boolean allowRecordingStatus;
     private String recordingFileHint = "";
+    private boolean initialIdle;
+    public boolean initialIdleReported() { return initialIdle; }
     // 00 01 + filename is observed during DATA transfer: not recording proof.
     private boolean busyOrTransferringReported;
     public boolean busyOrTransferringReported() { return busyOrTransferringReported; }
@@ -14,6 +16,9 @@ public final class MemoketSessionProtocol {
 
     public byte[] firstCommand() {
         step = 1;
+        initialIdle = false;
+        busyOrTransferringReported = false;
+        recordingFileHint = "";
         return new byte[]{0x00};
     }
 
@@ -36,6 +41,7 @@ public final class MemoketSessionProtocol {
                     }
                 } else {
                     requirePrefix(value, new byte[]{0x00, 0x00}, "00");
+                    initialIdle = true;
                 }
                 step = 2;
                 return new byte[]{0x27, 0x01};
