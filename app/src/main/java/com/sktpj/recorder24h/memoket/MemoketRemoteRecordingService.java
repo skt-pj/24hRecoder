@@ -94,6 +94,8 @@ public final class MemoketRemoteRecordingService extends Service {
         boolean stopRequest = ACTION_STOP_RECORDING.equals(action);
         if (!stopRequest && !ACTION_START_RECORDING.equals(action)) return START_NOT_STICKY;
         if (stopRequest) {
+            // A duplicate user STOP must not abort an ongoing verified download.
+            if (stopPending || stopCompleted) return START_NOT_STICKY;
             trace.phase("STOP_REQUESTED", stateDetails());
             if (!MemoketStopSafety.canStop(gatt != null && data != null,
                     session.isReady(), recordingActive, stopPending || stopCompleted)) {
