@@ -37,6 +37,7 @@ import java.util.UUID;
 
 public final class MemoketRemoteRecordingService extends Service {
     public static final String ACTION_START_RECORDING = "com.sktpj.recorder24h.memoket.START_RECORDING";
+    public static final String ACTION_RECORD_FIVE_SECONDS = "com.sktpj.recorder24h.memoket.RECORD_FIVE_SECONDS";
     public static final String ACTION_STOP_RECORDING = "com.sktpj.recorder24h.memoket.STOP_RECORDING";
 
     private static final String CHANNEL_ID = "memoket_remote_recording";
@@ -55,6 +56,7 @@ public final class MemoketRemoteRecordingService extends Service {
     private boolean commandBusy;
     private int notifySetupStep;
     private boolean recordingStartPending;
+    private boolean fiveSecondRecording;
     private boolean recordingStartAwaitingAck;
     private boolean recordingActive;
     private boolean stopPending;
@@ -65,6 +67,12 @@ public final class MemoketRemoteRecordingService extends Service {
     private int stopNotifyStep;
     private final Deque<byte[]> earlyAudio = new ArrayDeque<>();
     private final Handler stopHandler = new Handler(Looper.getMainLooper());
+    private final Runnable fiveSecondStop = () -> {
+        if (fiveSecondRecording && recordingActive && !stopPending && !stopCompleted) {
+            trace.phase("FIVE_SECOND_RECORDING_ENDED");
+            beginOfficialStop();
+        }
+    };
     private final Runnable stopWatchdog = new Runnable() {
         @Override public void run() {
             checkStopProgress();
@@ -92,14 +100,18 @@ public final class MemoketRemoteRecordingService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
         boolean stopRequest = ACTION_STOP_RECORDING.equals(action);
-        if (!stopRequest && !ACTION_START_RECORDING.equals(action)) return START_NOT_STICKY;
+        boolean fiveSecondRequest = ACTION_RECORD_FIVE_SECONDS.equals(action);
+        if (!stopRequest && !ACTION_START_RECORDING.equals(action)
+                && !fiveSecondRequest) return START_NOT_STICKY;
+        if (fiveSecondRequest && (recordingStartPending || recordingActive || stopPending))
+            return START_NOT_STICKY;
         if (stopRequest) {
             // A duplicate user STOP must not abort an ongoing verified download.
             if (stopPending || stopCompleted) return START_NOT_STICKY;
             trace.phase("STOP_REQUESTED", stateDetails());
             if (!MemoketStopSafety.canStop(gatt != null && data != null,
                     session.isReady(), recordingActive, stopPending || stopCompleted)) {
-                finishWithError("アプリがこの接続で開始した録音を確認できません。安全のため停止03・取得・削除を送信しません");
+                finishWithError("アプリがこの接続で開始した録音を確認できません。取得・削除を送信しません");
                 return START_NOT_STICKY;
             }
             beginOfficialStop();
@@ -110,7 +122,9 @@ public final class MemoketRemoteRecordingService extends Service {
             if (!recordingActive) stopSelf(startId);
             return START_NOT_STICKY;
         }
-        trace.phase("START_REQUESTED", stateDetails());
+        fiveSecondRecording = fiveSecondRequest;
+        trace.phase(fiveSecondRecording ? "FIVE_SECOND_RECORDING_REQUESTED"
+                : "START_REQUESTED", stateDetails());
         if (Build.VERSION.SDK_INT >= 31 &&
                 checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
             finishWithError("Bluetooth接続権限がありません");
@@ -162,7 +176,7 @@ public final class MemoketRemoteRecordingService extends Service {
         // START on the same GATT connection without another 0x03.
         if (!MemoketStopSafety.canStop(gatt != null && data != null,
                 session.isReady(), recordingActive, stopPending || stopCompleted)) {
-            finishWithError("同一GATTのSTART 03ff記録がないため、STOPを送信しません");
+            finishWithError("同一GATTのSTART 03ff記録がないため、停止・取得を実行しません");
             return;
         }
         stopRequestedAtMs = System.currentTimeMillis();
@@ -215,6 +229,7 @@ public final class MemoketRemoteRecordingService extends Service {
 
     @Override
     public void onDestroy() {
+        stopHandler.removeCallbacks(fiveSecondStop);
         stopHandler.removeCallbacks(stopWatchdog);
         closeGatt();
         super.onDestroy();
@@ -389,6 +404,10 @@ public final class MemoketRemoteRecordingService extends Service {
                 updateState("録音中");
                 updateNotification("Memoket Gem 録音中");
                 log("MEMOKET_REMOTE_RECORDING_STARTED", null);
+                if (fiveSecondRecording) {
+                    trace.phase("FIVE_SECOND_RECORDING_TIMER_STARTED");
+                    stopHandler.postDelayed(fiveSecondStop, 5_000L);
+                }
             }
         } catch (Exception error) {
             finishWithError(error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage());
@@ -523,6 +542,7 @@ public final class MemoketRemoteRecordingService extends Service {
     }
 
     private void finishOfficialTransfer() {
+        stopHandler.removeCallbacks(fiveSecondStop);
         stopCompleted = true;
         stopPending = false;
         recordingActive = false;
@@ -586,6 +606,7 @@ public final class MemoketRemoteRecordingService extends Service {
     }
 
     private void finishWithError(String message) {
+        stopHandler.removeCallbacks(fiveSecondStop);
         stopHandler.removeCallbacks(stopWatchdog);
         if (trace != null) {
             trace.failure(message, null);
@@ -615,6 +636,7 @@ public final class MemoketRemoteRecordingService extends Service {
         try {
             d.put("recordingStartPending", recordingStartPending);
             d.put("recordingActive", recordingActive);
+            d.put("fiveSecondRecording", fiveSecondRecording);
             d.put("stopPending", stopPending);
             d.put("commandBusy", commandBusy);
             d.put("queueDepth", commands.size());
