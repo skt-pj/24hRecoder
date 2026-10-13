@@ -169,6 +169,12 @@ public final class MemoketRemoteRecordingService extends Service {
             finishWithError("アプリ開始済み録音を特定できません。転送中の00 01だけでは停止・削除しません");
             return;
         }
+        if (!recordingActive && session.initialIdleReported()) {
+            // A prior app state can be stale after process death. Sending 03
+            // to an idle Gem might START a new recording, not stop one.
+            finishWithError("Gemは00 00待機中です。03を停止命令と誤認して新録音を開始しないよう中止します");
+            return;
+        }
         stopRequestedAtMs = System.currentTimeMillis();
         stopPending = true;
         recordingStartAwaitingAck = false;
