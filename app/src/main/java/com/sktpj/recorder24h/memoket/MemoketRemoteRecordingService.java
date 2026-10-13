@@ -436,20 +436,13 @@ public final class MemoketRemoteRecordingService extends Service {
         trace.response(value, "OFFICIAL_STOP_TRANSFER", "ONE_GATT");
         int opcode = value[0] & 0xff;
         if (midTransferStatusStep == 1 && opcode == 0) {
-            String selected = stopTransfer == null ? "" : stopTransfer.debugFileName();
-            byte[] file = selected.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
-            if (value.length != 4 + file.length || value[1] != 0x01
-                    || value[2] != 0 || value[3] != 2
-                    || !Arrays.equals(Arrays.copyOfRange(value, 4, value.length), file)) {
-                throw new IllegalStateException("00中間状態と対象音声名が一致しません: " + hex(value));
-            }
+            MemoketTransferStatus.verifyIntermediate00(value,
+                    stopTransfer == null ? "" : stopTransfer.debugFileName());
             midTransferStatusStep = 2;
             trace.phase("OFFICIAL_E1_STATUS_REQUESTED_AFTER_00_RESPONSE");
             queue(new byte[]{(byte) 0xe1});
         } else if (midTransferStatusStep == 2 && opcode == 0xe1) {
-            if (value.length != 3 || value[1] != 0x3a || value[2] != 0x02) {
-                throw new IllegalStateException("Gem e1状態応答が公式HCIと異なります: " + hex(value));
-            }
+            MemoketTransferStatus.verifyIntermediateE1(value);
             midTransferStatusStep = 3;
             trace.phase("OFFICIAL_E1_STATUS_RECEIVED");
         }
