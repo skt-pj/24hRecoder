@@ -158,8 +158,8 @@ public final class MemoketRemoteRecordingService extends Service {
 
     private synchronized void beginOfficialStop() {
         if (stopPending || stopCompleted) return;
-        // 0x03 is not a proven STOP opcode. Only replay the captured
-        // sequence after this very GATT service received its own START ACK.
+        // The observed official STOP transition follows the acknowledged
+        // START on the same GATT connection without another 0x03.
         if (!MemoketStopSafety.canStop(gatt != null && data != null,
                 session.isReady(), recordingActive, stopPending || stopCompleted)) {
             finishWithError("同一GATTのSTART 03ff記録がないため、STOPを送信しません");
@@ -206,9 +206,9 @@ public final class MemoketRemoteRecordingService extends Service {
         midTransferStatusStep = 0;
         updateState("停止操作中（実機確認待ち）");
         MemoketSettings.recordingStopRequested(this, stopRequestedAtMs);
-        trace.phase("OFFICIAL_STOP_03_COMMAND_REQUESTED");
-        stopNotifyStep = 0;
-        queue(new byte[]{0x03});
+        trace.phase("OFFICIAL_STOP_DATA_CCCD_OFF_REQUESTED");
+        stopNotifyStep = 1;
+        setNotification(data, false);
         stopHandler.removeCallbacks(stopWatchdog);
         stopHandler.postDelayed(stopWatchdog, 500);
     }
@@ -362,18 +362,6 @@ public final class MemoketRemoteRecordingService extends Service {
         if (stopCompleted) return;
         try {
             if (stopPending) {
-                if (stopNotifyStep == 0) {
-                    if (!uuid.equals(MemoketGattSync.RESPONSE)
-                            || value == null || value.length == 0) return;
-                    if (value[0] != 0x03) return;
-                    if (value.length != 2 || (value[1] & 0xff) != 0xff) {
-                        throw new IllegalStateException("録音停止操作03の応答を確認できません: " + hex(value));
-                    }
-                    trace.phase("OFFICIAL_STOP_03FF_RECEIVED");
-                    stopNotifyStep = 1;
-                    setNotification(data, false);
-                    return;
-                }
                 onOfficialStopNotification(uuid, value);
                 return;
             }
