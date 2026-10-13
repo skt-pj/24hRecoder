@@ -6,8 +6,9 @@ public final class MemoketSessionProtocol {
     private int step;
     private boolean allowRecordingStatus;
     private String recordingFileHint = "";
-    private boolean recordingReported;
-    public boolean recordingReported() { return recordingReported; }
+    // 00 01 + filename is observed during DATA transfer: not recording proof.
+    private boolean busyOrTransferringReported;
+    public boolean busyOrTransferringReported() { return busyOrTransferringReported; }
     public String recordingFileHint() { return recordingFileHint; }
     public void allowActiveRecordingStatus(boolean allowed) { allowRecordingStatus = allowed; }
 
@@ -27,7 +28,7 @@ public final class MemoketSessionProtocol {
                 if (opcode != 0x00) return null;
                 if (allowRecordingStatus && value.length >= 2
                         && value[0] == 0 && value[1] == 1) {
-                    recordingReported = true;
+                    busyOrTransferringReported = true;
                     if (value.length > 4 && value[2] == 0 && value[3] == 2) {
                         String file = new String(value, 4, value.length - 4,
                                 java.nio.charset.StandardCharsets.US_ASCII);
