@@ -16,7 +16,7 @@ public class MemoketTransferTest {
         CRC32 crc = new CRC32();
         crc.update(file);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        out.writeBytes(new byte[]{2, 0, 1, 0, 6});
+        out.writeBytes(new byte[]{2, 0, 1, 0, 5});
         out.writeBytes(NAME.getBytes(StandardCharsets.US_ASCII));
         long size = file.length;
         long check = crc.getValue();
