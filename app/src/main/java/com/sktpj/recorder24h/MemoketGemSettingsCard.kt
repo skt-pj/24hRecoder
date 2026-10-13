@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
@@ -75,7 +74,6 @@ fun MemoketGemSettingsCard() {
     var result by remember { mutableStateOf(MemoketSettings.result(context)) }
     var fileCount by remember { mutableStateOf(MemoketRecordingStore(context).count()) }
     var remoteState by remember { mutableStateOf(MemoketSettings.remoteRecordingState(context)) }
-    var physicalStopConfirmed by remember { mutableStateOf(false) }
     var scanState by remember { mutableStateOf("") }
     var devices by remember { mutableStateOf(emptyList<Pair<String, String>>()) }
     var scanning by remember { mutableStateOf(false) }
@@ -196,84 +194,23 @@ fun MemoketGemSettingsCard() {
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("$name ($deviceAddress)") }
                 }
-                Text("定期取得は、Gemの録音中・停止中を安全に判別できるようになるまで無効です。")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中",
-                        onClick = {
-                            context.startForegroundService(android.content.Intent(context, MemoketRemoteRecordingService::class.java).setAction(MemoketRemoteRecordingService.ACTION_START_RECORDING))
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Gem録音開始") }
-                    OutlinedButton(
-                        enabled = address.isNotEmpty() && remoteState != "接続中" && !remoteState.startsWith("停止") && !remoteState.startsWith("取得") && remoteState != "ファイル取得中",
-                        onClick = {
-                            context.startService(
-                                android.content.Intent(context, MemoketRemoteRecordingService::class.java)
-                                    .setAction(MemoketRemoteRecordingService.ACTION_STOP_RECORDING)
-                            )
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("停止→今回1件取得→Gem削除") }
-                }
+                Button(
+                    enabled = address.isNotEmpty()
+                        && remoteState != "接続中"
+                        && remoteState != "録音中"
+                        && remoteState != "停止操作中（実機確認待ち）"
+                        && remoteState != "ファイル取得中",
+                    onClick = {
+                        context.startForegroundService(
+                            android.content.Intent(context, MemoketRemoteRecordingService::class.java)
+                                .setAction(MemoketRemoteRecordingService.ACTION_RECORD_FIVE_SECONDS)
+                        )
+                        remoteState = "接続中"
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("録音開始→5秒録音→停止→録音取得") }
                 Text("Gem録音状態: $remoteState")
-                Text("録音停止後、今回の録音1件のみ取得・CRC照合・端末保存します。Gemへ05 ACK後、00待機応答を確認します。ほかの録音は自動削除しません。")
-                if (remoteState == "Gem本体停止待ち" ||
-                    (remoteState == "エラー" && MemoketSettings.recordingStopRequestedAt(context) > 0L)) {
-                    Button(
-                        enabled = address.isNotEmpty(),
-                        onClick = {
-                            try {
-                                val startedAt = MemoketSettings.recordingStartedAt(context)
-                                val requestedAt = MemoketSettings.recordingStopRequestedAt(context)
-                                val confirmedAt = System.currentTimeMillis()
-                                require(requestedAt > 0L && startedAt > 0L && confirmedAt >= requestedAt) {
-                                    "停止要求の記録がありません"
-                                }
-                                MemoketSyncScheduler.syncAfterStop(
-                                    context, startedAt, confirmedAt,
-                                    MemoketSettings.recordingStartedZone(context)
-                                )
-                                MemoketSettings.setRemoteRecordingState(context, "停止操作済・取得待ち")
-                                MemoketSettings.saveResult(context, "Gem本体の停止をユーザーが確認。対象1ファイルの取得を実行します")
-                                remoteState = "停止操作済・取得待ち"
-                            } catch (exception: Exception) {
-                                MemoketSettings.saveResult(context, "取得開始失敗: ${exception.message ?: "原因不明"}")
-                                result = MemoketSettings.result(context)
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("本体停止を確認して今回の録音1件を取得") }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Checkbox(
-                        checked = physicalStopConfirmed,
-                        onCheckedChange = { physicalStopConfirmed = it }
-                    )
-                    Text("Gem本体の録音を停止しました（短い振動2回・赤LED消灯を確認）")
-                }
-                Button(
-                    enabled = physicalStopConfirmed && address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中" && remoteState != "ファイル取得中" && remoteState != "停止操作済・取得待ち" && remoteState != "Gem本体停止待ち",
-                    onClick = {
-                        physicalStopConfirmed = false
-                        MemoketSyncScheduler.syncNowAfterPhysicalStopConfirmation(context)
-                        scanState = "停止を確認したため、保存済み録音の取得を要求しました"
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("停止確認後に保存済み録音を取得（過去分含む）") }
                 Text("端末内保存: ${fileCount}件 / 最新結果: $result")
-                Button(
-                    enabled = address.isNotEmpty() && remoteState != "録音中" && remoteState != "接続中" && remoteState != "停止処理中" && remoteState != "ファイル取得中" && remoteState != "停止操作済・取得待ち" && remoteState != "Gem本体停止待ち",
-                    onClick = {
-                        context.startActivity(android.content.Intent(context, MemoketTestActivity::class.java))
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("Memoketテストを開く") }
-                Text(
-                    "開始・停止・振動・ファイル取得の因果関係を通常録音とは分離して検証します。",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall
-                )
                 OutlinedButton(
                     enabled = fileCount > 0,
                     onClick = {
@@ -287,11 +224,6 @@ fun MemoketGemSettingsCard() {
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("最新の録音をファイルに保存") }
-                Text(
-                    "同期はAndroidの実行制約によって遅れる場合があります。Memoketテストは診断専用で、通常の録音操作とは別画面で実行します。",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall
-                )
             }
         }
     }
