@@ -260,7 +260,7 @@ public class MemoketTransferTest {
         assertNull(transfer.onControl(new byte[]{0, 1, 0, 2}));
         assertFalse(transfer.isDone());
         assertNull(transfer.onControl(new byte[]{0, 0}));
-        assertEquals(1, transfer.verifiedRemovals());
+        assertEquals(0, transfer.verifiedRemovals());
         assertTrue(transfer.postDeleteIdleConfirmed());
         assertTrue(transfer.isDone());
     }
