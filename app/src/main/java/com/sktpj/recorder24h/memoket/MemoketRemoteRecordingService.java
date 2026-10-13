@@ -176,18 +176,23 @@ public final class MemoketRemoteRecordingService extends Service {
         earlyAudio.clear();
         String activeName = session.recordingFileHint();
         long startedAt = MemoketSettings.recordingStartedAt(this);
-        MemoketTransfer.FileSelector latest;
-        if (!activeName.isEmpty()) {
-            latest = activeName::equals;
-        } else if (startedAt > 0 && startedAt <= stopRequestedAtMs
-                && !MemoketSettings.recordingStartedZone(this).isEmpty()) {
-            MemoketRecordingWindow window = new MemoketRecordingWindow(
-                    startedAt, stopRequestedAtMs, MemoketSettings.recordingStartedZone(this));
-            latest = window::matches;
-        } else {
-            finishWithError("Gemの最新録音ファイルを特定できません。過去ファイルの自動削除を防止しました");
+        if (startedAt <= 0 || startedAt > stopRequestedAtMs
+                || MemoketSettings.recordingStartedZone(this).isEmpty()) {
+            finishWithError("現在の録音開始時刻を特定できません。過去ファイルを誤って削除しないため中断します");
             return;
         }
+        // 01 announces a single name AND starts its DATA stream. The official
+        // capture has no non-destructive all-file listing or filename selection.
+        // Accept only the recording identified by the app's own start window;
+        // an unsolicited filename hint cannot override that ownership check.
+        MemoketRecordingWindow window = new MemoketRecordingWindow(
+                startedAt, stopRequestedAtMs, MemoketSettings.recordingStartedZone(this));
+        if (!activeName.isEmpty() && !window.matches(activeName)) {
+            finishWithError("Gem通知のファイル名が今回の録音日時と異なります。過去ファイルを削除しません");
+            return;
+        }
+        MemoketTransfer.FileSelector latest = filename ->
+                window.matches(filename) && (activeName.isEmpty() || activeName.equals(filename));
         trace.phase("LATEST_RECORDING_IDENTIFIED");
         stopTransfer = new MemoketTransfer((name, payload, crc) -> {
             new MemoketRecordingStore(this).persist(name, payload, crc);
@@ -330,8 +335,10 @@ public final class MemoketRemoteRecordingService extends Service {
         BluetoothGattCharacteristic next = null;
         while (notifySetupStep < 4 && next == null) {
             switch (notifySetupStep++) {
-                case 0: next = data; break;
-                case 1: next = response; break;
+                // Captured official HCI enables RESPONSE CCCD (0x0031)
+                // before DATA CCCD (0x002c).
+                case 0: next = response; break;
+                case 1: next = data; break;
                 case 2: next = extraNotify5; break;
                 case 3: next = extraNotify6; break;
                 default: break;
@@ -535,7 +542,7 @@ public final class MemoketRemoteRecordingService extends Service {
         trace.phase("OFFICIAL_SELECTED_FILE_SAVED_DELETE_ACK_IDLE", stateDetails());
         updateState("最新1件保存・削除ACK確認（本体停止は要確認）");
         MemoketSettings.saveResult(this,
-                "最新録音1件をCRC照合・端末保存し、Gemの削除05 ACK(0501)・待機00 00を確認。"
+                "今回の録音1件をCRC照合・端末保存し、Gemの削除05 ACK(0501)・待機00 00を確認。"
                         + "Gem実ファイル消失と赤LED停止は実機未検証");
         log("MEMOKET_OFFICIAL_FILE_SAVED_DELETE_ACK_IDLE", stateDetails());
         updateNotification("Memoket最新1件を保存・Gem削除ACKを確認しました");
