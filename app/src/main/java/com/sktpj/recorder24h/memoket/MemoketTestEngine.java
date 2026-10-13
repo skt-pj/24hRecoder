@@ -268,8 +268,9 @@ public final class MemoketTestEngine {
             throw new IllegalStateException("ファイルは一接続で先頭から末尾まで1件ずつ取得します");
         }
         progress(listener, "接続・認証", "公式HCIで観測した通知・認証手順を使用します", false);
-        session.enableData(true);
+        // Follow the official HCI order: RESPONSE CCCD before DATA CCCD.
         session.enableResponse(true);
+        session.enableData(true);
         session.handshakeStandard();
         // Official HCI: DATA CCCD 0000 -> 0100 before requesting the file.
         // This is a transport sequence, NOT independent proof of recording stop.
@@ -606,7 +607,7 @@ public final class MemoketTestEngine {
                 debug.filePersisted(name, payload.length, crc);
                 saved.add(name);
                 savedFileNames.add(name);
-            });
+            }, null, 1, true);
 
             // If the Gem is already streaming from a previous connection,
             // the initial audio bytes have been lost. Never pretend a new
@@ -626,7 +627,10 @@ public final class MemoketTestEngine {
             final long transferStartedAt = lastActivity;
             long lastProgressNoticeAt = transferStartedAt;
             // Reads metadata; never triggers delete, unlike filename-specific 05 ACK.
-            final long IN_STREAM_METADATA_INTERVAL_MS = 10_000L;
+            // Never probe 02 in an active DATA stream. The Oct-13 diagnosis
+            // returned a partial snapshot which was then incorrectly ACKed.
+            long lastDataAt = transferStartedAt;
+            boolean intermediateStatusChecked = false;
             while (true) {
                 if (CANCEL_REQUESTED.get() || Thread.currentThread().isInterrupted()) {
                     throw new InterruptedException("ファイル取得をユーザー操作で中止しました。未検証のデータはACKしません");
@@ -648,8 +652,9 @@ public final class MemoketTestEngine {
                 if (event == null) event = notifications.poll(300, TimeUnit.MILLISECONDS);
                 if (event == null) {
                     long now = System.currentTimeMillis();
-                    if (transfer.shouldRequestMetadata()
-                            && now - lastMetadataProbeAt >= METADATA_PROBE_INTERVAL_MS) {
+                    if (MemoketMetadataGate.mayRequest(now, lastDataAt,
+                            lastMetadataProbeAt, transfer.shouldRequestMetadata(), false)
+                            && (intermediateStatusChecked || transfer.dataBlockCount() < 19)) {
                         next = MemoketTransfer.metadataCommand();
                     }
                     if (now - lastActivity > NO_DATA_OR_RESPONSE_STALL_MS) {
@@ -663,6 +668,7 @@ public final class MemoketTestEngine {
 
                 if (MemoketGattSync.DATA.equals(event.uuid)) {
                     lastActivity = System.currentTimeMillis();
+                    lastDataAt = lastActivity;
                     if ("WAIT_LIST".equals(transfer.debugState())) {
                         earlyAudio.offer(event);
                         continue;
@@ -673,28 +679,20 @@ public final class MemoketTestEngine {
                                 + transfer.bufferedBytes() + "Bを超過。Gemがまだ録音中の可能性があります。"
                                 + "赤LED状態を確認してください。CRC未検証につき05 ACKしません");
                     }
-                    if (maxTrialAudioBytes != Long.MAX_VALUE
-                            && transfer.dataBlockCount() == 19) {
-                        // Original official HCI interleaves 00 and e1 during DATA.
-                        write(new byte[] {0x00});
-                        write(new byte[] {(byte) 0xe1});
-                        addTrace("OFFICIAL_INTERLEAVED_STATUS", "00,e1 after seq18");
+                    if (!intermediateStatusChecked && transfer.dataBlockCount() == 19) {
+                        // Send 00, verify its RESPONSE, then and only then send
+                        // e1 and verify that RESPONSE. Buffered DATA is replayed.
+                        Event status = exchange(new byte[]{0x00}, 0x00, 4_000L);
+                        MemoketTransferStatus.verifyIntermediate00(status.value,
+                                transfer.debugFileName());
+                        Event e1 = exchange(new byte[]{(byte) 0xe1}, 0xe1, 4_000L);
+                        MemoketTransferStatus.verifyIntermediateE1(e1.value);
+                        intermediateStatusChecked = true;
+                        addTrace("OFFICIAL_INTERLEAVED_STATUS_RECEIVED",
+                                "00+e1 responses verified in order");
                     }
                     long now = System.currentTimeMillis();
-                    // A continuously growing recording stream never yields a 300ms
-                    // quiet interval. Probe 02 conservatively, at most every 10s,
-                    // to distinguish "busy" from a finished, finite file.
-                    if (candidate == null && next == null
-                            && transfer.shouldRequestMetadata()
-                            && transfer.dataBlockCount() >= 32
-                            && now - lastMetadataProbeAt >= IN_STREAM_METADATA_INTERVAL_MS) {
-                        next = MemoketTransfer.metadataCommand();
-                        addTrace("IN_STREAM_METADATA_PROBE",
-                                "blocks=" + transfer.dataBlockCount()
-                                + " bytes=" + transfer.bufferedBytes());
-                    } else if (candidate != null) {
-                        next = candidate;
-                    }
+                    if (candidate != null) next = candidate;
                     // Avoid emitting a duplicate detailed transfer state for every
                     // 120ms audio packet; the byte/sequence trace is retained.
                     if (transfer.dataBlockCount() <= 3
@@ -741,9 +739,19 @@ public final class MemoketTestEngine {
                     write(candidate);
                     Event ack = waitResponse(0x05, System.currentTimeMillis() - 500, 5_000);
                     byte[] following = transfer.onControl(ack.value);
+                    if (following == null || following.length != 1 || following[0] != 0) {
+                        throw new IllegalStateException("Gemの05 ACK後に予期しない次コマンドがあります");
+                    }
+                    // The official capture does NOT resend 01 after deleting.
+                    Event idle = exchange(new byte[]{0x00}, 0x00, 5_000L);
+                    transfer.onControl(idle.value);
+                    if (!transfer.isDone() || !transfer.postDeleteIdleConfirmed()) {
+                        throw new IllegalStateException("Gemの05 ACK後の00 00待機応答を確認できません");
+                    }
+                    addTrace("POST_DELETE_IDLE_ACK", "Gem 0501 then 0000; flash removal unverified");
                     boolean targetReached = targetName != null && saved.contains(targetName);
                     if (saved.size() >= maxFiles || targetReached) break;
-                    next = following;
+                    next = null;
                     lastActivity = System.currentTimeMillis();
                 } else {
                     next = candidate;
