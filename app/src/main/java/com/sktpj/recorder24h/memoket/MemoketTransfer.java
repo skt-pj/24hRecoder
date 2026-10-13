@@ -44,6 +44,7 @@ public final class MemoketTransfer {
     private int deleteAcks;
     private boolean postDeleteIdleConfirmed;
     private boolean finalizeInfoVerified;
+    private int selectedFileId = -1;
     private String name;
     private long expectedSize = -1;
     private long expectedCrc = -1;
@@ -122,6 +123,7 @@ public final class MemoketTransfer {
             nextSequence = 0;
             finalizeRequested = false;
             finalizeInfoVerified = false;
+            selectedFileId = -1;
             state = State.RECEIVING_DATA;
             // Observed BLE behavior: 01 starts DATA streaming.
             // Only send 02 after DATA has gone quiet.
@@ -133,14 +135,15 @@ public final class MemoketTransfer {
                 byte[] nameBytes = name == null ? null : name.getBytes(StandardCharsets.US_ASCII);
                 int nameOffset;
                 if (verifyDeviceRemoval) {
-                    // Capture: 02 00 01 00 05 + filename + sizeBE32 + crcBE32.
+                    // 02 00 01 fileIdBE16 + filename + sizeBE32 + crcBE32.
+                    // Official 2026-10-10: id=5; Oct-13 three-file capture: id=9.
                     if (payload.length == 3 && payload[1] == 0 && payload[2] == 2) return null;
                     int required = nameBytes == null ? -1 : 5 + nameBytes.length + 8;
                     if (payload.length != required || payload[1] != 0
-                            || payload[2] != 1 || payload[3] != 0 || payload[4] != 5
-                            || !bytesAt(payload, 5, nameBytes)) {
+                            || payload[2] != 1 || !bytesAt(payload, 5, nameBytes)) {
                         throw new IllegalStateException("公式02メタデータの構造・対象名が不正: " + hex(payload));
                     }
+                    selectedFileId = u16(payload, 3);
                     nameOffset = 5;
                 } else {
                     nameOffset = nameBytes == null ? -1 : indexOf(payload, nameBytes);
@@ -169,23 +172,14 @@ public final class MemoketTransfer {
             if (code == 3 && state == State.WAIT_FINALIZE) {
                 if (payload.length < 2 || !finalizeRequested) return null;
                 int response = payload[1] & 0xff;
-                if (response == 1) {
-                    // Preserve legacy transfer behavior; strict 03 01 validation
-                    // is required only by the official recording stop/delete flow.
+                if (response != 0xff) {
+                    // 03 01 has one entry in the old official HCI, but 03 03
+                    // has three entries in Oct-13 real Gem diagnostics.
                     if (!verifyDeviceRemoval) return null;
-                    byte[] filename = name.getBytes(StandardCharsets.US_ASCII);
-                    // Capture: 03 01 00 00 05 nameLength + filename + sizeBE32.
-                    int required = 6 + filename.length + 4;
-                    if (payload.length != required || payload[2] != 0 || payload[3] != 0
-                            || payload[4] != 5 || (payload[5] & 0xff) != filename.length
-                            || !bytesAt(payload, 6, filename)
-                            || u32(payload, 6 + filename.length) != expectedSize) {
-                        throw new IllegalStateException("公式03 01確定詳細の構造・ファイル名・サイズが不正");
-                    }
+                    verify03Listing(payload);
                     finalizeInfoVerified = true;
                     return null;
                 }
-                if (response != 0xff) return null;
                 if (verifyDeviceRemoval && !finalizeInfoVerified) {
                     throw new IllegalStateException("公式03 01のファイル名・サイズ応答が確認できません");
                 }
@@ -334,6 +328,58 @@ public final class MemoketTransfer {
             return i;
         }
         return -1;
+    }
+
+    private void verify03Listing(byte[] payload) {
+        int count = payload[1] & 0xff;
+        if (count < 1 || count > 50 || selectedFileId < 0 || name == null) {
+            throw new IllegalStateException("03リストの件数または02のfileIdが不正");
+        }
+        int cursor = 2;
+        boolean selectedFound = false;
+        String selectedTimestamp = timestamp(name);
+        for (int i = 0; i < count; i++) {
+            if (cursor + 4 > payload.length) {
+                throw new IllegalStateException("03リストが途中で切れました");
+            }
+            int index = payload[cursor++] & 0xff;
+            int fileId = u16(payload, cursor);
+            cursor += 2;
+            int len = payload[cursor++] & 0xff;
+            if (index != i || len < 1 || len > 100 || cursor + len + 4 > payload.length) {
+                throw new IllegalStateException("03リストのindexまたは名前長が不正");
+            }
+            String listed = new String(payload, cursor, len, StandardCharsets.US_ASCII);
+            requireName(listed);
+            cursor += len;
+            long listedSize = u32(payload, cursor);
+            cursor += 4;
+            String listedTimestamp = timestamp(listed);
+            if (listedTimestamp.compareTo(selectedTimestamp) > 0
+                    || (listedTimestamp.equals(selectedTimestamp) && !listed.equals(name))) {
+                throw new IllegalStateException("03に今回の対象より新しい・同時刻の別ファイルがあります: " + listed);
+            }
+            if (listed.equals(name)) {
+                if (selectedFound || fileId != selectedFileId || listedSize != expectedSize) {
+                    throw new IllegalStateException("03と02の対象fileId・名前・サイズが一致しません");
+                }
+                selectedFound = true;
+            }
+        }
+        if (!selectedFound || cursor != payload.length) {
+            throw new IllegalStateException("03の全一覧に一致する最新ファイルがありません");
+        }
+    }
+
+    private static String timestamp(String filename) {
+        if (filename == null || !filename.matches("[0-9]{8}_[0-9]{6}_[A-Za-z0-9_-]+\\.opus")) {
+            throw new IllegalStateException("最新順を判定できないファイル名: " + filename);
+        }
+        return filename.substring(0, 15);
+    }
+
+    private static int u16(byte[] bytes, int offset) {
+        return ((bytes[offset] & 0xff) << 8) | (bytes[offset + 1] & 0xff);
     }
 
     private static long u32(byte[] bytes, int offset) {
