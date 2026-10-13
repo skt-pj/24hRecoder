@@ -214,10 +214,10 @@ fun MemoketGemSettingsCard() {
                             )
                         },
                         modifier = Modifier.weight(1f)
-                    ) { Text("停止→取得→Gem側削除") }
+                    ) { Text("停止→今回1件取得→Gem削除") }
                 }
                 Text("Gem録音状態: $remoteState")
-                Text("停止、全ファイル取得・CRC照合・端末保存、Gem側の削除・再一覧確認を実行します。")
+                Text("録音停止後、今回の録音1件のみ取得・CRC照合・端末保存します。Gemへ05 ACK後、00待機応答を確認します。ほかの録音は自動削除しません。")
                 if (remoteState == "Gem本体停止待ち" ||
                     (remoteState == "エラー" && MemoketSettings.recordingStopRequestedAt(context) > 0L)) {
                     Button(
