@@ -298,6 +298,23 @@ public class MemoketTransferTest {
     }
 
     @Test
+    public void distinguishesIdle0000FromAmbiguous0001DuringHandshake() {
+        MemoketSessionProtocol idle = new MemoketSessionProtocol();
+        idle.allowActiveRecordingStatus(true);
+        idle.firstCommand();
+        idle.onResponse(new byte[]{0, 0});
+        assertTrue(idle.initialIdleReported());
+        assertFalse(idle.busyOrTransferringReported());
+
+        MemoketSessionProtocol transferring = new MemoketSessionProtocol();
+        transferring.allowActiveRecordingStatus(true);
+        transferring.firstCommand();
+        transferring.onResponse(new byte[]{0, 1, 0, 2});
+        assertFalse(transferring.initialIdleReported());
+        assertTrue(transferring.busyOrTransferringReported());
+    }
+
+    @Test
     public void acceptsActiveGemStatusOnlyWhenStopRequested() {
         MemoketSessionProtocol session = new MemoketSessionProtocol();
         session.allowActiveRecordingStatus(true);
