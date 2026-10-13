@@ -22,9 +22,10 @@ public final class MemoketTransferStatus {
     }
 
     public static void verifyIntermediateE1(byte[] payload) {
-        if (payload == null || !Arrays.equals(payload,
-                new byte[]{(byte) 0xe1, 0x3a, 0x02})) {
-            throw new IllegalStateException("Gem intermediate e1 reply differs from official HCI");
+        // Transfer HCI has e1 3a 02; Oct-13 device has e1 62 02.
+        if (payload == null || payload.length != 3 || payload[0] != (byte) 0xe1
+                || payload[2] != 0x02) {
+            throw new IllegalStateException("Gem intermediate e1 reply has invalid structure");
         }
     }
 }

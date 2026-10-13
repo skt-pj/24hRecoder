@@ -87,7 +87,12 @@ public final class MemoketSessionProtocol {
                 return new byte[]{(byte) 0xe8};
             case 8:
                 if (opcode != 0xe8) return null;
-                requirePrefix(value, new byte[]{(byte) 0xe8, 0x0c, 0x00}, "e8");
+                // Official HCI e8 0c 00; Oct-13 Gem e8 0c 02.
+                // The third byte is a variable device status, not a fixed 00.
+                if (value.length < 4 || value[1] != 0x0c
+                        || (value[2] != 0 && value[2] != 2)) {
+                    throw new IllegalStateException("Unexpected e8 response: " + hex(value));
+                }
                 step = 9;
                 return null;
             default:

@@ -503,13 +503,13 @@ public final class MemoketRemoteRecordingService extends Service {
             }
             // The official capture reads final size/CRC after the DATA stream
             // has ended. Do not finalize a still-growing recording mid-stream.
-            boolean dataQuiet = now - lastStopDataAtMs >= 1_000L;
             boolean intermediateStatusReady = midTransferStatusStep == 3
                     || (midTransferStatusStep == 0 && stopTransfer.dataBlockCount() < 19);
             if (stopNotifyStep == 3 && !commandBusy && commands.isEmpty()
-                    && stopTransfer.shouldRequestMetadata() && !inFlightMetadata
-                    && intermediateStatusReady && dataQuiet
-                    && now - lastMetadataRequestAtMs >= 1_000L) {
+                    && intermediateStatusReady
+                    && MemoketMetadataGate.mayRequest(now, lastStopDataAtMs,
+                            lastMetadataRequestAtMs, stopTransfer.shouldRequestMetadata(),
+                            inFlightMetadata)) {
                 inFlightMetadata = true;
                 lastMetadataRequestAtMs = now;
                 trace.phase("OFFICIAL_METADATA_AFTER_DATA");
