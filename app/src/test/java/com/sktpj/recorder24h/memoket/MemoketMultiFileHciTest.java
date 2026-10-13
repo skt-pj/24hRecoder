@@ -96,11 +96,21 @@ public final class MemoketMultiFileHciTest {
         t.onControl(infoThree(LATEST, 7, 480));
     }
 
-    @Test(expected = IllegalStateException.class)
-    public void rejectsOlderSelectedWhenNewerIsIn03List() throws Exception {
+    @Test public void rejectsOlderSelectedWhenNewerIsIn03List() throws Exception {
         byte[] audio = new byte[480]; AtomicInteger saved = new AtomicInteger();
         MemoketTransfer t = started(SECOND, 6, audio, saved);
-        t.onControl(infoThree(LATEST, 9, 36000));
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.writeBytes(new byte[]{3,3});
+        entry(out,0,11,FIRST,44160);
+        entry(out,1,6,SECOND,480);
+        entry(out,2,9,LATEST,36000);
+        try {
+            t.onControl(out.toByteArray());
+            fail("Older selected file must not be deleted");
+        } catch (IllegalStateException expected) {
+            assertTrue(expected.getMessage().contains("新しい"));
+            assertEquals(0, saved.get());
+        }
     }
 
     @Test(expected = IllegalStateException.class)
