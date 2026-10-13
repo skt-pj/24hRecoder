@@ -41,6 +41,7 @@ public final class MemoketSessionProtocol {
                     }
                 } else {
                     requirePrefix(value, new byte[]{0x00, 0x00}, "00");
+                    if (value.length != 2) throw new IllegalStateException("Unexpected 00 idle response length");
                     initialIdle = true;
                 }
                 step = 2;
@@ -52,10 +53,15 @@ public final class MemoketSessionProtocol {
                 return new byte[]{(byte) 0xe1};
             case 3:
                 if (opcode != 0xe1) return null;
+                if (value.length != 3 || value[2] != 0x02) {
+                    throw new IllegalStateException("Unexpected e1 handshake status: " + hex(value));
+                }
                 step = 4;
                 return new byte[]{(byte) 0xf3, 0x00};
             case 4:
                 if (opcode != 0xf3) return null;
+                requirePrefix(value, new byte[]{(byte) 0xf3, 0x00, 0x00}, "f3");
+                if (value.length != 3) throw new IllegalStateException("Unexpected f3 status length");
                 step = 5;
                 return new byte[]{(byte) 0xe3, 0x01};
             case 5:
@@ -81,6 +87,7 @@ public final class MemoketSessionProtocol {
                 return new byte[]{(byte) 0xe8};
             case 8:
                 if (opcode != 0xe8) return null;
+                requirePrefix(value, new byte[]{(byte) 0xe8, 0x0c, 0x00}, "e8");
                 step = 9;
                 return null;
             default:

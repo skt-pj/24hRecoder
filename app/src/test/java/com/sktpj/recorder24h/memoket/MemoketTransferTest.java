@@ -16,7 +16,7 @@ public class MemoketTransferTest {
         CRC32 crc = new CRC32();
         crc.update(file);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        out.writeBytes(new byte[]{2, 0, 1, 0, 6});
+        out.writeBytes(new byte[]{2, 0, 1, 0, 5});
         out.writeBytes(NAME.getBytes(StandardCharsets.US_ASCII));
         long size = file.length;
         long check = crc.getValue();
@@ -260,7 +260,7 @@ public class MemoketTransferTest {
         assertNull(transfer.onControl(new byte[]{0, 1, 0, 2}));
         assertFalse(transfer.isDone());
         assertNull(transfer.onControl(new byte[]{0, 0}));
-        assertEquals(1, transfer.verifiedRemovals());
+        assertEquals(0, transfer.verifiedRemovals());
         assertTrue(transfer.postDeleteIdleConfirmed());
         assertTrue(transfer.isDone());
     }
@@ -321,6 +321,92 @@ public class MemoketTransferTest {
         session.firstCommand();
         assertArrayEquals(new byte[]{0x27,0x01},
                 session.onResponse(new byte[]{0,1,0,'2'}));
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void ut16RejectsSpoofedFinalizeHeaderEvenWithMatchingNameAndSize() throws Exception {
+        byte[] audio = new byte[480];
+        MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> {},
+                name -> NAME.equals(name), 1, true);
+        transfer.onControl(listResult());
+        transfer.onData(block(0, audio));
+        transfer.onControl(metadata(audio));
+        byte[] frame = finalizeInfo(audio);
+        frame[2] = 1; // Official 03 01 00 00 05 length header is mandatory.
+        transfer.onControl(frame);
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void ut14RejectsSpoofedMetadataHeaderWithCorrectNameAndCrc() throws Exception {
+        byte[] audio = new byte[480];
+        MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> {},
+                name -> NAME.equals(name), 1, true);
+        transfer.onControl(listResult());
+        transfer.onData(block(0, audio));
+        byte[] frame = metadata(audio);
+        frame[2] = 0; // 02 00 01 00 05 + name + size + crc in captured HCI.
+        transfer.onControl(frame);
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void ut14RejectsTrailingMetadataBeyondExpectedFileAndCrc() throws Exception {
+        byte[] audio = new byte[480];
+        MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> {},
+                name -> NAME.equals(name), 1, true);
+        transfer.onControl(listResult());
+        transfer.onData(block(0, audio));
+        byte[] frame = Arrays.copyOf(metadata(audio), metadata(audio).length + 1);
+        transfer.onControl(frame);
+    }
+
+    @Test
+    public void ut23PostDeleteIdleDoesNotProveDeviceFlashFileRemoval() throws Exception {
+        byte[] audio = new byte[480];
+        MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> {},
+                name -> NAME.equals(name), 1, true);
+        transfer.onControl(listResult());
+        transfer.onData(block(0, audio));
+        transfer.onControl(metadata(audio));
+        transfer.onControl(finalizeInfo(audio));
+        transfer.onControl(new byte[]{3, (byte)0xff});
+        assertArrayEquals(new byte[]{0}, transfer.onControl(new byte[]{5, 1}));
+        transfer.onControl(new byte[]{0, 0});
+        assertTrue(transfer.postDeleteIdleConfirmed());
+        assertEquals(1, transfer.deleteAcks());
+        assertEquals("00 00 is idle, not flash deletion proof", 0, transfer.verifiedRemovals());
+        assertTrue(transfer.isDone());
+    }
+
+    @Test
+    public void ut20IgnoresMalformedDeleteAckUntilExact0501() throws Exception {
+        byte[] audio = new byte[480];
+        MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> {},
+                name -> NAME.equals(name), 1, true);
+        transfer.onControl(listResult());
+        transfer.onData(block(0, audio));
+        transfer.onControl(metadata(audio));
+        transfer.onControl(finalizeInfo(audio));
+        assertEquals(5, transfer.onControl(new byte[]{3, (byte)0xff})[0]);
+        assertNull(transfer.onControl(new byte[]{5, 1, 9}));
+        assertEquals(0, transfer.deleteAcks());
+        assertFalse(transfer.isDone());
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void ut01RejectsExtraStatusBytesMasqueradingAsIdle0000() {
+        MemoketSessionProtocol protocol = new MemoketSessionProtocol();
+        protocol.firstCommand();
+        protocol.onResponse(new byte[]{0, 0, 1});
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void ut01RejectsIncorrectHandshakeF3Payload() {
+        MemoketSessionProtocol protocol = new MemoketSessionProtocol();
+        protocol.firstCommand();
+        protocol.onResponse(new byte[]{0,0});
+        protocol.onResponse(new byte[]{0x27,0x02});
+        protocol.onResponse(new byte[]{(byte)0xe1,0x3a,0x02});
+        protocol.onResponse(new byte[]{(byte)0xf3,0x01,0x00});
     }
 
 }
