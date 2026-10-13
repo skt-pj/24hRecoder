@@ -160,6 +160,9 @@ public final class MemoketTransfer {
                 if (payload.length < 2 || !finalizeRequested) return null;
                 int response = payload[1] & 0xff;
                 if (response == 1) {
+                    // Preserve legacy transfer behavior; strict 03 01 validation
+                    // is required only by the official recording stop/delete flow.
+                    if (!verifyDeviceRemoval) return null;
                     byte[] filename = name.getBytes(StandardCharsets.US_ASCII);
                     int offset = indexOf(payload, filename);
                     if (offset < 0 || payload.length < offset + filename.length + 4
