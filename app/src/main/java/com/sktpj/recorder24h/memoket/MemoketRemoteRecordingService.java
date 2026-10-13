@@ -304,6 +304,9 @@ public final class MemoketRemoteRecordingService extends Service {
                 queue(MemoketTransfer.initialCommand());
                 return;
             }
+            // During STOP, a late unrelated descriptor callback must never
+            // restart the setup handshake or enqueue another 00 command.
+            if (stopPending) return;
             enableInitialNotifications();
         }
 
