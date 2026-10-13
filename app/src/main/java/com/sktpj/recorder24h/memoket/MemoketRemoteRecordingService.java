@@ -279,11 +279,17 @@ public final class MemoketRemoteRecordingService extends Service {
                 return;
             }
             if (stopCompleted) return;
-            if (stopPending && (stopNotifyStep == 1 || stopNotifyStep == 2)
-                    && (descriptor == null || descriptor.getCharacteristic() == null
-                    || !MemoketGattSync.DATA.equals(descriptor.getCharacteristic().getUuid()))) {
-                finishWithError("STOP中に想定外の通知descriptor応答を受信しました: " + uuid);
-                return;
+            if (stopPending && (stopNotifyStep == 1 || stopNotifyStep == 2)) {
+                byte[] expected = stopNotifyStep == 1
+                        ? BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
+                        : BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE;
+                if (descriptor == null || !CCCD.equals(descriptor.getUuid())
+                        || descriptor.getCharacteristic() == null
+                        || !MemoketGattSync.DATA.equals(descriptor.getCharacteristic().getUuid())
+                        || !Arrays.equals(descriptor.getValue(), expected)) {
+                    finishWithError("STOPのCCCD書込完了が期待したDATA通知設定と一致しません: " + uuid);
+                    return;
+                }
             }
             if (stopPending && stopNotifyStep == 1) {
                 stopNotifyStep = 2;
@@ -430,13 +436,20 @@ public final class MemoketRemoteRecordingService extends Service {
         trace.response(value, "OFFICIAL_STOP_TRANSFER", "ONE_GATT");
         int opcode = value[0] & 0xff;
         if (midTransferStatusStep == 1 && opcode == 0) {
-            if (value.length < 2 || value[1] != 0x01) {
-                throw new IllegalStateException("Gem中間状態応答が不正です: " + hex(value));
+            String selected = stopTransfer == null ? "" : stopTransfer.debugFileName();
+            byte[] file = selected.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+            if (value.length != 4 + file.length || value[1] != 0x01
+                    || value[2] != 0 || value[3] != 2
+                    || !Arrays.equals(Arrays.copyOfRange(value, 4, value.length), file)) {
+                throw new IllegalStateException("00中間状態と対象音声名が一致しません: " + hex(value));
             }
             midTransferStatusStep = 2;
             trace.phase("OFFICIAL_E1_STATUS_REQUESTED_AFTER_00_RESPONSE");
             queue(new byte[]{(byte) 0xe1});
         } else if (midTransferStatusStep == 2 && opcode == 0xe1) {
+            if (value.length != 3 || value[1] != 0x3a || value[2] != 0x02) {
+                throw new IllegalStateException("Gem e1状態応答が公式HCIと異なります: " + hex(value));
+            }
             midTransferStatusStep = 3;
             trace.phase("OFFICIAL_E1_STATUS_RECEIVED");
         }
