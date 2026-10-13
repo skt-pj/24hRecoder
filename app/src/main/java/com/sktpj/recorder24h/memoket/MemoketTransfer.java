@@ -38,6 +38,7 @@ public final class MemoketTransfer {
     private final int maxFiles;
     private final boolean verifyDeviceRemoval;
     private String lastDeletionAckFile;
+    private boolean deletionAckReceived;
     private int verifiedRemovals;
     private String name;
     private long expectedSize = -1;
@@ -192,7 +193,11 @@ public final class MemoketTransfer {
         if (state == State.WAIT_ACK) {
             if (code != 5 || payload.length < 2 || payload[1] != 1) return null;
             if (verifyDeviceRemoval) {
+                // 01 starts a new audio stream. Official HCI ends at 05 -> 0501.
+                deletionAckReceived = true;
                 lastDeletionAckFile = name;
+                state = State.DONE;
+                return null;
             } else if (completedCount >= maxFiles) {
                 state = State.DONE;
                 return null;
@@ -249,6 +254,7 @@ public final class MemoketTransfer {
     public synchronized boolean isDone() { return state == State.DONE; }
     public synchronized int completedCount() { return completedCount; }
     public synchronized int verifiedRemovals() { return verifiedRemovals; }
+    public synchronized boolean deletionAckReceived() { return deletionAckReceived; }
     public synchronized String debugState() { return state.name(); }
     public synchronized String debugFileName() { return name == null ? "" : name; }
     public synchronized long debugExpectedSize() { return expectedSize; }
