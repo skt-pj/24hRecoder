@@ -223,54 +223,95 @@ public class MemoketTransferTest {
         assertNull(transfer.onControl(listResult()));
     }
 
+    private static byte[] finalizeInfo(byte[] file) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.writeBytes(new byte[]{3, 1, 0, 0, 5, (byte) NAME.length()});
+        out.writeBytes(NAME.getBytes(StandardCharsets.US_ASCII));
+        long size = file.length;
+        out.write((int)(size >>> 24));
+        out.write((int)(size >>> 16));
+        out.write((int)(size >>> 8));
+        out.write((int) size);
+        return out.toByteArray();
+    }
+
     @Test
-    public void verifiesGemFileAbsentOnlyAfterPersistAndDeleteAck() throws Exception {
+    public void officialHciSavesOneFileThenRequests00After0501WithoutReopening01() throws Exception {
         byte[] audio = new byte[480];
         AtomicInteger saved = new AtomicInteger();
         MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> {
             assertEquals(NAME, name);
             assertArrayEquals(audio, bytes);
             saved.incrementAndGet();
-        }, null, Integer.MAX_VALUE, true);
-        transfer.onControl(listResult());
-        transfer.onData(block(0, audio));
+        }, incoming -> NAME.equals(incoming), 1, true);
+        assertNull(transfer.onControl(listResult()));
+        assertNull(transfer.onData(block(0, audio)));
         assertArrayEquals(new byte[]{3}, transfer.onControl(metadata(audio)));
+        assertNull(transfer.onControl(finalizeInfo(audio)));
         assertEquals(0, saved.get());
         byte[] delete = transfer.onControl(new byte[]{3, (byte) 0xff});
         assertEquals(5, delete[0]);
         assertEquals(1, saved.get());
-        assertEquals(0, transfer.verifiedRemovals());
-        assertArrayEquals(new byte[]{1, 0, 0}, transfer.onControl(new byte[]{5, 1}));
+        assertEquals(0, transfer.deleteAcks());
+        assertArrayEquals(new byte[]{0}, transfer.onControl(new byte[]{5, 1}));
+        assertEquals(1, transfer.deleteAcks());
+        assertTrue(transfer.waitingForIdleStatus());
         assertFalse(transfer.isDone());
-        transfer.onControl(new byte[]{1, 0, 0});
+        assertNull(transfer.onControl(new byte[]{0, 1, 0, 2}));
+        assertFalse(transfer.isDone());
+        assertNull(transfer.onControl(new byte[]{0, 0}));
         assertEquals(1, transfer.verifiedRemovals());
+        assertTrue(transfer.postDeleteIdleConfirmed());
         assertTrue(transfer.isDone());
     }
 
     @Test(expected = IllegalStateException.class)
-    public void refusesToClaimGemRemovalWhileSameFileIsStillListed() throws Exception {
+    public void rejects03ffWithoutOfficial03InformationForDeleteMode() throws Exception {
         byte[] audio = new byte[480];
         MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> {},
-                null, Integer.MAX_VALUE, true);
+                incoming -> NAME.equals(incoming), 1, true);
         transfer.onControl(listResult());
         transfer.onData(block(0, audio));
         transfer.onControl(metadata(audio));
-        transfer.onControl(new byte[]{3, (byte) 0xff});
-        transfer.onControl(new byte[]{5, 1});
-        transfer.onControl(listResult());
+        transfer.onControl(new byte[]{3, (byte)0xff});
     }
 
     @Test(expected = IllegalStateException.class)
-    public void neverTreatsAmbiguousBusyListAsDeletionVerification() throws Exception {
+    public void rejects03InformationWithWrongFileSize() throws Exception {
         byte[] audio = new byte[480];
         MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> {},
-                null, Integer.MAX_VALUE, true);
+                incoming -> NAME.equals(incoming), 1, true);
         transfer.onControl(listResult());
         transfer.onData(block(0, audio));
         transfer.onControl(metadata(audio));
-        transfer.onControl(new byte[]{3, (byte) 0xff});
-        transfer.onControl(new byte[]{5, 1});
-        transfer.onControl(new byte[]{1, 0, 1});
+        byte[] bad = finalizeInfo(audio);
+        bad[bad.length - 1]++;
+        transfer.onControl(bad);
+    }
+
+    @Test(expected = MemoketTransfer.OlderRecordingBlockedException.class)
+    public void protectsOlderFileWhenFirstListResponseIsNotThisRecording() throws Exception {
+        MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> {
+            fail("Unselected file must not be persisted");
+        }, filename -> false, 1, true);
+        transfer.onControl(listResult());
+    }
+
+    @Test
+    public void distinguishesIdle0000FromAmbiguous0001DuringHandshake() {
+        MemoketSessionProtocol idle = new MemoketSessionProtocol();
+        idle.allowActiveRecordingStatus(true);
+        idle.firstCommand();
+        idle.onResponse(new byte[]{0, 0});
+        assertTrue(idle.initialIdleReported());
+        assertFalse(idle.busyOrTransferringReported());
+
+        MemoketSessionProtocol transferring = new MemoketSessionProtocol();
+        transferring.allowActiveRecordingStatus(true);
+        transferring.firstCommand();
+        transferring.onResponse(new byte[]{0, 1, 0, 2});
+        assertFalse(transferring.initialIdleReported());
+        assertTrue(transferring.busyOrTransferringReported());
     }
 
     @Test

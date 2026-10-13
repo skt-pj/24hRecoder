@@ -14,6 +14,7 @@ public final class MemoketTransfer {
         RECEIVING_DATA,
         WAIT_FINALIZE,
         WAIT_ACK,
+        WAIT_POST_DELETE_STATUS,
         DONE
     }
 
@@ -38,7 +39,12 @@ public final class MemoketTransfer {
     private final int maxFiles;
     private final boolean verifyDeviceRemoval;
     private String lastDeletionAckFile;
+    // 05 01 confirms the named acknowledgement; 00 00 confirms idle.
+    // Neither response independently proves flash deletion.
     private int verifiedRemovals;
+    private int deleteAcks;
+    private boolean postDeleteIdleConfirmed;
+    private boolean finalizeInfoVerified;
     private String name;
     private long expectedSize = -1;
     private long expectedCrc = -1;
@@ -62,7 +68,7 @@ public final class MemoketTransfer {
         this(save, selector, maxFiles, false);
     }
 
-    /** Verify a filename-specific 05 ACK by retrieving the next official 01 listing. */
+    /** Follow the official 05 01 acknowledgement with non-destructive 00 status, never a second 01. */
     public MemoketTransfer(CompletedFile save, FileSelector selector, int maxFiles,
             boolean verifyDeviceRemoval) {
         if (maxFiles < 1) throw new IllegalArgumentException("Invalid file limit");
@@ -96,36 +102,17 @@ public final class MemoketTransfer {
         if (state == State.WAIT_LIST) {
             if (code != 1) return null;
             if (payload.length >= 3 && payload[1] == 0 && payload[2] == 0) {
-                if (lastDeletionAckFile != null) {
-                    verifiedRemovals++;
-                    lastDeletionAckFile = null;
-                }
                 state = State.DONE;
                 return null;
             }
             if (payload.length < 4 || payload[1] != 1 || payload[2] != 1) {
-                throw new IllegalStateException("Gem一覧が未確定です: " + hex(payload)
-                        + "。デバイスファイル削除を確認できません");
+                throw new IllegalStateException("Gem一覧が未確定です: " + hex(payload));
             }
             String incoming = new String(payload, 3, payload.length - 3, StandardCharsets.US_ASCII);
             requireName(incoming);
-            if (lastDeletionAckFile != null) {
-                if (lastDeletionAckFile.equals(incoming)) {
-                    throw new IllegalStateException("05 ACK後もGemに同じファイルが残っています: " + incoming);
-                }
-                verifiedRemovals++;
-                lastDeletionAckFile = null;
-                // A new file is present, but this operation was only for the
-                // single recording chosen before the first transfer.
-                // Never auto-download or delete a second, unselected recording.
-                if (completedCount >= maxFiles) {
-                    state = State.DONE;
-                    return null;
-                }
-            }
             if (selector != null && !selector.accept(incoming)) {
-                // A list request may begin streaming a different recording. Never ACK
-                // it merely to advance a queue: an ACK may delete the Gem's source file.
+                // A request for 01 immediately starts DATA on this Gem.
+                // Never delete a different pending file to reach the target.
                 throw new OlderRecordingBlockedException(incoming);
             }
             name = incoming;
@@ -135,6 +122,7 @@ public final class MemoketTransfer {
             crc.reset();
             nextSequence = 0;
             finalizeRequested = false;
+            finalizeInfoVerified = false;
             state = State.RECEIVING_DATA;
             // Observed BLE behavior: 01 starts DATA streaming.
             // Only send 02 after DATA has gone quiet.
@@ -169,9 +157,24 @@ public final class MemoketTransfer {
             }
 
             if (code == 3 && state == State.WAIT_FINALIZE) {
-                if (payload.length < 2 || (payload[1] & 0xff) != 0xff
-                        || !finalizeRequested) {
+                if (payload.length < 2 || !finalizeRequested) return null;
+                int response = payload[1] & 0xff;
+                if (response == 1) {
+                    // Preserve legacy transfer behavior; strict 03 01 validation
+                    // is required only by the official recording stop/delete flow.
+                    if (!verifyDeviceRemoval) return null;
+                    byte[] filename = name.getBytes(StandardCharsets.US_ASCII);
+                    int offset = indexOf(payload, filename);
+                    if (offset < 0 || payload.length < offset + filename.length + 4
+                            || u32(payload, offset + filename.length) != expectedSize) {
+                        throw new IllegalStateException("03 finalize file/size response mismatch");
+                    }
+                    finalizeInfoVerified = true;
                     return null;
+                }
+                if (response != 0xff) return null;
+                if (verifyDeviceRemoval && !finalizeInfoVerified) {
+                    throw new IllegalStateException("公式03 01のファイル名・サイズ応答が確認できません");
                 }
                 verifyComplete();
                 byte[] data = buffer.toByteArray();
@@ -191,9 +194,15 @@ public final class MemoketTransfer {
 
         if (state == State.WAIT_ACK) {
             if (code != 5 || payload.length < 2 || payload[1] != 1) return null;
+            deleteAcks++;
             if (verifyDeviceRemoval) {
                 lastDeletionAckFile = name;
-            } else if (completedCount >= maxFiles) {
+                name = null;
+                state = State.WAIT_POST_DELETE_STATUS;
+                // Official HCI does not request 01 again after 05 01.
+                return new byte[]{0x00};
+            }
+            if (completedCount >= maxFiles) {
                 state = State.DONE;
                 return null;
             }
@@ -203,6 +212,18 @@ public final class MemoketTransfer {
             finalizeRequested = false;
             state = State.WAIT_LIST;
             return initialCommand();
+        }
+
+        if (state == State.WAIT_POST_DELETE_STATUS) {
+            if (code != 0) return null;
+            if (payload.length >= 2 && payload[1] == 0) {
+                postDeleteIdleConfirmed = true;
+                verifiedRemovals++;
+                lastDeletionAckFile = null;
+                state = State.DONE;
+            }
+            // 00 01 can also appear during DATA transfer: never treat as idle.
+            return null;
         }
         return null;
     }
@@ -248,7 +269,11 @@ public final class MemoketTransfer {
 
     public synchronized boolean isDone() { return state == State.DONE; }
     public synchronized int completedCount() { return completedCount; }
+    /** Compatibility accessor: count of 05 01 followed by idle 00 00; not flash readback. */
     public synchronized int verifiedRemovals() { return verifiedRemovals; }
+    public synchronized int deleteAcks() { return deleteAcks; }
+    public synchronized boolean postDeleteIdleConfirmed() { return postDeleteIdleConfirmed; }
+    public synchronized boolean waitingForIdleStatus() { return state == State.WAIT_POST_DELETE_STATUS; }
     public synchronized String debugState() { return state.name(); }
     public synchronized String debugFileName() { return name == null ? "" : name; }
     public synchronized long debugExpectedSize() { return expectedSize; }
