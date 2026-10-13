@@ -77,6 +77,9 @@ public final class MemoketRemoteRecordingService extends Service {
     private boolean inFlightMetadata;
     private int midTransferStatusStep;
     private boolean connectForStop;
+    private boolean stopFromKnownRecording;
+    private long lastDeleteStatusProbeAtMs;
+    private long deleteStatusStartedAtMs;
 
     @Override
     public void onCreate() {
@@ -94,6 +97,10 @@ public final class MemoketRemoteRecordingService extends Service {
         if (!stopRequest && !ACTION_START_RECORDING.equals(action)) return START_NOT_STICKY;
         if (stopRequest) {
             if (stopPending || stopCompleted) return START_NOT_STICKY;
+            // 00 01 may mean an ongoing transfer; it is not recording proof.
+            stopFromKnownRecording = recordingActive
+                    || (MemoketSettings.recordingStartedAt(this) > 0
+                    && "録音中".equals(MemoketSettings.remoteRecordingState(this)));
             trace.phase("STOP_REQUESTED", stateDetails());
             if (gatt != null && session.isReady() && data != null) {
                 beginOfficialStop();
@@ -156,10 +163,10 @@ public final class MemoketRemoteRecordingService extends Service {
 
     private synchronized void beginOfficialStop() {
         if (stopPending || stopCompleted) return;
-        // 03 has different observed uses. Never issue it to an idle device
-        // simply because someone pressed STOP from the settings screen.
-        if (!recordingActive && !session.recordingReported()) {
-            finishWithError("Gemが録音中であることを確認できません。停止・削除コマンドは送信していません");
+        // 00 01 + filename appears in the captured DATA transfer as well.
+        // Never interpret that response alone as permission to send 03.
+        if (!recordingActive && !stopFromKnownRecording) {
+            finishWithError("アプリ開始済み録音を特定できません。転送中の00 01だけでは停止・削除しません");
             return;
         }
         stopRequestedAtMs = System.currentTimeMillis();
@@ -192,6 +199,8 @@ public final class MemoketRemoteRecordingService extends Service {
         lastStopActivityAtMs = System.currentTimeMillis();
         lastStopDataAtMs = lastStopActivityAtMs;
         lastMetadataRequestAtMs = 0;
+        lastDeleteStatusProbeAtMs = 0;
+        deleteStatusStartedAtMs = 0;
         inFlightMetadata = false;
         midTransferStatusStep = 0;
         updateState("停止操作中（実機確認待ち）");
@@ -271,6 +280,12 @@ public final class MemoketRemoteRecordingService extends Service {
                 return;
             }
             if (stopCompleted) return;
+            if (stopPending && (stopNotifyStep == 1 || stopNotifyStep == 2)
+                    && (descriptor == null || descriptor.getCharacteristic() == null
+                    || !MemoketGattSync.DATA.equals(descriptor.getCharacteristic().getUuid()))) {
+                finishWithError("STOP中に想定外の通知descriptor応答を受信しました: " + uuid);
+                return;
+            }
             if (stopPending && stopNotifyStep == 1) {
                 stopNotifyStep = 2;
                 trace.phase("OFFICIAL_DATA_CCCD_ON_REQUESTED");
@@ -434,16 +449,22 @@ public final class MemoketRemoteRecordingService extends Service {
             while (!earlyAudio.isEmpty()) onOfficialData(earlyAudio.removeFirst());
         }
         if (next != null) {
-            // MemoketTransfer only emits 05 AFTER CRC + durable .raw/.opus save.
             if (next.length > 0 && next[0] == 5) {
-                trace.phase("OFFICIAL_DURABLE_SAVE_FINISHED_ACK_REQUESTED");
+                // MemoketTransfer emits 05 only AFTER CRC and durable .raw/.opus save.
+                trace.phase("OFFICIAL_DURABLE_SAVE_FINISHED_DELETE_REQUESTED");
+            } else if (next.length == 1 && next[0] == 0
+                    && stopTransfer != null && stopTransfer.waitingForIdleStatus()) {
+                deleteStatusStartedAtMs = now;
+                lastDeleteStatusProbeAtMs = now;
+                trace.phase("OFFICIAL_POST_05_IDLE_00_REQUESTED");
             }
             queue(next);
         }
         if (stopTransfer != null && stopTransfer.isDone()) {
-            if (stopSavedFiles < 1 || stopTransfer.verifiedRemovals() != stopSavedFiles) {
-                throw new IllegalStateException("Gem保存・削除確認件数が一致しません: saved="
-                        + stopSavedFiles + ", removed=" + stopTransfer.verifiedRemovals());
+            if (stopSavedFiles != 1 || stopTransfer.deleteAcks() != 1
+                    || !stopTransfer.postDeleteIdleConfirmed()) {
+                throw new IllegalStateException("最新1件の保存・05 ACK・00待機応答が未成立: saved="
+                        + stopSavedFiles + ", ack=" + stopTransfer.deleteAcks());
             }
             finishOfficialTransfer();
         }
@@ -476,13 +497,28 @@ public final class MemoketRemoteRecordingService extends Service {
             // The official capture reads final size/CRC after the DATA stream
             // has ended. Do not finalize a still-growing recording mid-stream.
             boolean dataQuiet = now - lastStopDataAtMs >= 1_000L;
+            boolean intermediateStatusReady = midTransferStatusStep == 3
+                    || (midTransferStatusStep == 0 && stopTransfer.dataBlockCount() < 19);
             if (stopNotifyStep == 3 && !commandBusy && commands.isEmpty()
                     && stopTransfer.shouldRequestMetadata() && !inFlightMetadata
-                    && dataQuiet && now - lastMetadataRequestAtMs >= 1_000L) {
+                    && intermediateStatusReady && dataQuiet
+                    && now - lastMetadataRequestAtMs >= 1_000L) {
                 inFlightMetadata = true;
                 lastMetadataRequestAtMs = now;
                 trace.phase("OFFICIAL_METADATA_AFTER_DATA");
                 queue(MemoketTransfer.metadataCommand());
+            }
+            if (stopTransfer.waitingForIdleStatus()) {
+                if (deleteStatusStartedAtMs > 0
+                        && now - deleteStatusStartedAtMs > 60_000L) {
+                    throw new IllegalStateException("05 01受信・端末保存済みですが、Gemの00 00待機応答を確認できません");
+                }
+                if (!commandBusy && commands.isEmpty()
+                        && now - lastDeleteStatusProbeAtMs >= 5_000L) {
+                    lastDeleteStatusProbeAtMs = now;
+                    trace.phase("OFFICIAL_POST_05_IDLE_STATUS_RETRY");
+                    queue(new byte[]{0x00});
+                }
             }
             stopHandler.postDelayed(stopWatchdog, 500);
         } catch (Exception error) {
@@ -496,13 +532,13 @@ public final class MemoketRemoteRecordingService extends Service {
         stopPending = false;
         recordingActive = false;
         stopHandler.removeCallbacks(stopWatchdog);
-        trace.phase("OFFICIAL_SELECTED_FILE_REMOVED_AND_VERIFIED",
-                stateDetails());
-        updateState("データ取得・Gemファイル削除完了");
+        trace.phase("OFFICIAL_SELECTED_FILE_SAVED_DELETE_ACK_IDLE", stateDetails());
+        updateState("最新1件保存・削除ACK確認（本体停止は要確認）");
         MemoketSettings.saveResult(this,
-                "最新録音" + stopSavedFiles + "件のCRC照合・端末保存・Gem 05 ACK・再一覧照合まで完了");
-        log("MEMOKET_OFFICIAL_FILE_DELETE_CONFIRMED", stateDetails());
-        updateNotification("Memoket " + stopSavedFiles + "件を保存し、Gem上の削除を照合しました");
+                "最新録音1件をCRC照合・端末保存し、Gemの削除05 ACK(0501)・待機00 00を確認。"
+                        + "Gem実ファイル消失と赤LED停止は実機未検証");
+        log("MEMOKET_OFFICIAL_FILE_SAVED_DELETE_ACK_IDLE", stateDetails());
+        updateNotification("Memoket最新1件を保存・Gem削除ACKを確認しました");
         stopForeground(STOP_FOREGROUND_REMOVE);
         closeGatt();
         stopSelf();
@@ -590,7 +626,8 @@ public final class MemoketRemoteRecordingService extends Service {
             d.put("sessionStep", session.debugStep());
             d.put("stopCccdStep", stopNotifyStep);
             d.put("savedFiles", stopSavedFiles);
-            d.put("deviceFilesRemoved", stopTransfer == null ? 0 : stopTransfer.verifiedRemovals());
+            d.put("gemDeleteAcks", stopTransfer == null ? 0 : stopTransfer.deleteAcks());
+            d.put("gemIdleAfterAck", stopTransfer != null && stopTransfer.postDeleteIdleConfirmed());
             d.put("midTransferStatusStep", midTransferStatusStep);
             d.put("transferState", stopTransfer == null ? "NONE" : stopTransfer.debugState());
         } catch (Exception ignored) { }
