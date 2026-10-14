@@ -207,10 +207,10 @@ public final class MemoketRemoteRecordingService extends Service {
         stopTransfer = new MemoketTransfer((name, payload, crc) -> {
             new MemoketRecordingStore(this).persist(name, payload, crc);
             stopSavedFiles++;
-            log("MEMOKET_OFFICIAL_FILE_DURABLY_SAVED",
+            log("MEMOKET_FILE_SAVED_WITHOUT_GEM_DELETE_ACK",
                     new JSONObject().put("filename", name)
                             .put("bytes", payload.length).put("crc32", Long.toHexString(crc)));
-        }, latest, 1, true);
+        }, latest, 1, true, false);
         lastStopActivityAtMs = System.currentTimeMillis();
         lastStopDataAtMs = lastStopActivityAtMs;
         lastMetadataRequestAtMs = 0;
@@ -218,11 +218,11 @@ public final class MemoketRemoteRecordingService extends Service {
         deleteStatusStartedAtMs = 0;
         inFlightMetadata = false;
         midTransferStatusStep = 0;
-        updateState("停止操作中（実機確認待ち）");
+        updateState("停止03候補を確認中（実機停止は未検証）");
         MemoketSettings.recordingStopRequested(this, stopRequestedAtMs);
-        trace.phase("OFFICIAL_STOP_DATA_CCCD_OFF_REQUESTED");
-        stopNotifyStep = 1;
-        setNotification(data, false);
+        trace.phase("STOP_03_HISTORICAL_CANDIDATE_REQUESTED_UNVERIFIED");
+        stopNotifyStep = 0;
+        queue(new byte[]{0x03});
         stopHandler.removeCallbacks(stopWatchdog);
         stopHandler.postDelayed(stopWatchdog, 500);
     }
@@ -377,6 +377,18 @@ public final class MemoketRemoteRecordingService extends Service {
         if (stopCompleted) return;
         try {
             if (stopPending) {
+                if (stopNotifyStep == 0) {
+                    if (!uuid.equals(MemoketGattSync.RESPONSE)
+                            || value == null || value.length == 0
+                            || (value[0] & 0xff) != 0x03) return;
+                    trace.response(value, "STOP_03_CANDIDATE", "AWAIT_03FF");
+                    if (value.length == 2 && (value[1] & 0xff) == 0xff) {
+                        trace.phase("STOP_03FF_RECEIVED_NOT_DEVICE_STOP_PROOF");
+                        stopNotifyStep = 1;
+                        setNotification(data, false);
+                    }
+                    return;
+                }
                 onOfficialStopNotification(uuid, value);
                 return;
             }
@@ -475,9 +487,8 @@ public final class MemoketRemoteRecordingService extends Service {
             queue(next);
         }
         if (stopTransfer != null && stopTransfer.isDone()) {
-            if (stopSavedFiles != 1 || stopTransfer.deleteAcks() != 1
-                    || !stopTransfer.postDeleteIdleConfirmed()) {
-                throw new IllegalStateException("最新1件の保存・05 ACK・00待機応答が未成立: saved="
+            if (stopSavedFiles != 1 || stopTransfer.deleteAcks() != 0) {
+                throw new IllegalStateException("保存件数／Gem側非削除条件に不一致: saved="
                         + stopSavedFiles + ", ack=" + stopTransfer.deleteAcks());
             }
             finishOfficialTransfer();
@@ -499,6 +510,9 @@ public final class MemoketRemoteRecordingService extends Service {
         if (!stopPending || stopCompleted || stopTransfer == null) return;
         long now = System.currentTimeMillis();
         try {
+            if (stopNotifyStep == 0 && now - stopRequestedAtMs > 10_000L) {
+                throw new IllegalStateException("03再送に対する03ffが10秒以内に確認できません。Gemの録音停止は未確認です");
+            }
             // No absolute download time cap: only missing BLE progress is fatal.
             if (now - lastStopActivityAtMs > 60_000L) {
                 throw new IllegalStateException("Gemから60秒間DATA/RESPONSEがなく、処理を終了しました");
@@ -547,13 +561,12 @@ public final class MemoketRemoteRecordingService extends Service {
         stopPending = false;
         recordingActive = false;
         stopHandler.removeCallbacks(stopWatchdog);
-        trace.phase("OFFICIAL_SELECTED_FILE_SAVED_DELETE_ACK_IDLE", stateDetails());
-        updateState("最新1件保存・削除ACK確認（本体停止は要確認）");
+        trace.phase("FILE_SAVED_DEVICE_STOP_NOT_PROVEN_NO_DELETE", stateDetails());
+        updateState("録音候補1件保存（Gem停止未確認・Gem削除なし）");
         MemoketSettings.saveResult(this,
-                "今回の録音1件をCRC照合・端末保存し、Gemの削除05 ACK(0501)・待機00 00を確認。"
-                        + "Gem実ファイル消失と赤LED停止は実機未検証");
-        log("MEMOKET_OFFICIAL_FILE_SAVED_DELETE_ACK_IDLE", stateDetails());
-        updateNotification("Memoket最新1件を保存・Gem削除ACKを確認しました");
+                "録音候補1件をCRC照合・端末保存。Gem停止未確認のためGem側05削除ACK未送信");
+        log("MEMOKET_FILE_SAVED_DEVICE_STOP_UNVERIFIED", stateDetails());
+        updateNotification("Gem録音候補保存（Gem側ファイル保持）");
         stopForeground(STOP_FOREGROUND_REMOVE);
         closeGatt();
         stopSelf();

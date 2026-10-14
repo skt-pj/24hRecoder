@@ -38,6 +38,7 @@ public final class MemoketTransfer {
     private final FileSelector selector;
     private final int maxFiles;
     private final boolean verifyDeviceRemoval;
+    private final boolean sendCompletionAck;
     private String lastDeletionAckFile;
     // 05 01 confirms the named acknowledgement; 00 00 confirms idle.
     // Neither response independently proves flash deletion.
@@ -76,6 +77,18 @@ public final class MemoketTransfer {
         this.selector = selector;
         this.maxFiles = maxFiles;
         this.verifyDeviceRemoval = verifyDeviceRemoval;
+        this.sendCompletionAck = true;
+    }
+
+    /** Preserve the Gem source file when recording STOP is not independently verified. */
+    public MemoketTransfer(CompletedFile save, FileSelector selector, int maxFiles,
+            boolean verifyDeviceRemoval, boolean sendCompletionAck) {
+        if (maxFiles < 1) throw new IllegalArgumentException("Invalid file limit");
+        this.save = save;
+        this.selector = selector;
+        this.maxFiles = maxFiles;
+        this.verifyDeviceRemoval = verifyDeviceRemoval;
+        this.sendCompletionAck = sendCompletionAck;
     }
 
     public static byte[] initialCommand() {
@@ -188,6 +201,12 @@ public final class MemoketTransfer {
                 save.persist(name, data, expectedCrc);
                 completedCount++;
                 buffer = null;
+                if (!sendCompletionAck) {
+                    // Keep this file on Gem: even a matching partial CRC does
+                    // not establish that hardware recording really stopped.
+                    state = State.DONE;
+                    return null;
+                }
                 byte[] n = name.getBytes(StandardCharsets.US_ASCII);
                 byte[] ack = new byte[n.length + 2];
                 ack[0] = 5;

@@ -409,4 +409,26 @@ public class MemoketTransferTest {
         protocol.onResponse(new byte[]{(byte)0xf3,0x01,0x00});
     }
 
+
+    @Test
+    public void unverifiedStopTransferSavesButNeverSendsGemDelete05() throws Exception {
+        byte[] audio = new byte[480];
+        AtomicInteger saved = new AtomicInteger();
+        MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> {
+            assertEquals(NAME, name);
+            assertArrayEquals(audio, bytes);
+            saved.incrementAndGet();
+        }, name -> NAME.equals(name), 1, true, false);
+        assertNull(transfer.onControl(listResult()));
+        assertNull(transfer.onData(block(0, audio)));
+        assertArrayEquals(new byte[]{3}, transfer.onControl(metadata(audio)));
+        assertNull(transfer.onControl(finalizeInfo(audio)));
+        assertEquals(0, saved.get());
+        // Explicit 03ff is only transfer-finalize. It is not hardware STOP proof.
+        assertNull(transfer.onControl(new byte[]{3, (byte)0xff}));
+        assertEquals(1, saved.get());
+        assertEquals(0, transfer.deleteAcks());
+        assertTrue(transfer.isDone());
+        assertNull(transfer.onControl(new byte[]{5, 1}));
+    }
 }
