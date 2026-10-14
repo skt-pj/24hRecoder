@@ -20,4 +20,7 @@ The vendor manual describes a long physical button press for recording start, on
 08:00:25 ongoing DATA began; at 08:01:29 there was no actual Gem stop, verified finalization, CRC-backed file save or 05 ACK.
 
 ## v0.7.109 behavior
-This **diagnostic/safety-only** release treats 03ff as a file-inventory end marker, never proof of START; it reports an unsupported remote recording flow, closes BLE, and does not trigger a 5-second timer, a pseudo-STOP CCCD transition, download or file deletion. An 8-second timeout covers missing 03ff. It does not claim to deliver unattended Gem record→stop→transfer; that requires an independently verified remote START/STOP protocol.
+
+This **diagnostic/safety-only** release connects, performs the known non-record-control authentication handshake, then fails closed. It does NOT send the ambiguous control 03, because the app cannot prove that 03 is harmless in every device state or can issue the matching remote STOP. It does not start a 5-second timer, perform a pseudo-STOP CCCD transition, stream audio, or delete any file. The UI does not falsely advertise working Gem remote five-second capture.
+
+**This build does not meet the requested unattended Gem five-second record→stop→transfer.** A real BLE start/stop operation and affirmative device readback remain unidentified. Do not claim success or substitute user physical confirmation.
