@@ -195,11 +195,9 @@ fun MemoketGemSettingsCard() {
                     ) { Text("$name ($deviceAddress)") }
                 }
                 Button(
-                    enabled = address.isNotEmpty()
-                        && remoteState != "接続中"
-                        && remoteState != "録音中"
-                        && remoteState != "停止操作中（実機確認待ち）"
-                        && remoteState != "ファイル取得中",
+                    // Only the service can guard overlapping operations.
+                    // Persisted v0.7.108 stop-status is not a live service state.
+                    enabled = address.isNotEmpty(),
                     onClick = {
                         context.startForegroundService(
                             android.content.Intent(context, MemoketRemoteRecordingService::class.java)
