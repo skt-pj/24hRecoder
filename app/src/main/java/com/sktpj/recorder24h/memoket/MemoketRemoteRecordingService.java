@@ -64,6 +64,7 @@ public final class MemoketRemoteRecordingService extends Service {
     private volatile boolean stopCompleted;
     private byte[] lastCommand;
     private MemoketTransfer stopTransfer;
+    private MemoketOfficialStopSequence stopSequence;
     private int stopNotifyStep;
     private final Deque<byte[]> earlyAudio = new ArrayDeque<>();
     private final Handler stopHandler = new Handler(Looper.getMainLooper());
@@ -218,11 +219,16 @@ public final class MemoketRemoteRecordingService extends Service {
         deleteStatusStartedAtMs = 0;
         inFlightMetadata = false;
         midTransferStatusStep = 0;
-        updateState("停止03候補を確認中（実機停止は未検証）");
+        updateState("Gem停止通信→今回1件の取得（停止成立は未検証）");
         MemoketSettings.recordingStopRequested(this, stopRequestedAtMs);
-        trace.phase("STOP_03_HISTORICAL_CANDIDATE_REQUESTED_UNVERIFIED");
-        stopNotifyStep = 0;
-        queue(new byte[]{0x03});
+        // PCS Wiki 04 §34: v0.7.107 removed a second CONTROL 03 because the
+        // official HCI stop operation has no such frame. Do not re-introduce it.
+        // DATA CCCD is a subscription transition, NOT independent STOP proof.
+        stopSequence = new MemoketOfficialStopSequence();
+        stopSequence.begin();
+        stopNotifyStep = 1;
+        trace.phase("STOP_CAPTURE_TRANSITION_DATA_CCCD_OFF_NOT_STOP_PROOF");
+        setNotification(data, false);
         stopHandler.removeCallbacks(stopWatchdog);
         stopHandler.postDelayed(stopWatchdog, 500);
     }
@@ -308,17 +314,21 @@ public final class MemoketRemoteRecordingService extends Service {
                     return;
                 }
             }
-            if (stopPending && stopNotifyStep == 1) {
-                stopNotifyStep = 2;
-                trace.phase("OFFICIAL_DATA_CCCD_ON_REQUESTED");
-                setNotification(data, true);
-                return;
-            }
-            if (stopPending && stopNotifyStep == 2) {
-                stopNotifyStep = 3;
-                trace.phase("OFFICIAL_FILE_LIST_REQUESTED");
-                lastStopActivityAtMs = System.currentTimeMillis();
-                queue(MemoketTransfer.initialCommand());
+            if (stopPending && (stopNotifyStep == 1 || stopNotifyStep == 2)) {
+                // Both descriptor responses are required; STOP is still
+                // unverified, and re-enabling DATA can reproduce the old
+                // stop-then-restart bug reported around v0.7.88.
+                Boolean nextEnabled = stopSequence.onCccdWritten(descriptor.getValue());
+                if (nextEnabled != null) {
+                    stopNotifyStep = 2;
+                    trace.phase("FILE_TRANSFER_DATA_RESUBSCRIBE_RESTART_RISK_NOTED");
+                    setNotification(data, nextEnabled);
+                } else {
+                    stopNotifyStep = 3;
+                    trace.phase("FILE_TRANSFER_010000_REQUESTED_STOP_UNVERIFIED");
+                    lastStopActivityAtMs = System.currentTimeMillis();
+                    queue(MemoketTransfer.initialCommand());
+                }
                 return;
             }
             // During STOP, a late unrelated descriptor callback must never
@@ -377,18 +387,8 @@ public final class MemoketRemoteRecordingService extends Service {
         if (stopCompleted) return;
         try {
             if (stopPending) {
-                if (stopNotifyStep == 0) {
-                    if (!uuid.equals(MemoketGattSync.RESPONSE)
-                            || value == null || value.length == 0
-                            || (value[0] & 0xff) != 0x03) return;
-                    trace.response(value, "STOP_03_CANDIDATE", "AWAIT_03FF");
-                    if (value.length == 2 && (value[1] & 0xff) == 0xff) {
-                        trace.phase("STOP_03FF_RECEIVED_NOT_DEVICE_STOP_PROOF");
-                        stopNotifyStep = 1;
-                        setNotification(data, false);
-                    }
-                    return;
-                }
+                // All post-start notifications belong to the STOP/transfer
+                // phase; there is no additional CONTROL 03 ACK to wait for.
                 onOfficialStopNotification(uuid, value);
                 return;
             }
@@ -499,7 +499,14 @@ public final class MemoketRemoteRecordingService extends Service {
     private void onOfficialData(byte[] value) {
         byte[] next = stopTransfer.onData(value);
         if (next != null) queue(next);
-        if (midTransferStatusStep == 0 && stopTransfer.dataBlockCount() >= 19) {
+        long blocks = stopTransfer.dataBlockCount();
+        if (blocks == 1 || blocks == 32 || blocks == 128 || blocks == 512
+                || (blocks > 512 && blocks % 1024 == 0)) {
+            // Bounded progress breadcrumbs for recordings that never
+            // finalize; do not confuse receiving audio with Gem STOP.
+            trace.phase("GEM_TRANSFER_PROGRESS_STOP_UNVERIFIED", stateDetails());
+        }
+        if (midTransferStatusStep == 0 && blocks >= 19) {
             // Official HCI interleaving: wait for the 00 response BEFORE e1.
             midTransferStatusStep = 1;
             trace.phase("OFFICIAL_INTERLEAVED_STATUS_00_REQUESTED");
@@ -511,9 +518,6 @@ public final class MemoketRemoteRecordingService extends Service {
         if (!stopPending || stopCompleted || stopTransfer == null) return;
         long now = System.currentTimeMillis();
         try {
-            if (stopNotifyStep == 0 && now - stopRequestedAtMs > 10_000L) {
-                throw new IllegalStateException("03再送に対する03ffが10秒以内に確認できません。Gemの録音停止は未確認です");
-            }
             // No absolute download time cap: only missing BLE progress is fatal.
             if (now - lastStopActivityAtMs > 60_000L) {
                 throw new IllegalStateException("Gemから60秒間DATA/RESPONSEがなく、処理を終了しました");
@@ -662,6 +666,10 @@ public final class MemoketRemoteRecordingService extends Service {
             d.put("gemIdleAfterAck", stopTransfer != null && stopTransfer.postDeleteIdleConfirmed());
             d.put("midTransferStatusStep", midTransferStatusStep);
             d.put("transferState", stopTransfer == null ? "NONE" : stopTransfer.debugState());
+            d.put("receivedBlocks", stopTransfer == null ? 0 : stopTransfer.dataBlockCount());
+            d.put("receivedBytes", stopTransfer == null ? 0 : stopTransfer.bufferedBytes());
+            d.put("deviceStopConfirmed", false);
+            d.put("restartAfterStopUnverified", stopPending);
         } catch (Exception ignored) { }
         return d;
     }
