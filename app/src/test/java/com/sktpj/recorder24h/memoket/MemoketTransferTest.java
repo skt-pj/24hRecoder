@@ -411,24 +411,33 @@ public class MemoketTransferTest {
 
 
     @Test
-    public void unverifiedStopTransferSavesButNeverSendsGemDelete05() throws Exception {
+    public void saveAndVerifiedFinalizeMustPrecede05Then00Idle() throws Exception {
         byte[] audio = new byte[480];
         AtomicInteger saved = new AtomicInteger();
         MemoketTransfer transfer = new MemoketTransfer((name, bytes, crc) -> {
             assertEquals(NAME, name);
             assertArrayEquals(audio, bytes);
             saved.incrementAndGet();
-        }, name -> NAME.equals(name), 1, true, false);
+        }, name -> NAME.equals(name), 1, true);
         assertNull(transfer.onControl(listResult()));
         assertNull(transfer.onData(block(0, audio)));
         assertArrayEquals(new byte[]{3}, transfer.onControl(metadata(audio)));
+        assertEquals(0, saved.get());
+        assertEquals(0, transfer.deleteAcks());
         assertNull(transfer.onControl(finalizeInfo(audio)));
         assertEquals(0, saved.get());
-        // Explicit 03ff is only transfer-finalize. It is not hardware STOP proof.
-        assertNull(transfer.onControl(new byte[]{3, (byte)0xff}));
+        // No 05 before 03ff + verified size/CRC and durable storage.
+        byte[] ack = transfer.onControl(new byte[]{3, (byte)0xff});
         assertEquals(1, saved.get());
+        assertEquals(5, ack[0] & 0xff);
+        assertEquals(NAME.length(), ack[1] & 0xff);
         assertEquals(0, transfer.deleteAcks());
+        assertArrayEquals(new byte[]{0}, transfer.onControl(new byte[]{5,1}));
+        assertEquals(1, transfer.deleteAcks());
+        assertFalse(transfer.isDone());
+        assertNull(transfer.onControl(new byte[]{0,0}));
+        assertTrue(transfer.postDeleteIdleConfirmed());
         assertTrue(transfer.isDone());
-        assertNull(transfer.onControl(new byte[]{5, 1}));
     }
+
 }

@@ -209,7 +209,7 @@ fun MemoketGemSettingsCard() {
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("Gem録音→5秒→停止03候補→取得（検証版）") }
-                Text("第31節のコマンド対照表に基づく実機検証版です。停止03の実際の成否は未確認です。ファイルを保存できてもGem側削除05は送信しません。")
+                Text("停止03の成否は実機検証中です。対象1件の連番・サイズ・CRC・保存・転送確定後に05を送信し、ACKと00待機を確認します。Gemの実削除・録音停止は未検証です。")
                 Text("Gem録音状態: $remoteState")
                 Text("端末内保存: ${fileCount}件 / 最新結果: $result")
                 OutlinedButton(
