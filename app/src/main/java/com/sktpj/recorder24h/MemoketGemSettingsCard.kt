@@ -208,7 +208,8 @@ fun MemoketGemSettingsCard() {
                         remoteState = "接続中"
                     },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text("録音開始→5秒録音→停止→録音取得") }
+                ) { Text("Gem 03応答の確認（安全診断）") }
+                Text("Gemの遠隔録音開始・停止は未確認です。診断では録音・停止・取得・削除を実行しません。")
                 Text("Gem録音状態: $remoteState")
                 Text("端末内保存: ${fileCount}件 / 最新結果: $result")
                 OutlinedButton(

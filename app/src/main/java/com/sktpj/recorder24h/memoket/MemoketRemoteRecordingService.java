@@ -73,6 +73,12 @@ public final class MemoketRemoteRecordingService extends Service {
             beginOfficialStop();
         }
     };
+    private final Runnable start03Timeout = () -> {
+        if (recordingStartAwaitingAck && !stopPending && !stopCompleted) {
+            recordingStartAwaitingAck = false;
+            finishWithError("Gemの03応答がなく、録音開始を確認できません。取得・削除も行いません");
+        }
+    };
     private final Runnable stopWatchdog = new Runnable() {
         @Override public void run() {
             checkStopProgress();
@@ -230,6 +236,7 @@ public final class MemoketRemoteRecordingService extends Service {
     @Override
     public void onDestroy() {
         stopHandler.removeCallbacks(fiveSecondStop);
+        stopHandler.removeCallbacks(start03Timeout);
         stopHandler.removeCallbacks(stopWatchdog);
         closeGatt();
         super.onDestroy();
@@ -391,23 +398,25 @@ public final class MemoketRemoteRecordingService extends Service {
                     recordingStartAwaitingAck = true;
                     trace.phase("RECORD_START_COMMAND_REQUESTED");
                     queue(new byte[]{0x03});
+                    stopHandler.removeCallbacks(start03Timeout);
+                    stopHandler.postDelayed(start03Timeout, 8_000L);
                 }
                 return;
             }
             if (recordingStartAwaitingAck && !stopPending && value != null
-                    && value.length == 2 && value[0] == 0x03 && (value[1] & 0xff) == 0xff) {
-                recordingStartAwaitingAck = false;
-                recordingActive = true;
-                MemoketSettings.recordingStarted(this, System.currentTimeMillis(),
-                        java.time.ZoneId.systemDefault().getId());
-                trace.phase("RECORDING_ACTIVE");
-                updateState("録音中");
-                updateNotification("Memoket Gem 録音中");
-                log("MEMOKET_REMOTE_RECORDING_STARTED", null);
-                if (fiveSecondRecording) {
-                    trace.phase("FIVE_SECOND_RECORDING_TIMER_STARTED");
-                    stopHandler.postDelayed(fiveSecondStop, 5_000L);
+                    && value.length >= 2 && (value[0] & 0xff) == 0x03) {
+                if (value.length == 2 && (value[1] & 0xff) == 0xff) {
+                    stopHandler.removeCallbacks(start03Timeout);
+                    recordingStartAwaitingAck = false;
+                    trace.phase("GEM_03FF_INVENTORY_END_NOT_START_ACK");
+                    // In v0.7.108, 03ff followed old file inventory entries.
+                    // It is not a recorder START acknowledgement.
+                    finishWithError("03ffはGemのファイル一覧終端としても観測されています。"
+                            + "録音開始・停止が証明できないため5秒録音・取得・削除は実行しません");
+                    return;
                 }
+                trace.phase("GEM_03_INVENTORY_RESPONSE_NOT_START_ACK");
+                return;
             }
         } catch (Exception error) {
             finishWithError(error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage());
@@ -607,6 +616,7 @@ public final class MemoketRemoteRecordingService extends Service {
 
     private void finishWithError(String message) {
         stopHandler.removeCallbacks(fiveSecondStop);
+        stopHandler.removeCallbacks(start03Timeout);
         stopHandler.removeCallbacks(stopWatchdog);
         if (trace != null) {
             trace.failure(message, null);
