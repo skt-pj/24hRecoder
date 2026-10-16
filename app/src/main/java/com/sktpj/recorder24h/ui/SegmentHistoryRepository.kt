@@ -2,6 +2,8 @@ package com.sktpj.recorder24h.ui
 
 import android.content.Context
 import com.sktpj.recorder24h.storage.StoragePolicy
+import com.sktpj.recorder24h.transcription.FullStreamingStateStore
+import com.sktpj.recorder24h.transcription.LiveSegmentPolicyStore
 import com.sktpj.recorder24h.transcription.SpeakerIdentifier
 import com.sktpj.recorder24h.transcription.TranscriptEditRepository
 import com.sktpj.recorder24h.transcription.TranscriptionRepository
@@ -42,7 +44,10 @@ data class SegmentRecord(
     val transcriptEditKey: String?,
     val transcriptManuallyEdited: Boolean,
     val transcriptModel: String?,
-    val transcribedAtMs: Long
+    val transcribedAtMs: Long,
+    val liveOwned: Boolean,
+    val fiveMinuteFinalEnabled: Boolean,
+    val liveModelId: String?
 ) {
     val hasTranscript: Boolean
         get() = transcriptText != null
@@ -50,8 +55,26 @@ data class SegmentRecord(
     val durationMs: Long
         get() = if (startedAtMs > 0L && endedAtMs >= startedAtMs) endedAtMs - startedAtMs else 0L
 
+    val queueState: String
+        get() = when (status) {
+            "QUEUED", "RETRY_WAIT", "TRANSCRIBING" -> status
+            else -> "NONE"
+        }
+
+    val dataState: String
+        get() = when {
+            status == "CORRUPT" -> "CORRUPT"
+            hasTranscript && audioAvailable -> "AUDIO_AND_TRANSCRIPT"
+            hasTranscript -> "TRANSCRIPT_ONLY"
+            audioAvailable && queueState != "NONE" -> "AUDIO_PROCESSING"
+            audioAvailable && liveOwned && !fiveMinuteFinalEnabled -> "LIVE_AUDIO_NO_TRANSCRIPT"
+            audioAvailable -> "AUDIO_ONLY"
+            else -> "METADATA_ONLY"
+        }
+
     val needsAttention: Boolean
-        get() = status == "FAILED" || status == "CORRUPT" || status == "RETRY_WAIT"
+        get() = status == "FAILED" || status == "CORRUPT" || status == "RETRY_WAIT" ||
+            (audioAvailable && !hasTranscript && queueState == "NONE")
 }
 
 object SegmentHistoryRepository {
@@ -87,6 +110,8 @@ object SegmentHistoryRepository {
             val audio = builder.audioFile?.takeIf { it.isFile }
             val started = builder.recordedStartMs.takeIf { it > 0L } ?: builder.fallbackStartMs
             val ended = builder.recordedEndMs
+            val liveOwned = FullStreamingStateStore.isOwned(context, builder.segmentId)
+            val livePolicy = if (liveOwned) LiveSegmentPolicyStore.read(context, builder.segmentId) else null
             val sortTime = if (started > 0L) {
                 started
             } else {
@@ -116,7 +141,10 @@ object SegmentHistoryRepository {
                 transcriptEditKey = builder.transcriptEditKey,
                 transcriptManuallyEdited = builder.transcriptManuallyEdited,
                 transcriptModel = builder.transcriptModel,
-                transcribedAtMs = builder.transcribedAtMs
+                transcribedAtMs = builder.transcribedAtMs,
+                liveOwned = liveOwned,
+                fiveMinuteFinalEnabled = livePolicy?.fiveMinuteFinalEnabled ?: false,
+                liveModelId = livePolicy?.liveModelId
             )
         }.sortedByDescending { it.sortTimeMs }
     }
@@ -191,6 +219,7 @@ object SegmentHistoryRepository {
                 val sourceText = row.optString("text", "")
                 val edits = TranscriptEditRepository.load(context, segmentId)
                 val chunks = mutableListOf<TranscriptChunk>()
+                var hadTimedSegments = false
                 row.optJSONArray("segments")?.let { segments ->
                     for (index in 0 until segments.length()) {
                         val segment = segments.optJSONObject(index) ?: continue
@@ -198,6 +227,7 @@ object SegmentHistoryRepository {
                         val startMs = segment.optLong("startMs", -1L)
                         val endMs = segment.optLong("endMs", -1L)
                         if (chunkSourceText.isNotBlank() && startMs >= 0L && endMs >= startMs) {
+                            hadTimedSegments = true
                             val autoSpeaker = segment.optString("autoSpeaker", SpeakerIdentifier.UNKNOWN)
                             val autoScore = if (segment.isNull("autoSpeakerScore")) {
                                 null
@@ -206,10 +236,12 @@ object SegmentHistoryRepository {
                             }
                             val editKey = TranscriptEditRepository.chunkKey(startMs, endMs, chunkSourceText)
                             val edit = edits[editKey]
+                            val effectiveText = edit?.text ?: chunkSourceText
+                            if (effectiveText.isBlank()) continue
                             chunks += TranscriptChunk(
                                 startMs = startMs,
                                 endMs = endMs,
-                                text = edit?.text ?: chunkSourceText,
+                                text = effectiveText,
                                 sourceText = chunkSourceText,
                                 speaker = edit?.speaker?.takeIf { it.isNotBlank() } ?: speakerLabel(autoSpeaker),
                                 autoSpeaker = autoSpeaker,
@@ -221,11 +253,11 @@ object SegmentHistoryRepository {
                     }
                 }
                 builder.transcriptChunks = chunks
-                if (chunks.isNotEmpty()) {
+                if (hadTimedSegments) {
                     builder.transcriptText = chunks.joinToString(" ") { it.text }.trim()
                     builder.transcriptSpeaker = null
                     builder.transcriptEditKey = null
-                    builder.transcriptManuallyEdited = chunks.any { it.manuallyEdited }
+                    builder.transcriptManuallyEdited = edits.isNotEmpty()
                 } else {
                     val editKey = TranscriptEditRepository.wholeKey(sourceText)
                     val edit = edits[editKey]

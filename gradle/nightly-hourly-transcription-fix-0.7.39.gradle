@@ -1,0 +1,126 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8039Fix = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8039Fix = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce039Fix = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.39 fix ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// The hourly HistoryScreen replaces the 0.7.30 generated helper block. Re-introduce only the
+// helpers still required by hourly history and by RecordDetailScreen.
+def mainFile039Fix = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+def main039Fix = readUtf8039Fix(mainFile039Fix)
+if (!main039Fix.contains('private fun liveConversationText(')) {
+    def helpers039 = '''private fun provisionalFinalsForRecord(
+    record: SegmentRecord,
+    liveFinals: List<FullStreamingStateStore.RecentFinal>
+): List<FullStreamingStateStore.RecentFinal> {
+    if (record.hasTranscript || !record.liveOwned || record.startedAtMs <= 0L) return emptyList()
+    val endMs = if (record.endedAtMs > record.startedAtMs) {
+        record.endedAtMs
+    } else {
+        record.startedAtMs + 5L * 60L * 1000L
+    }
+    val startWithTolerance = record.startedAtMs - 2_500L
+    val endWithTolerance = endMs + 2_500L
+    return liveFinals.filter { item ->
+        item.endAtMs >= startWithTolerance && item.startAtMs <= endWithTolerance
+    }
+}
+
+private fun liveConversationText(
+    finals: List<FullStreamingStateStore.RecentFinal>
+): String = finals
+    .filter { it.text.isNotBlank() }
+    .joinToString("\\n") { item ->
+        val speaker = item.speaker?.trim().orEmpty()
+        if (speaker.isNotBlank() && speaker != "判定不能") {
+            "$speaker: ${item.text}"
+        } else {
+            item.text
+        }
+    }
+    .trim()
+
+@Composable
+private fun CurrentConversationCard(finalText: String, partialText: String) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer
+        )
+    ) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "現在の1時間（暫定・30秒更新）",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    "暫定",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+            if (finalText.isNotBlank()) {
+                Text(finalText, style = MaterialTheme.typography.bodyLarge)
+            }
+            if (partialText.isNotBlank()) {
+                Text(
+                    partialText,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+        }
+    }
+}
+
+'''
+    main039Fix = replaceOnce039Fix(
+            main039Fix,
+            '@Composable\nprivate fun EmptyHistory(',
+            helpers039 + '@Composable\nprivate fun EmptyHistory(',
+            'hourly helper insertion')
+}
+writeUtf8039Fix(mainFile039Fix, main039Fix)
+
+// The five-minute final switch no longer represents any automatic policy. Nightly canonical work
+// must stay runnable even for users whose legacy five-minute toggle had been OFF.
+def schedulerFile039Fix = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionScheduler.java')
+def scheduler039Fix = readUtf8039Fix(schedulerFile039Fix)
+def oldLegacyMethod039 = '''    static boolean isAutomaticLiveFinalDisabled(Context context, SegmentRecord record) {
+        if (record == null || record.getSegmentId() == null) return false;
+        String reason = record.getReason();
+        if (NightlyHourlyTranscriptionScheduler.ENQUEUED_REASON.equals(reason)) return false;
+        if (reason != null && reason.startsWith("MANUAL_")) return false;
+        if (!FullStreamingStateStore.isOwned(context, record.getSegmentId())) return false;
+        return !LiveSegmentPolicyStore.isFiveMinuteFinalEnabled(context, record.getSegmentId())
+                || !LiveTranscriptionSettings.isFiveMinuteFinalEnabled(context);
+    }
+'''
+def newLegacyMethod039 = '''    static boolean isAutomaticLiveFinalDisabled(Context context, SegmentRecord record) {
+        // 0.7.39 retires automatic five-minute canonical transcription. The old toggle is retained
+        // only in stored migration data and must never filter the nightly canonical queue.
+        return false;
+    }
+'''
+scheduler039Fix = replaceOnce039Fix(
+        scheduler039Fix, oldLegacyMethod039, newLegacyMethod039, 'retire five-minute toggle')
+writeUtf8039Fix(schedulerFile039Fix, scheduler039Fix)
+
+if (!mainFile039Fix.text.contains('現在の1時間（暫定・30秒更新）')) {
+    throw new GradleException('0.7.39 hourly helper fix was not applied')
+}
+if (!schedulerFile039Fix.text.contains('0.7.39 retires automatic five-minute canonical')) {
+    throw new GradleException('0.7.39 legacy toggle retirement was not applied')
+}

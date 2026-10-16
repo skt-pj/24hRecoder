@@ -1,0 +1,654 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8042 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8042 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce042 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.42 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// -----------------------------------------------------------------------------
+// Nightly canonical transcription: it is night work AND charging-only work.
+// The scan itself waits for charging, and the persisted queue keeps the nightly lineage so the
+// actual heavy Whisper runner also refuses to start the next nightly item while unplugged.
+// Manual retranscription remains immediately runnable.
+// -----------------------------------------------------------------------------
+def nightlyFile042 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/NightlyHourlyTranscriptionScheduler.java')
+def nightly042 = readUtf8042(nightlyFile042)
+nightly042 = replaceOnce042(
+        nightly042,
+        'import android.content.SharedPreferences;\n',
+        'import android.content.SharedPreferences;\nimport android.os.BatteryManager;\n',
+        'nightly BatteryManager import')
+nightly042 = replaceOnce042(
+        nightly042,
+'''        Constraints constraints = new Constraints.Builder()
+                .setRequiresBatteryNotLow(true)
+                .build();
+''',
+'''        Constraints constraints = new Constraints.Builder()
+                .setRequiresBatteryNotLow(true)
+                .setRequiresCharging(true)
+                .build();
+''',
+        'nightly charging constraint')
+nightly042 = replaceOnce042(
+        nightly042,
+'''    public static boolean isNightlyPending(SegmentRecord record) {
+        if (record == null) return false;
+        String reason = record.getReason();
+        return PENDING_REASON.equals(reason) || ENQUEUED_REASON.equals(reason);
+    }
+
+''',
+'''    public static boolean isNightlyPending(SegmentRecord record) {
+        if (record == null) return false;
+        String reason = record.getReason();
+        return PENDING_REASON.equals(reason) || isNightlyQueueItem(record);
+    }
+
+    public static boolean isNightlyQueueItem(SegmentRecord record) {
+        if (record == null) return false;
+        String reason = record.getReason();
+        return reason != null && reason.startsWith("NIGHTLY_HOURLY_")
+                && !PENDING_REASON.equals(reason);
+    }
+
+    public static boolean isCharging(Context context) {
+        BatteryManager battery = context.getApplicationContext().getSystemService(BatteryManager.class);
+        return battery != null && battery.isCharging();
+    }
+
+''',
+        'nightly queue lineage helpers')
+nightly042 = nightly042.replace(
+        '.put("nightStartHourLocal", NIGHT_START_HOUR_LOCAL));',
+        '.put("nightStartHourLocal", NIGHT_START_HOUR_LOCAL)\n                    .put("requiresCharging", true));')
+writeUtf8042(nightlyFile042, nightly042)
+
+// Schedule the generic single-runner with a charging constraint whenever the only remaining work
+// is nightly work. This lets WorkManager wake it when the charger is connected instead of spinning
+// workers while the nightly queue is intentionally held.
+def schedulerFile042 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionScheduler.java')
+def scheduler042 = readUtf8042(schedulerFile042)
+scheduler042 = replaceOnce042(
+        scheduler042,
+'''        OneTimeWorkRequest request = buildDrainRequest(true);
+        WorkManager.getInstance(app).enqueueUniqueWork(
+                DRAIN_WORK_NAME,
+                ExistingWorkPolicy.KEEP,
+                request);
+''',
+'''        OneTimeWorkRequest request = buildDrainRequest(
+                true, shouldRequireChargingForNextWork(app));
+        WorkManager.getInstance(app).enqueueUniqueWork(
+                DRAIN_WORK_NAME,
+                ExistingWorkPolicy.KEEP,
+                request);
+''',
+        'charging-aware initial drain')
+scheduler042 = replaceOnce042(
+        scheduler042,
+'''        WorkManager.getInstance(app).enqueueUniqueWork(
+                DRAIN_WORK_NAME,
+                ExistingWorkPolicy.APPEND_OR_REPLACE,
+                buildDrainRequest(true));
+''',
+'''        WorkManager.getInstance(app).enqueueUniqueWork(
+                DRAIN_WORK_NAME,
+                ExistingWorkPolicy.APPEND_OR_REPLACE,
+                buildDrainRequest(true, shouldRequireChargingForNextWork(app)));
+''',
+        'charging-aware continuation drain')
+scheduler042 = replaceOnce042(
+        scheduler042,
+'''    private static OneTimeWorkRequest buildDrainRequest(boolean batteryNotLow) {
+        Constraints.Builder constraints = new Constraints.Builder();
+        if (batteryNotLow) {
+            constraints.setRequiresBatteryNotLow(true);
+        }
+        return new OneTimeWorkRequest.Builder(TranscriptionWorker.class)
+''',
+'''    private static OneTimeWorkRequest buildDrainRequest(boolean batteryNotLow,
+                                                          boolean requiresCharging) {
+        Constraints.Builder constraints = new Constraints.Builder();
+        if (batteryNotLow) {
+            constraints.setRequiresBatteryNotLow(true);
+        }
+        if (requiresCharging) {
+            constraints.setRequiresCharging(true);
+        }
+        return new OneTimeWorkRequest.Builder(TranscriptionWorker.class)
+''',
+        'charging-aware drain request')
+scheduler042 = replaceOnce042(
+        scheduler042,
+'''    private static boolean hasQueuedWork(Context context) {
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus()))
+                    && record.getAudioAvailable()
+                    && !isAutomaticLiveFinalDisabled(context, record)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+''',
+'''    private static boolean hasQueuedWork(Context context) {
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus()))
+                    && record.getAudioAvailable()
+                    && !isAutomaticLiveFinalDisabled(context, record)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean shouldRequireChargingForNextWork(Context context) {
+        boolean hasNightly = false;
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (!("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus()))
+                    || !record.getAudioAvailable()
+                    || isAutomaticLiveFinalDisabled(context, record)) {
+                continue;
+            }
+            if (NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(record)) {
+                hasNightly = true;
+            } else {
+                // A manual or non-nightly item must remain runnable without a charger.
+                return false;
+            }
+        }
+        return hasNightly;
+    }
+
+''',
+        'charging-aware queue classification')
+writeUtf8042(schedulerFile042, scheduler042)
+
+// WorkManager runner: do not select a nightly row while unplugged. Preserve the NIGHTLY_HOURLY_*
+// reason through slot-wait/retry states so a failed/recovered item cannot silently lose the charge
+// requirement. If power disappears during native inference, finish the current item safely and
+// hold before starting the next one.
+def workerFile042 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionWorker.java')
+def worker042 = readUtf8042(workerFile042)
+worker042 = replaceOnce042(
+        worker042,
+'''        boolean forceRetranscribe = record.getReason() != null && record.getReason().startsWith("MANUAL_");
+        int generation = TranscriptionResetManager.currentGeneration(context);
+''',
+'''        boolean forceRetranscribe = record.getReason() != null && record.getReason().startsWith("MANUAL_");
+        boolean nightly = NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(record);
+        int generation = TranscriptionResetManager.currentGeneration(context);
+''',
+        'worker nightly lineage')
+worker042 = replaceOnce042(
+        worker042,
+'''            if (isStopped()) {
+                log(context, "TRANSCRIPTION_DRAIN_STOPPED_BEFORE_START", segmentId, audioFile,
+                        null, forceRetranscribe, attempt, null);
+                return;
+            }
+''',
+'''            if (isStopped()) {
+                log(context, "TRANSCRIPTION_DRAIN_STOPPED_BEFORE_START", segmentId, audioFile,
+                        null, forceRetranscribe, attempt, null);
+                return;
+            }
+            if (nightly && !NightlyHourlyTranscriptionScheduler.isCharging(context)) {
+                SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                        audioFile == null ? 0L : audioFile.lastModified(),
+                        System.currentTimeMillis(), "QUEUED",
+                        NightlyHourlyTranscriptionScheduler.ENQUEUED_REASON);
+                log(context, "NIGHTLY_HOURLY_HELD_NOT_CHARGING", segmentId, audioFile,
+                        "CHARGER_REQUIRED", false, attempt, null);
+                return;
+            }
+''',
+        'worker hold nightly off charger')
+worker042 = replaceOnce042(
+        worker042,
+'''            SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                    audioFile.lastModified(), System.currentTimeMillis(), "QUEUED",
+                    forceRetranscribe ? "MANUAL_SINGLE_RUNNER_SLOT_WAIT" : "LOCAL_SINGLE_RUNNER_SLOT_WAIT");
+''',
+'''            SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                    audioFile.lastModified(), System.currentTimeMillis(), "QUEUED",
+                    forceRetranscribe ? "MANUAL_SINGLE_RUNNER_SLOT_WAIT"
+                            : nightly ? "NIGHTLY_HOURLY_SINGLE_RUNNER_SLOT_WAIT"
+                            : "LOCAL_SINGLE_RUNNER_SLOT_WAIT");
+''',
+        'worker preserve nightly slot wait')
+worker042 = replaceOnce042(
+        worker042,
+'''                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                            audioFile.lastModified(), startedAt, "TRANSCRIBING",
+                            forceRetranscribe ? "MANUAL_SINGLE_RUNNER_TRANSCRIBING"
+                                    : replacingOldTranscript ? "LOCAL_SINGLE_RUNNER_RETRANSCRIBING"
+                                    : "LOCAL_SINGLE_RUNNER_TRANSCRIBING");
+''',
+'''                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                            audioFile.lastModified(), startedAt, "TRANSCRIBING",
+                            forceRetranscribe ? "MANUAL_SINGLE_RUNNER_TRANSCRIBING"
+                                    : nightly ? "NIGHTLY_HOURLY_SINGLE_RUNNER_TRANSCRIBING"
+                                    : replacingOldTranscript ? "LOCAL_SINGLE_RUNNER_RETRANSCRIBING"
+                                    : "LOCAL_SINGLE_RUNNER_TRANSCRIBING");
+''',
+        'worker preserve nightly transcribing')
+worker042 = replaceOnce042(
+        worker042,
+'''                        SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                                audioFile.lastModified(), System.currentTimeMillis(), "QUEUED",
+                                "USER_PAUSED_RUNNING_TRANSCRIPTION");
+''',
+'''                        SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                                audioFile.lastModified(), System.currentTimeMillis(), "QUEUED",
+                                nightly ? NightlyHourlyTranscriptionScheduler.ENQUEUED_REASON
+                                        : "USER_PAUSED_RUNNING_TRANSCRIPTION");
+''',
+        'worker preserve nightly pause')
+worker042 = replaceOnce042(
+        worker042,
+'''                String reason = forceRetranscribe
+                        ? (retry ? "MANUAL_SINGLE_RUNNER_RETRY" : "MANUAL_SINGLE_RUNNER_FAILED")
+                        : (retry ? "LOCAL_SINGLE_RUNNER_RETRY" : "LOCAL_SINGLE_RUNNER_FAILED");
+''',
+'''                String reason = forceRetranscribe
+                        ? (retry ? "MANUAL_SINGLE_RUNNER_RETRY" : "MANUAL_SINGLE_RUNNER_FAILED")
+                        : nightly
+                            ? (retry ? "NIGHTLY_HOURLY_SINGLE_RUNNER_RETRY" : "NIGHTLY_HOURLY_SINGLE_RUNNER_FAILED")
+                            : (retry ? "LOCAL_SINGLE_RUNNER_RETRY" : "LOCAL_SINGLE_RUNNER_FAILED");
+''',
+        'worker preserve nightly retry')
+worker042 = replaceOnce042(
+        worker042,
+'''        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus()))
+                    && record.getAudioAvailable()) {
+                queued.add(record);
+            }
+        }
+''',
+'''        boolean charging = NightlyHourlyTranscriptionScheduler.isCharging(context);
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus()))
+                    && record.getAudioAvailable()) {
+                if (!charging && NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(record)) {
+                    continue;
+                }
+                queued.add(record);
+            }
+        }
+''',
+        'worker dequeue charging gate')
+writeUtf8042(workerFile042, worker042)
+
+// Foreground queue runner can be kicked merely by opening the app. Apply the same selection gate
+// here so an app-open kick cannot bypass the nightly charging policy.
+def serviceFile042 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionQueueService.java')
+def service042 = readUtf8042(serviceFile042)
+service042 = replaceOnce042(
+        service042,
+'''        int generation = TranscriptionResetManager.currentGeneration(context);
+
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+''',
+'''        int generation = TranscriptionResetManager.currentGeneration(context);
+        boolean nightly = NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(
+                findRecord(context, segmentId));
+
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+''',
+        'service nightly lineage')
+service042 = replaceOnce042(
+        service042,
+'''        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            if (TranscriptionScheduler.isQueuePaused(context)) {
+''',
+'''        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            if (nightly && !NightlyHourlyTranscriptionScheduler.isCharging(context)) {
+                SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                        audioFile == null ? 0L : audioFile.lastModified(),
+                        System.currentTimeMillis(), "QUEUED",
+                        NightlyHourlyTranscriptionScheduler.ENQUEUED_REASON);
+                log(context, "NIGHTLY_HOURLY_DIRECT_HELD_NOT_CHARGING", segmentId, audioFile,
+                        "CHARGER_REQUIRED", false, attempt, null,
+                        WhisperModelManager.selectedModelId(context), LocalWhisperEngine.engineId(context));
+                return;
+            }
+            if (TranscriptionScheduler.isQueuePaused(context)) {
+''',
+        'service hold nightly off charger')
+service042 = replaceOnce042(
+        service042,
+'''            String slotReason = forceRetranscribe
+                    ? "MANUAL_DIRECT_SLOT_WAIT" : "LOCAL_DIRECT_SLOT_WAIT";
+''',
+'''            String slotReason = forceRetranscribe
+                    ? "MANUAL_DIRECT_SLOT_WAIT"
+                    : nightly ? "NIGHTLY_HOURLY_DIRECT_SLOT_WAIT" : "LOCAL_DIRECT_SLOT_WAIT";
+''',
+        'service preserve nightly slot wait')
+service042 = replaceOnce042(
+        service042,
+'''                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                            audioFile.lastModified(), startedAt, "TRANSCRIBING",
+                            forceRetranscribe ? "MANUAL_DIRECT_TRANSCRIBING" : "LOCAL_DIRECT_TRANSCRIBING");
+''',
+'''                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                            audioFile.lastModified(), startedAt, "TRANSCRIBING",
+                            forceRetranscribe ? "MANUAL_DIRECT_TRANSCRIBING"
+                                    : nightly ? "NIGHTLY_HOURLY_DIRECT_TRANSCRIBING"
+                                    : "LOCAL_DIRECT_TRANSCRIBING");
+''',
+        'service preserve nightly transcribing')
+service042 = replaceOnce042(
+        service042,
+'''                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                            audioFile.lastModified(), System.currentTimeMillis(), "QUEUED",
+                            "USER_PAUSED_RUNNING_TRANSCRIPTION");
+''',
+'''                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                            audioFile.lastModified(), System.currentTimeMillis(), "QUEUED",
+                            nightly ? NightlyHourlyTranscriptionScheduler.ENQUEUED_REASON
+                                    : "USER_PAUSED_RUNNING_TRANSCRIPTION");
+''',
+        'service preserve nightly pause')
+service042 = replaceOnce042(
+        service042,
+'''                String reason = forceRetranscribe
+                        ? (retry ? "MANUAL_DIRECT_RETRY" : "MANUAL_DIRECT_FAILED")
+                        : (retry ? "LOCAL_DIRECT_RETRY" : "LOCAL_DIRECT_FAILED");
+''',
+'''                String reason = forceRetranscribe
+                        ? (retry ? "MANUAL_DIRECT_RETRY" : "MANUAL_DIRECT_FAILED")
+                        : nightly
+                            ? (retry ? "NIGHTLY_HOURLY_DIRECT_RETRY" : "NIGHTLY_HOURLY_DIRECT_FAILED")
+                            : (retry ? "LOCAL_DIRECT_RETRY" : "LOCAL_DIRECT_FAILED");
+''',
+        'service preserve nightly retry')
+service042 = replaceOnce042(
+        service042,
+'''        List<SegmentRecord> records = SegmentHistoryRepository.load(context);
+        List<SegmentRecord> queued = new ArrayList<>();
+        for (SegmentRecord record : records) {
+            if (("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus()))
+                    && record.getAudioAvailable()) {
+                queued.add(record);
+            }
+        }
+''',
+'''        List<SegmentRecord> records = SegmentHistoryRepository.load(context);
+        List<SegmentRecord> queued = new ArrayList<>();
+        boolean charging = NightlyHourlyTranscriptionScheduler.isCharging(context);
+        for (SegmentRecord record : records) {
+            if (("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus()))
+                    && record.getAudioAvailable()) {
+                if (!charging && NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(record)) {
+                    continue;
+                }
+                queued.add(record);
+            }
+        }
+''',
+        'service dequeue charging gate')
+service042 = replaceOnce042(
+        service042,
+'''    private boolean isStillQueued(Context context, String segmentId) {
+''',
+'''    private SegmentRecord findRecord(Context context, String segmentId) {
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (segmentId.equals(record.getSegmentId())) return record;
+        }
+        return null;
+    }
+
+    private boolean isStillQueued(Context context, String segmentId) {
+''',
+        'service record lookup')
+writeUtf8042(serviceFile042, service042)
+
+// -----------------------------------------------------------------------------
+// One-hour History must open one-hour detail. The 0.7.39 card intentionally grouped 5-minute
+// storage shards by hour but still routed its click through group.representative, causing the
+// existing single-segment detail screen to show only the latest five minutes. Keep segment detail
+// for Queue, but use a full-hour screen when navigation originated from History.
+// -----------------------------------------------------------------------------
+def mainFile042 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+def main042 = readUtf8042(mainFile042)
+main042 = replaceOnce042(
+        main042,
+'''    var selectedId by remember { mutableStateOf<String?>(null) }
+    var records by remember { mutableStateOf<List<SegmentRecord>>(emptyList()) }
+''',
+'''    var selectedId by remember { mutableStateOf<String?>(null) }
+    var selectedFromHistory by remember { mutableStateOf(false) }
+    var records by remember { mutableStateOf<List<SegmentRecord>>(emptyList()) }
+''',
+        'hour detail navigation state')
+main042 = replaceOnce042(
+        main042,
+'''    BackHandler(enabled = selected != null) { selectedId = null }
+''',
+'''    BackHandler(enabled = selected != null) {
+        selectedId = null
+        selectedFromHistory = false
+    }
+''',
+        'hour detail back handler')
+main042 = replaceOnce042(
+        main042,
+'''                            IconButton(onClick = { selectedId = null }) {
+''',
+'''                            IconButton(onClick = {
+                                selectedId = null
+                                selectedFromHistory = false
+                            }) {
+''',
+        'hour detail app bar back')
+main042 = replaceOnce042(
+        main042,
+'''                        selected != null -> RecordDetailScreen(selected, liveFinals)
+''',
+'''                        selected != null && selectedFromHistory ->
+                            HourRecordDetailScreen(selected, records, liveFinals)
+                        selected != null -> RecordDetailScreen(selected, liveFinals)
+''',
+        'hour detail route')
+main042 = replaceOnce042(
+        main042,
+'''                            records = records,
+                            onSelect = { selectedId = it.segmentId },
+                            onRemove = { record ->
+''',
+'''                            records = records,
+                            onSelect = {
+                                selectedFromHistory = false
+                                selectedId = it.segmentId
+                            },
+                            onRemove = { record ->
+''',
+        'queue keeps segment detail')
+main042 = replaceOnce042(
+        main042,
+'''                            onFilterChange = { historyFilter = it },
+                            onSelect = { selectedId = it.segmentId }
+''',
+'''                            onFilterChange = { historyFilter = it },
+                            onSelect = {
+                                selectedFromHistory = true
+                                selectedId = it.segmentId
+                            }
+''',
+        'history opens hour detail')
+
+def hourDetail042 = '''@Composable
+private fun HourRecordDetailScreen(
+    representative: SegmentRecord,
+    records: List<SegmentRecord>,
+    liveFinals: List<FullStreamingStateStore.RecentFinal>
+) {
+    val hourStart = hourStartMs(representative.sortTimeMs)
+    val hourEnd = hourStart + 60L * 60L * 1000L
+    val hourRecords = remember(records, hourStart) {
+        records
+            .filter { it.sortTimeMs >= hourStart && it.sortTimeMs < hourEnd }
+            .sortedBy { it.sortTimeMs }
+    }
+    val canonicalIntervals = remember(hourRecords) {
+        hourRecords.filter { it.hasTranscript }.map { record ->
+            val start = record.startedAtMs
+            val end = if (record.endedAtMs > start) record.endedAtMs
+                else start + 5L * 60L * 1000L
+            start to end
+        }
+    }
+    val provisional = remember(liveFinals, hourStart, canonicalIntervals) {
+        liveFinals.filter { item ->
+            if (item.endAtMs <= hourStart || item.startAtMs >= hourEnd) return@filter false
+            canonicalIntervals.none { (start, end) ->
+                item.endAtMs > start - 2_500L && item.startAtMs < end + 2_500L
+            }
+        }
+    }
+    val canonicalCount = hourRecords.count { it.hasTranscript }
+    val corruptCount = hourRecords.count { it.status == "CORRUPT" }
+    val audioRecords = hourRecords.filter { it.audioAvailable && it.audioPath != null }
+    val hasConversation = hourRecords.any { it.hasTranscript } || provisional.isNotEmpty()
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(formatHourRange(hourStart), style = MaterialTheme.typography.headlineMedium)
+                    Text(formatDay(hourStart), color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f))
+                    Text(
+                        "この画面は1時間分の記録です。5分M4Aは内部の保存・復旧単位としてだけ扱います。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("内部保存 ${hourRecords.size}件", style = MaterialTheme.typography.labelMedium)
+                        Text("確定 $canonicalCount件", style = MaterialTheme.typography.labelMedium)
+                        if (provisional.isNotEmpty()) {
+                            Text("暫定 ${provisional.size}件", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            Card {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("会話ログ（1時間）", style = MaterialTheme.typography.titleLarge)
+                    if (!hasConversation) {
+                        Text(
+                            if (corruptCount > 0) "この1時間には確認できない録音区間があります。"
+                            else "この1時間の確定文字起こしは夜間処理待ちです。",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    hourRecords.forEach { record ->
+                        if (!record.hasTranscript) return@forEach
+                        if (record.transcriptChunks.isNotEmpty()) {
+                            record.transcriptChunks.forEach { chunk ->
+                                EditableTranscriptChunk(
+                                    record = record,
+                                    chunk = chunk,
+                                    timeLabel = transcriptChunkTimeLabel(record, chunk.startMs, chunk.endMs)
+                                )
+                            }
+                        } else if (record.transcriptText != null) {
+                            Text(
+                                formatTimeRange(record),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            EditableWholeTranscript(record)
+                        }
+                    }
+
+                    provisional.forEach { item ->
+                        EditableLiveSegmentedFinalCard(item)
+                    }
+                }
+            }
+        }
+
+        if (audioRecords.isNotEmpty()) {
+            item {
+                Text(
+                    "録音データ（1時間 / 内部保存単位）",
+                    style = MaterialTheme.typography.titleLarge
+                )
+            }
+            audioRecords.forEach { record ->
+                item(key = "hour-audio-${record.segmentId}") {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(formatTimeRange(record), style = MaterialTheme.typography.labelLarge)
+                        AudioPlaybackCard(record)
+                    }
+                }
+            }
+        }
+
+        item {
+            Card {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("1時間の状態", style = MaterialTheme.typography.titleLarge)
+                    InfoRow("範囲", formatHourRange(hourStart))
+                    InfoRow("保存単位", "${hourRecords.size}件")
+                    InfoRow("確定", "${canonicalCount}件")
+                    InfoRow("音声あり", "${audioRecords.size}件")
+                    if (corruptCount > 0) InfoRow("破損", "${corruptCount}件")
+                }
+            }
+        }
+    }
+}
+
+'''
+main042 = replaceOnce042(
+        main042,
+        '@Composable\nprivate fun AudioPlaybackCard(record: SegmentRecord) {\n',
+        hourDetail042 + '@Composable\nprivate fun AudioPlaybackCard(record: SegmentRecord) {\n',
+        'insert full-hour detail screen')
+writeUtf8042(mainFile042, main042)
+
+// Effective debug version. Every installable APK must advance both fields.
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1042)
+            output.versionName.set('0.7.42-debug')
+        }
+    }
+}
+
+if (!nightlyFile042.text.contains('setRequiresCharging(true)')) {
+    throw new GradleException('0.7.42 nightly charging constraint was not applied')
+}
+if (!workerFile042.text.contains('NIGHTLY_HOURLY_HELD_NOT_CHARGING')) {
+    throw new GradleException('0.7.42 worker charging gate was not applied')
+}
+if (!serviceFile042.text.contains('NIGHTLY_HOURLY_DIRECT_HELD_NOT_CHARGING')) {
+    throw new GradleException('0.7.42 direct queue charging gate was not applied')
+}
+if (!mainFile042.text.contains('HourRecordDetailScreen(selected, records, liveFinals)')) {
+    throw new GradleException('0.7.42 hour detail route was not applied')
+}
+if (!mainFile042.text.contains('会話ログ（1時間）')) {
+    throw new GradleException('0.7.42 full-hour detail UI was not applied')
+}

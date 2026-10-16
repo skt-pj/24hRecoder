@@ -1,0 +1,620 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8047 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8047 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce047 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.47 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// -----------------------------------------------------------------------------
+// Streaming Silero VAD: selectable presets, start/end hysteresis and compact
+// 30-second diagnostics. Audio itself is never written by this diagnostics path.
+// -----------------------------------------------------------------------------
+def vadFile047 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/StreamingVadStore.java')
+def vad047 = readUtf8047(vadFile047)
+
+vad047 = replaceOnce047(vad047,
+'''    private static final int SAMPLE_RATE = 16_000;
+    private static final double THRESHOLD = 0.5;
+    private static final long MIN_SPEECH_US = 250_000L;
+    private static final long MIN_SILENCE_US = 200_000L;
+    private static final long SPEECH_PAD_US = 80_000L;
+    private static final long MAX_SPEECH_US = 30_000_000L;
+''',
+'''    private static final int SAMPLE_RATE = 16_000;
+    private static final long MAX_SPEECH_US = 30_000_000L;
+    private static final int DIAGNOSTIC_WINDOW_FRAMES = 900;
+''', 'replace fixed VAD parameters')
+
+vad047 = replaceOnce047(vad047,
+'''    private static long processedFrameCount;
+    private static int frameWindowSamples = 512;
+    private static DetectorState detector = new DetectorState();
+''',
+'''    private static long processedFrameCount;
+    private static int frameWindowSamples = 512;
+    private static StreamingVadSettings.Snapshot vadConfig =
+            StreamingVadSettings.preset(StreamingVadSettings.PRESET_CONVERSATION);
+    private static DetectorState detector = new DetectorState(vadConfig);
+    private static final List<Double> diagnosticProbabilities = new ArrayList<>();
+    private static long diagnosticSampleCount;
+    private static double diagnosticSumSquares;
+    private static double diagnosticPeak;
+    private static double diagnosticMinSample = Double.POSITIVE_INFINITY;
+    private static double diagnosticMaxSample = Double.NEGATIVE_INFINITY;
+    private static long diagnosticNonZeroSamples;
+    private static long diagnosticStartedAtMs;
+''', 'diagnostic state fields')
+
+vad047 = replaceOnce047(vad047,
+'''            processedFrameCount = 0L;
+            frameWindowSamples = 512;
+            detector = new DetectorState();
+            ensureConfiguredLocked(context, 0L);
+''',
+'''            processedFrameCount = 0L;
+            frameWindowSamples = 512;
+            vadConfig = StreamingVadSettings.snapshot(context);
+            detector = new DetectorState(vadConfig);
+            resetDiagnosticsLocked();
+            ensureConfiguredLocked(context, 0L);
+''', 'reset VAD configuration')
+
+vad047 = replaceOnce047(vad047,
+'''                for (int i = 0; i < sampleCount; i++) {
+                    int lo = bytes[i * 2] & 0xff;
+                    int hi = bytes[i * 2 + 1];
+                    short pcm = (short) ((hi << 8) | lo);
+                    samples[i] = pcm / 32768.0f;
+                }
+
+                try {
+''',
+'''                for (int i = 0; i < sampleCount; i++) {
+                    int lo = bytes[i * 2] & 0xff;
+                    int hi = bytes[i * 2 + 1];
+                    short pcm = (short) ((hi << 8) | lo);
+                    samples[i] = pcm / 32768.0f;
+                }
+                accumulatePcmDiagnosticsLocked(samples);
+
+                try {
+''', 'PCM diagnostic accumulation')
+
+vad047 = replaceOnce047(vad047,
+'''                            long frameStartUs = streamBasePtsUs + processedFrameCount * frameUs;
+                            detector.accept(probabilities.optDouble(i, 0.0), frameStartUs, frameStartUs + frameUs);
+                            processedFrameCount++;
+''',
+'''                            long frameStartUs = streamBasePtsUs + processedFrameCount * frameUs;
+                            double probability = probabilities.optDouble(i, 0.0);
+                            detector.accept(probability, frameStartUs, frameStartUs + frameUs);
+                            diagnosticProbabilities.add(probability);
+                            processedFrameCount++;
+''', 'probability diagnostic accumulation')
+
+vad047 = replaceOnce047(vad047,
+'''                    List<RangeUs> newlyClosed = detector.closedSince(closedBefore);
+''',
+'''                    if (diagnosticProbabilities.size() >= DIAGNOSTIC_WINDOW_FRAMES) {
+                        emitDiagnosticsLocked(context, currentEndUs);
+                    }
+                    List<RangeUs> newlyClosed = detector.closedSince(closedBefore);
+''', 'periodic VAD diagnostics')
+
+vad047 = replaceOnce047(vad047,
+'''                        .put("segmentEndPtsUs", segmentEndPtsUs)
+                        .put("rangeCount", ranges.length())
+''',
+'''                        .put("segmentEndPtsUs", segmentEndPtsUs)
+                        .put("vad", vadConfig.toJson())
+                        .put("rangeCount", ranges.length())
+''', 'segment VAD parameters')
+
+vad047 = replaceOnce047(vad047,
+'''                log(context, "STREAMING_VAD_SEGMENT", new JSONObject(root.toString())
+                        .put("segmentId", segmentId));
+                detector.pruneBefore(segmentBasePtsUs - SPEECH_PAD_US);
+''',
+'''                log(context, "STREAMING_VAD_SEGMENT", new JSONObject(root.toString())
+                        .put("segmentId", segmentId));
+                if (!diagnosticProbabilities.isEmpty()) {
+                    emitDiagnosticsLocked(context, segmentEndPtsUs);
+                }
+                detector.pruneBefore(segmentBasePtsUs - vadConfig.speechPadMs * 1000L);
+''', 'flush diagnostics at segment boundary')
+
+vad047 = replaceOnce047(vad047,
+'''            DetectorState localDetector = new DetectorState();
+''',
+'''            StreamingVadSettings.Snapshot offlineConfig = StreamingVadSettings.snapshot(context);
+            DetectorState localDetector = new DetectorState(offlineConfig);
+''', 'offline VAD preset')
+
+vad047 = replaceOnce047(vad047,
+'''    private static void ensureConfiguredLocked(Context context, long currentPtsUs) {
+        String selected = FullStreamingTranscriptionCoordinator.currentVadBackend(context);
+        if (selected.equals(activeMode)) return;
+
+        closeNativeLocked();
+        nativeReady = false;
+        activeMode = selected;
+        initError = null;
+        streamBasePtsUs = -1L;
+        streamConfiguredAtPtsUs = currentPtsUs;
+        processedFrameCount = 0L;
+        detector = new DetectorState();
+
+''',
+'''    private static void ensureConfiguredLocked(Context context, long currentPtsUs) {
+        String selected = FullStreamingTranscriptionCoordinator.currentVadBackend(context);
+        StreamingVadSettings.Snapshot selectedConfig = StreamingVadSettings.snapshot(context);
+        if (selected.equals(activeMode) && sameVadConfig(vadConfig, selectedConfig)) return;
+
+        closeNativeLocked();
+        nativeReady = false;
+        activeMode = selected;
+        vadConfig = selectedConfig;
+        initError = null;
+        streamBasePtsUs = -1L;
+        streamConfiguredAtPtsUs = currentPtsUs;
+        processedFrameCount = 0L;
+        detector = new DetectorState(vadConfig);
+        resetDiagnosticsLocked();
+
+''', 'reload VAD preset cross-process')
+
+vad047 = replaceOnce047(vad047,
+'''            log(context, nativeReady ? "STREAMING_VAD_READY" : "STREAMING_VAD_UNAVAILABLE",
+                    details("reason", initError == null ? JSONObject.NULL : initError));
+''',
+'''            log(context, nativeReady ? "STREAMING_VAD_READY" : "STREAMING_VAD_UNAVAILABLE",
+                    details("reason", initError == null ? JSONObject.NULL : initError,
+                            "vad", vadConfig.toJson(),
+                            "sampleRate", SAMPLE_RATE,
+                            "channels", 1,
+                            "windowSamples", frameWindowSamples));
+''', 'VAD ready diagnostics')
+
+vad047 = replaceOnce047(vad047,
+'''    private static List<Range> toMsRanges(List<RangeUs> rangesUs) {
+''',
+'''    public static JSONObject readCurrentDiagnostics(Context context) {
+        File file = diagnosticsFile(context);
+        if (!file.isFile()) return new JSONObject();
+        try {
+            return new JSONObject(new String(java.nio.file.Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
+        } catch (Exception ignored) {
+            return new JSONObject();
+        }
+    }
+
+    private static List<Range> toMsRanges(List<RangeUs> rangesUs) {
+''', 'diagnostics read API')
+
+vad047 = replaceOnce047(vad047,
+'''    private static void closeNativeLocked() {
+''',
+'''    private static File diagnosticsFile(Context context) {
+        File dir = new File(context.getFilesDir(), "metadata/" + DIR_NAME);
+        if (!dir.exists()) dir.mkdirs();
+        return new File(dir, "current-diagnostics.json");
+    }
+
+    private static void resetDiagnosticsLocked() {
+        diagnosticProbabilities.clear();
+        diagnosticSampleCount = 0L;
+        diagnosticSumSquares = 0.0;
+        diagnosticPeak = 0.0;
+        diagnosticMinSample = Double.POSITIVE_INFINITY;
+        diagnosticMaxSample = Double.NEGATIVE_INFINITY;
+        diagnosticNonZeroSamples = 0L;
+        diagnosticStartedAtMs = System.currentTimeMillis();
+    }
+
+    private static void accumulatePcmDiagnosticsLocked(float[] samples) {
+        if (samples == null) return;
+        for (float sample : samples) {
+            double value = sample;
+            diagnosticSampleCount++;
+            diagnosticSumSquares += value * value;
+            diagnosticPeak = Math.max(diagnosticPeak, Math.abs(value));
+            diagnosticMinSample = Math.min(diagnosticMinSample, value);
+            diagnosticMaxSample = Math.max(diagnosticMaxSample, value);
+            if (Math.abs(value) > 1.0e-7) diagnosticNonZeroSamples++;
+        }
+    }
+
+    private static void emitDiagnosticsLocked(Context context, long currentEndUs) {
+        try {
+            ArrayList<Double> sorted = new ArrayList<>(diagnosticProbabilities);
+            java.util.Collections.sort(sorted);
+            int frameCount = sorted.size();
+            double sum = 0.0;
+            long aboveStart = 0L;
+            long aboveEnd = 0L;
+            for (double value : sorted) {
+                sum += value;
+                if (value >= vadConfig.startThreshold) aboveStart++;
+                if (value >= vadConfig.endThreshold) aboveEnd++;
+            }
+            double probabilityMin = frameCount > 0 ? sorted.get(0) : 0.0;
+            double probabilityMax = frameCount > 0 ? sorted.get(frameCount - 1) : 0.0;
+            double probabilityAvg = frameCount > 0 ? sum / frameCount : 0.0;
+            double probabilityP50 = quantile(sorted, 0.50);
+            double probabilityP90 = quantile(sorted, 0.90);
+            double probabilityP95 = quantile(sorted, 0.95);
+            double pcmRms = diagnosticSampleCount > 0
+                    ? Math.sqrt(diagnosticSumSquares / diagnosticSampleCount) : 0.0;
+            double nonZeroRatio = diagnosticSampleCount > 0
+                    ? diagnosticNonZeroSamples / (double) diagnosticSampleCount : 0.0;
+            List<RangeUs> ranges = detector.snapshotRanges(currentEndUs);
+            long speechMs = 0L;
+            for (RangeUs range : ranges) {
+                speechMs += Math.max(0L, range.endUs - range.startUs) / 1000L;
+            }
+            String healthReason;
+            if (frameCount == 0) healthReason = "NO_PROBABILITY_FRAMES";
+            else if (probabilityMax < vadConfig.startThreshold) healthReason = "PROBABILITY_TOO_LOW";
+            else if (speechMs > 0L || detector.activeStartUs() >= 0L) healthReason = "SPEECH_DETECTED";
+            else healthReason = "SPEECH_NOT_CONFIRMED";
+
+            JSONObject json = new JSONObject()
+                    .put("schemaVersion", 1)
+                    .put("updatedAtMs", System.currentTimeMillis())
+                    .put("windowStartedAtMs", diagnosticStartedAtMs)
+                    .put("sampleRate", SAMPLE_RATE)
+                    .put("channels", 1)
+                    .put("windowSamples", frameWindowSamples)
+                    .put("inputSampleCount", diagnosticSampleCount)
+                    .put("pcmRms", pcmRms)
+                    .put("pcmPeak", diagnosticPeak)
+                    .put("pcmMin", diagnosticSampleCount > 0 ? diagnosticMinSample : 0.0)
+                    .put("pcmMax", diagnosticSampleCount > 0 ? diagnosticMaxSample : 0.0)
+                    .put("pcmNonZeroRatio", nonZeroRatio)
+                    .put("frameCount", frameCount)
+                    .put("probabilityMin", probabilityMin)
+                    .put("probabilityAvg", probabilityAvg)
+                    .put("probabilityP50", probabilityP50)
+                    .put("probabilityP90", probabilityP90)
+                    .put("probabilityP95", probabilityP95)
+                    .put("probabilityMax", probabilityMax)
+                    .put("aboveStartFrames", aboveStart)
+                    .put("aboveEndFrames", aboveEnd)
+                    .put("processedFrameCount", processedFrameCount)
+                    .put("rangeCount", ranges.size())
+                    .put("speechMs", speechMs)
+                    .put("speechActive", detector.activeStartUs() >= 0L)
+                    .put("vadHealthReason", healthReason)
+                    .put("vad", vadConfig.toJson())
+                    .put("nativeReady", nativeReady)
+                    .put("activeMode", activeMode);
+            writeAtomic(diagnosticsFile(context), json.toString());
+            log(context, "STREAMING_VAD_DIAGNOSTIC_30S", new JSONObject(json.toString()));
+        } catch (Exception error) {
+            log(context, "STREAMING_VAD_DIAGNOSTIC_FAILED", details(
+                    "error", error.getClass().getSimpleName(),
+                    "message", safeMessage(error)));
+        } finally {
+            resetDiagnosticsLocked();
+        }
+    }
+
+    private static double quantile(List<Double> sorted, double q) {
+        if (sorted == null || sorted.isEmpty()) return 0.0;
+        int index = (int) Math.round((sorted.size() - 1) * q);
+        index = Math.max(0, Math.min(sorted.size() - 1, index));
+        return sorted.get(index);
+    }
+
+    private static boolean sameVadConfig(StreamingVadSettings.Snapshot a, StreamingVadSettings.Snapshot b) {
+        if (a == null || b == null) return false;
+        return a.presetId.equals(b.presetId)
+                && Double.compare(a.startThreshold, b.startThreshold) == 0
+                && Double.compare(a.endThreshold, b.endThreshold) == 0
+                && a.minSpeechMs == b.minSpeechMs
+                && a.minSilenceMs == b.minSilenceMs
+                && a.speechPadMs == b.speechPadMs;
+    }
+
+    private static void closeNativeLocked() {
+''', 'VAD diagnostic helpers')
+
+vad047 = replaceOnce047(vad047,
+'''    private static final class DetectorState {
+        private final List<RangeUs> closed = new ArrayList<>();
+        private long pendingStartUs = -1L;
+        private long pendingSpeechUs;
+        private long activeStartUs = -1L;
+        private long lastSpeechEndUs = -1L;
+        private long silenceUs;
+
+        void accept(double probability, long frameStartUs, long frameEndUs) {
+            long frameUs = Math.max(1L, frameEndUs - frameStartUs);
+            if (probability >= THRESHOLD) {
+                silenceUs = 0L;
+                if (activeStartUs < 0L) {
+                    if (pendingStartUs < 0L) pendingStartUs = frameStartUs;
+                    pendingSpeechUs += frameUs;
+                    if (pendingSpeechUs >= MIN_SPEECH_US) {
+                        activeStartUs = Math.max(0L, pendingStartUs - SPEECH_PAD_US);
+                        lastSpeechEndUs = frameEndUs;
+                    }
+                } else {
+                    lastSpeechEndUs = frameEndUs;
+                    if (frameEndUs - activeStartUs >= MAX_SPEECH_US) {
+                        closeAt(frameEndUs + SPEECH_PAD_US);
+                        pendingStartUs = frameStartUs;
+                        pendingSpeechUs = frameUs;
+                    }
+                }
+            } else if (activeStartUs >= 0L) {
+                silenceUs += frameUs;
+                if (silenceUs >= MIN_SILENCE_US) {
+                    closeAt(lastSpeechEndUs + SPEECH_PAD_US);
+                }
+            } else {
+                pendingStartUs = -1L;
+                pendingSpeechUs = 0L;
+            }
+        }
+''',
+'''    private static final class DetectorState {
+        private final List<RangeUs> closed = new ArrayList<>();
+        private final StreamingVadSettings.Snapshot config;
+        private long pendingStartUs = -1L;
+        private long pendingSpeechUs;
+        private long activeStartUs = -1L;
+        private long lastSpeechEndUs = -1L;
+        private long silenceUs;
+
+        DetectorState(StreamingVadSettings.Snapshot config) {
+            this.config = config == null
+                    ? StreamingVadSettings.preset(StreamingVadSettings.PRESET_CONVERSATION)
+                    : config;
+        }
+
+        void accept(double probability, long frameStartUs, long frameEndUs) {
+            long frameUs = Math.max(1L, frameEndUs - frameStartUs);
+            boolean speechSignal = probability >= (activeStartUs >= 0L
+                    ? config.endThreshold : config.startThreshold);
+            if (speechSignal) {
+                silenceUs = 0L;
+                if (activeStartUs < 0L) {
+                    if (pendingStartUs < 0L) pendingStartUs = frameStartUs;
+                    pendingSpeechUs += frameUs;
+                    if (pendingSpeechUs >= config.minSpeechMs * 1000L) {
+                        activeStartUs = Math.max(0L, pendingStartUs - config.speechPadMs * 1000L);
+                        lastSpeechEndUs = frameEndUs;
+                    }
+                } else {
+                    lastSpeechEndUs = frameEndUs;
+                    if (frameEndUs - activeStartUs >= MAX_SPEECH_US) {
+                        closeAt(frameEndUs + config.speechPadMs * 1000L);
+                        pendingStartUs = frameStartUs;
+                        pendingSpeechUs = frameUs;
+                    }
+                }
+            } else if (activeStartUs >= 0L) {
+                silenceUs += frameUs;
+                if (silenceUs >= config.minSilenceMs * 1000L) {
+                    closeAt(lastSpeechEndUs + config.speechPadMs * 1000L);
+                }
+            } else {
+                pendingStartUs = -1L;
+                pendingSpeechUs = 0L;
+            }
+        }
+''', 'VAD hysteresis detector')
+
+writeUtf8047(vadFile047, vad047)
+
+// -----------------------------------------------------------------------------
+// Settings: keep controls concise, add VAD preset selection, and move runtime
+// diagnostics to the dedicated Diagnostics tab.
+// -----------------------------------------------------------------------------
+def backendFile047 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/TranscriptionBackendSettingsCard.kt')
+def backend047 = readUtf8047(backendFile047)
+backend047 = backend047.replace(
+'''            Text(
+                "各処理を明示的に選択します。選択した経路が利用できない・失敗した場合も、別のCPU/GPU/ASRへ自動切替はしません。",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+''', '')
+backend047 = replaceOnce047(backend047,
+'''            PipelineSection("VAD") {
+                BackendChip(
+                    selected = pipeline.vadBackend == TranscriptionPipelineSettings.VAD_CANDIDATE_SILERO,
+                    enabled = true,
+                    text = "Silero 候補区間"
+                ) {
+                    val before = pipeline.vadBackend
+                    TranscriptionPipelineSettings.setVad(context, TranscriptionPipelineSettings.VAD_CANDIDATE_SILERO)
+                    refresh(); logChange("vad", before, pipeline.vadBackend)
+                }
+                BackendChip(
+                    selected = pipeline.vadBackend == TranscriptionPipelineSettings.VAD_STREAMING_SILERO,
+                    enabled = true,
+                    text = "Silero ストリーミング"
+                ) {
+                    val before = pipeline.vadBackend
+                    TranscriptionPipelineSettings.setVad(context, TranscriptionPipelineSettings.VAD_STREAMING_SILERO)
+                    refresh(); logChange("vad", before, pipeline.vadBackend)
+                }
+            }
+''',
+'''            PipelineSection("VAD") {
+                BackendChip(
+                    selected = pipeline.vadBackend == TranscriptionPipelineSettings.VAD_CANDIDATE_SILERO,
+                    enabled = true,
+                    text = "Silero 候補区間"
+                ) {
+                    val before = pipeline.vadBackend
+                    TranscriptionPipelineSettings.setVad(context, TranscriptionPipelineSettings.VAD_CANDIDATE_SILERO)
+                    refresh(); logChange("vad", before, pipeline.vadBackend)
+                }
+                BackendChip(
+                    selected = pipeline.vadBackend == TranscriptionPipelineSettings.VAD_STREAMING_SILERO,
+                    enabled = true,
+                    text = "Silero ストリーミング"
+                ) {
+                    val before = pipeline.vadBackend
+                    TranscriptionPipelineSettings.setVad(context, TranscriptionPipelineSettings.VAD_STREAMING_SILERO)
+                    refresh(); logChange("vad", before, pipeline.vadBackend)
+                }
+            }
+            StreamingVadPresetSelector()
+''', 'VAD preset selector')
+
+backend047 = backend047.replace(
+'''            if (TranscriptionPipelineSettings.isLiveStreaming(pipeline) ||
+                liveState.state != "OFF"
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("30秒暫定文字起こし", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "状態: ${liveState.state} / backend: ${liveState.backend ?: "-"} / 推論待ち: ${liveState.queueDepth}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (liveState.partialText.isNotBlank()) {
+                        Text("処理中: ${liveState.partialText}", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    if (liveState.latestFinalText.isNotBlank()) {
+                        Text("最新暫定: ${liveState.latestFinalText}", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    if (!liveState.error.isNullOrBlank()) {
+                        Text("エラー: ${liveState.error}", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+
+''', '')
+backend047 = backend047.replace(
+'''            Text(
+                "端末: ${Build.MANUFACTURER} ${Build.MODEL} / Android API ${Build.VERSION.SDK_INT}",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                "Vulkan: ${if (vulkanAvailable) "利用可能" else "利用不可"} / Android端末内ASR: ${if (androidAsrAvailable) "利用可能" else "利用不可"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+''', '')
+backend047 = backend047.replace(
+'''            Text(
+                if (pipeline.executionMode == TranscriptionPipelineSettings.MODE_REALTIME_ONLY)
+                    "録音中PCMは専用ASRプロセスへ渡し、30秒窓で文字起こしします。結果は5分の保存境界で確定保存し、夜間の再文字起こしは行いません。"
+                else
+                    "録音中PCMは専用ASRプロセスへ渡し、暫定表示は30秒窓で更新します。確定処理は前日分を夜間にまとめて実行します。内部5分M4Aは録音継続・障害復旧のための保存単位であり、5分ごとに確定文字起こしを出すための単位ではありません。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+''', '')
+writeUtf8047(backendFile047, backend047)
+
+// -----------------------------------------------------------------------------
+// Main navigation: add Diagnostics, move existing diagnostic cards out of
+// Settings, and remove release/version-history copy from normal screens.
+// -----------------------------------------------------------------------------
+def mainFile047 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+def main047 = readUtf8047(mainFile047)
+main047 = replaceOnce047(main047,
+'''private enum class AppSection(val label: String) {
+    HOME("ホーム"), QUEUE("キュー"), HISTORY("記録"), AI("AIノート"), SETTINGS("設定")
+}
+''',
+'''private enum class AppSection(val label: String) {
+    HOME("ホーム"), QUEUE("キュー"), HISTORY("記録"), AI("AIノート"), DIAGNOSTICS("診断"), SETTINGS("設定")
+}
+''', 'diagnostics navigation enum')
+main047 = main047.replace(
+'''                        if ((section == AppSection.HISTORY || section == AppSection.QUEUE || section == AppSection.AI) && selected == null) {
+''',
+'''                        if ((section == AppSection.HISTORY || section == AppSection.QUEUE || section == AppSection.AI || section == AppSection.DIAGNOSTICS) && selected == null) {
+''')
+main047 = replaceOnce047(main047,
+'''                        section == AppSection.AI -> AiAnalysisScreen(
+                            refreshToken = refresh,
+                            onOpenSettings = { section = AppSection.SETTINGS }
+                        )
+                        else -> SettingsScreen(
+''',
+'''                        section == AppSection.AI -> AiAnalysisScreen(
+                            refreshToken = refresh,
+                            onOpenSettings = { section = AppSection.SETTINGS }
+                        )
+                        section == AppSection.DIAGNOSTICS -> DiagnosticsScreen(refreshToken = refresh)
+                        else -> SettingsScreen(
+''', 'diagnostics screen route')
+main047 = replaceOnce047(main047,
+'''    AppSection.AI -> "AIノート"
+    AppSection.SETTINGS -> "設定"
+''',
+'''    AppSection.AI -> "AIノート"
+    AppSection.DIAGNOSTICS -> "診断"
+    AppSection.SETTINGS -> "設定"
+''', 'diagnostics title')
+main047 = replaceOnce047(main047,
+'''        AppSection.AI -> Icons.Filled.Star
+        AppSection.SETTINGS -> Icons.Filled.Settings
+''',
+'''        AppSection.AI -> Icons.Filled.Star
+        AppSection.DIAGNOSTICS -> Icons.Filled.Search
+        AppSection.SETTINGS -> Icons.Filled.Settings
+''', 'diagnostics icon')
+main047 = main047.replace(
+'''        item { AiSettingsCard() }
+        item { VulkanDiagnosticCard() }
+        item { Model30sBenchmarkCard() }
+''',
+'''        item { AiSettingsCard() }
+''')
+main047 = main047.replace(
+'''    val versionName = remember {
+        try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.4.11-debug" }
+        catch (_: Exception) { "0.4.11-debug" }
+    }
+''', '')
+main047 = main047.replace(
+'''                "端末再起動後はAndroidの制約により録音を自動開始しません。再起動後はホームから録音を再開してください。\n\n24hRecoder $versionName",
+''',
+'''                "端末再起動後はホームから録音を再開してください。",
+''')
+main047 = main047.replace(
+'''                            "この結果には時刻区間データがありません。0.4.9で再文字起こしした結果から時刻区切り表示になります。",
+''',
+'''                            "この結果には時刻区間データがないため、時刻区切りでは表示できません。",
+''')
+writeUtf8047(mainFile047, main047)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1047)
+            output.versionName.set('0.7.47-debug')
+        }
+    }
+}
+
+if (!vadFile047.text.contains('STREAMING_VAD_DIAGNOSTIC_30S')) {
+    throw new GradleException('0.7.47 VAD diagnostics missing')
+}
+if (!vadFile047.text.contains('config.endThreshold')) {
+    throw new GradleException('0.7.47 VAD hysteresis missing')
+}
+if (!backendFile047.text.contains('StreamingVadPresetSelector()')) {
+    throw new GradleException('0.7.47 VAD preset selector missing')
+}
+if (!mainFile047.text.contains('DIAGNOSTICS("診断")')) {
+    throw new GradleException('0.7.47 diagnostics tab missing')
+}
+if (mainFile047.text.contains('item { VulkanDiagnosticCard() }\n        item { Model30sBenchmarkCard() }')) {
+    throw new GradleException('0.7.47 diagnostics still embedded in Settings')
+}

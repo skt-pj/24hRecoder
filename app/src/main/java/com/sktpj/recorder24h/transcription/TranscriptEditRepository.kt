@@ -25,6 +25,9 @@ object TranscriptEditRepository {
     fun wholeKey(sourceText: String): String = "whole:${sha256(sourceText)}"
 
     @JvmStatic
+    fun exists(context: Context, segmentId: String): Boolean = fileFor(context, segmentId).isFile
+
+    @JvmStatic
     fun load(context: Context, segmentId: String): Map<String, TranscriptEdit> {
         val file = fileFor(context, segmentId)
         if (!file.isFile) return emptyMap()
@@ -59,6 +62,9 @@ object TranscriptEditRepository {
         speaker: String
     ) {
         synchronized(lock) {
+            if (!TranscriptionRepository.exists(context, segmentId)) {
+                throw IllegalStateException("Cannot edit a transcript that has already been purged")
+            }
             val target = fileFor(context, segmentId)
             val root = if (target.isFile) {
                 try { JSONObject(readUtf8(target)) } catch (_: Exception) { JSONObject() }
@@ -77,6 +83,10 @@ object TranscriptEditRepository {
                     .put("updatedAtMs", System.currentTimeMillis())
             )
             writeAtomic(target, root.toString())
+            if (!TranscriptionRepository.exists(context, segmentId)) {
+                target.delete()
+                throw IllegalStateException("Transcript was purged while the edit was being saved")
+            }
         }
     }
 
@@ -94,6 +104,21 @@ object TranscriptEditRepository {
             } else {
                 writeAtomic(target, root.toString())
             }
+        }
+    }
+
+    @JvmStatic
+    fun deleteAll(context: Context, segmentId: String): Long {
+        synchronized(lock) {
+            val target = fileFor(context, segmentId)
+            val temp = File(target.parentFile, target.name + ".tmp")
+            if (temp.exists()) temp.delete()
+            if (!target.isFile) return 0L
+            val bytes = target.length()
+            if (!target.delete()) {
+                throw IllegalStateException("Unable to delete transcript edit file")
+            }
+            return bytes
         }
     }
 

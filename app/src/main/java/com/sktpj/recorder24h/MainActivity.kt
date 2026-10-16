@@ -36,8 +36,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -104,9 +106,12 @@ import com.sktpj.recorder24h.storage.RecorderHealth
 import com.sktpj.recorder24h.storage.RecorderStateStore
 import com.sktpj.recorder24h.storage.RecordingIntentStore
 import com.sktpj.recorder24h.storage.StoragePolicy
+import com.sktpj.recorder24h.transcription.FullStreamingStateStore
+import com.sktpj.recorder24h.transcription.LiveTranscriptionSettings
 import com.sktpj.recorder24h.transcription.LocalWhisperEngine
 import com.sktpj.recorder24h.transcription.TranscriptionRepository
 import com.sktpj.recorder24h.transcription.TranscriptionResetManager
+import com.sktpj.recorder24h.transcription.TranscriptionPipelineSettings
 import com.sktpj.recorder24h.transcription.TranscriptionScheduler
 import com.sktpj.recorder24h.transcription.WhisperModelManager
 import com.sktpj.recorder24h.ui.SegmentHistoryRepository
@@ -134,7 +139,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         AppLogger.event(this, "MAIN_ACTIVITY_CREATED")
         val resetApplied = TranscriptionResetManager.applyV049ResetIfNeeded(this)
-        if (WhisperModelManager.isReady(this)) {
+        if (TranscriptionPipelineSettings.isSelectedPipelineReady(this, WhisperModelManager.selectedModelId(this))) {
             if (resetApplied) TranscriptionScheduler.enqueueExistingAfterReset(this)
             else TranscriptionScheduler.enqueueExisting(this)
         }
@@ -226,6 +231,10 @@ private enum class HistoryFilter(val label: String) {
     ALL("すべて"), TRANSCRIBED("文字起こし済み"), AUDIO("音声あり"), ATTENTION("要確認")
 }
 
+private enum class HistoryViewMode(val label: String) {
+    HISTORY("履歴"), REALTIME("リアルタイム")
+}
+
 private data class DashboardSnapshot(
     val state: String,
     val heartbeatMs: Long,
@@ -239,12 +248,17 @@ private data class DashboardSnapshot(
     val lastSegmentDurationMs: Long,
     val captureSilenced: Boolean,
     val health: RecorderHealth.Snapshot,
-    val audioBytes: Long,
+    val retainedAudioBytes: Long,
+    val retainedAudioCount: Int,
+    val audioWithoutTranscriptCount: Int,
+    val automaticProcessingCount: Int,
+    val activeQueueCount: Int,
+    val needsAttentionCount: Int,
+    val corruptCount: Int,
     val appBytes: Long,
     val deviceFreeBytes: Long,
     val modelReady: Boolean,
     val modelBytes: Long,
-    val pendingAudio: Int,
     val transcriptCount: Int
 )
 
@@ -287,6 +301,12 @@ private fun RecorderApp(
     var records by remember { mutableStateOf<List<SegmentRecord>>(emptyList()) }
     var refresh by remember { mutableIntStateOf(0) }
     var dashboard by remember { mutableStateOf(readDashboard(context)) }
+    val historyListState = rememberLazyListState()
+    var historyQuery by remember { mutableStateOf("") }
+    var historyFilter by remember { mutableStateOf(HistoryFilter.ALL) }
+    var historyViewMode by remember { mutableStateOf(HistoryViewMode.HISTORY) }
+    var liveState by remember { mutableStateOf<FullStreamingStateStore.LiveState?>(null) }
+    var liveFinals by remember { mutableStateOf<List<FullStreamingStateStore.RecentFinal>>(emptyList()) }
 
     LaunchedEffect(Unit) {
         val hasQueuedTranscription = withContext(Dispatchers.IO) {
@@ -308,6 +328,19 @@ private fun RecorderApp(
                 records = withContext(Dispatchers.IO) { SegmentHistoryRepository.load(context) }
                 delay(if (selectedId != null || section == AppSection.QUEUE) 1_000L else 5_000L)
             } while (section == AppSection.HISTORY || section == AppSection.QUEUE)
+        }
+    }
+    LaunchedEffect(section, historyViewMode, refresh) {
+        if (section == AppSection.HISTORY && historyViewMode == HistoryViewMode.REALTIME) {
+            do {
+                val snapshot = withContext(Dispatchers.IO) {
+                    FullStreamingStateStore.readLiveState(context) to
+                        FullStreamingStateStore.readRecentFinals(context)
+                }
+                liveState = snapshot.first
+                liveFinals = snapshot.second
+                delay(500L)
+            } while (section == AppSection.HISTORY && historyViewMode == HistoryViewMode.REALTIME)
         }
     }
 
@@ -386,7 +419,7 @@ private fun RecorderApp(
                             onStop,
                             onOpenHistory = { section = AppSection.HISTORY; refresh++ }
                         )
-                        section == AppSection.QUEUE -> QueueScreen(
+                        section == AppSection.QUEUE -> UnifiedQueueScreen(
                             records = records,
                             onSelect = { selectedId = it.segmentId },
                             onRemove = { record ->
@@ -398,7 +431,19 @@ private fun RecorderApp(
                                 }
                             }
                         )
-                        section == AppSection.HISTORY -> HistoryScreen(records) { selectedId = it.segmentId }
+                        section == AppSection.HISTORY -> HistorySection(
+                            records = records,
+                            listState = historyListState,
+                            query = historyQuery,
+                            filter = historyFilter,
+                            viewMode = historyViewMode,
+                            liveState = liveState,
+                            liveFinals = liveFinals,
+                            onViewModeChange = { historyViewMode = it },
+                            onQueryChange = { historyQuery = it },
+                            onFilterChange = { historyFilter = it },
+                            onSelect = { selectedId = it.segmentId }
+                        )
                         section == AppSection.AI -> AiAnalysisScreen(
                             refreshToken = refresh,
                             onOpenSettings = { section = AppSection.SETTINGS }
@@ -411,11 +456,11 @@ private fun RecorderApp(
                                 Toast.makeText(context, "Whisper large-v3 Q5モデルのダウンロードを開始します", Toast.LENGTH_SHORT).show()
                             },
                             onRetryTranscription = {
-                                if (!WhisperModelManager.isReady(context)) {
+                                if (!TranscriptionPipelineSettings.isSelectedPipelineReady(context, WhisperModelManager.selectedModelId(context))) {
                                     Toast.makeText(context, "先にWhisperモデルを準備してください", Toast.LENGTH_SHORT).show()
                                 } else {
                                     val count = TranscriptionScheduler.enqueueExisting(context)
-                                    Toast.makeText(context, "${count}件の未処理音声を確認しました", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "自動処理対象を${count}件再確認しました", Toast.LENGTH_SHORT).show()
                                 }
                             },
                             onDeleteModel = {
@@ -434,7 +479,7 @@ private fun RecorderApp(
 
 private fun sectionTitle(section: AppSection) = when (section) {
     AppSection.HOME -> "24hRecoder"
-    AppSection.QUEUE -> "文字起こしキュー"
+    AppSection.QUEUE -> "キュー"
     AppSection.HISTORY -> "記録"
     AppSection.AI -> "AIノート"
     AppSection.SETTINGS -> "設定"
@@ -601,16 +646,21 @@ private fun StorageCard(dashboard: DashboardSnapshot) {
     Card {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("ストレージ", style = MaterialTheme.typography.titleLarge)
-            Meter("未処理音声", "${formatMb(dashboard.audioBytes)} / 600 MB", dashboard.audioBytes.toFloat() / StoragePolicy.AUDIO_LIMIT_BYTES)
+            Meter("保持音声", "${formatMb(dashboard.retainedAudioBytes)} / 600 MB", dashboard.retainedAudioBytes.toFloat() / StoragePolicy.AUDIO_LIMIT_BYTES)
             Meter("作業データ", "${formatMb(dashboard.appBytes)} / 1 GB", dashboard.appBytes.toFloat() / StoragePolicy.LOGICAL_APP_LIMIT_BYTES)
             HorizontalDivider()
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Metric("未処理", "${dashboard.pendingAudio}件")
-                Metric("文字起こし", "${dashboard.transcriptCount}件")
+                Metric("保持音声", "${dashboard.retainedAudioCount}件")
+                Metric("確定文字起こし", "${dashboard.transcriptCount}件")
                 Metric("端末空き", formatStorage(dashboard.deviceFreeBytes))
             }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Metric("音声のみ", "${dashboard.audioWithoutTranscriptCount}件")
+                Metric("実キュー", "${dashboard.activeQueueCount}件")
+                Metric("要確認", "${dashboard.needsAttentionCount}件")
+            }
             Text(
-                "Whisperモデルは1GBの作業データ制限には含めません。",
+                "自動処理対象: ${dashboard.automaticProcessingCount}件 / 破損: ${dashboard.corruptCount}件",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -642,17 +692,21 @@ private fun Metric(label: String, value: String) {
 
 @Composable
 private fun TranscriptionCard(dashboard: DashboardSnapshot, onOpenHistory: () -> Unit) {
+    val context = LocalContext.current
+    val selectedModel = WhisperModelManager.selectedModelSpec(context)
+    val expectedBytes = WhisperModelManager.selectedExpectedBytes(context)
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("ローカル文字起こし", style = MaterialTheme.typography.titleLarge)
-            Text("${LocalWhisperEngine.ENGINE_ID} / Whisper large-v3 Q5")
+            Text("${TranscriptionPipelineSettings.asrLabel(TranscriptionPipelineSettings.snapshot(context).asrBackend)} / ${TranscriptionPipelineSettings.vadLabel(TranscriptionPipelineSettings.snapshot(context).vadBackend)}", style = MaterialTheme.typography.bodySmall)
+            Text("${LocalWhisperEngine.engineId(context)} / ${selectedModel?.label ?: WhisperModelManager.selectedModelId(context)}")
             StatusPill(
                 if (dashboard.modelReady) "モデル準備済み" else if (dashboard.modelBytes > 0L) "モデル取得中" else "モデル未準備",
                 if (dashboard.modelReady) StatusTone.SUCCESS else StatusTone.WAITING
             )
             if (!dashboard.modelReady && dashboard.modelBytes > 0L) {
                 LinearProgressIndicator(
-                    progress = { (dashboard.modelBytes.toFloat() / WhisperModelManager.EXPECTED_BYTES).coerceIn(0f, 1f) },
+                    progress = { (dashboard.modelBytes.toFloat() / expectedBytes.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -766,9 +820,147 @@ private fun formatQueueDateTime(record: SegmentRecord): String {
 }
 
 @Composable
-private fun HistoryScreen(records: List<SegmentRecord>, onSelect: (SegmentRecord) -> Unit) {
-    var query by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf(HistoryFilter.ALL) }
+private fun HistorySection(
+    records: List<SegmentRecord>,
+    listState: LazyListState,
+    query: String,
+    filter: HistoryFilter,
+    viewMode: HistoryViewMode,
+    liveState: FullStreamingStateStore.LiveState?,
+    liveFinals: List<FullStreamingStateStore.RecentFinal>,
+    onViewModeChange: (HistoryViewMode) -> Unit,
+    onQueryChange: (String) -> Unit,
+    onFilterChange: (HistoryFilter) -> Unit,
+    onSelect: (SegmentRecord) -> Unit
+) {
+    Column(Modifier.fillMaxSize()) {
+        LazyRow(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            itemsIndexed(HistoryViewMode.entries) { _, mode ->
+                FilterChip(
+                    selected = viewMode == mode,
+                    onClick = { onViewModeChange(mode) },
+                    label = { Text(mode.label) }
+                )
+            }
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            if (viewMode == HistoryViewMode.HISTORY) {
+                HistoryScreen(records, listState, query, filter, onQueryChange, onFilterChange, onSelect)
+            } else {
+                LiveHistoryScreen(liveState, liveFinals)
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiveHistoryScreen(
+    liveState: FullStreamingStateStore.LiveState?,
+    finals: List<FullStreamingStateStore.RecentFinal>
+) {
+    val context = LocalContext.current
+    val listState = rememberLazyListState()
+    val pipeline = TranscriptionPipelineSettings.snapshot(context)
+    val state = liveState?.state ?: "OFF"
+    val partial = liveState?.partialText.orEmpty()
+    val backendId = liveState?.backend ?: pipeline.asrBackend
+    val backendLabel = TranscriptionPipelineSettings.asrLabel(backendId)
+    val vadLabel = TranscriptionPipelineSettings.vadLabel(pipeline.vadBackend)
+    val liveModelId = LiveTranscriptionSettings.selectedLiveModelId(context)
+    val liveModelLabel = WhisperModelManager.modelSpec(liveModelId)?.label ?: liveModelId
+    val stateLabel = when (state) {
+        "LIVE_PARTIAL" -> "認識中"
+        "FINAL" -> "確定"
+        "WAITING" -> "待機中"
+        "ERROR" -> "エラー"
+        else -> "停止"
+    }
+    val stateTone = when (state) {
+        "LIVE_PARTIAL", "FINAL" -> StatusTone.SUCCESS
+        "WAITING" -> StatusTone.WAITING
+        "ERROR" -> StatusTone.ERROR
+        else -> StatusTone.NEUTRAL
+    }
+
+    LaunchedEffect(finals.size, liveState?.updatedAtMs) {
+        if (finals.isNotEmpty()) {
+            listState.scrollToItem(finals.lastIndex)
+        }
+    }
+
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("ライブ文字起こし", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                    StatusPill(stateLabel, stateTone)
+                }
+                Text("$backendLabel / $vadLabel / $liveModelLabel", style = MaterialTheme.typography.bodyMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text("推論キュー ${liveState?.queueDepth ?: 0}", style = MaterialTheme.typography.labelMedium)
+                    if ((liveState?.updatedAtMs ?: 0L) > 0L) {
+                        Text("更新 ${formatLiveTime(liveState!!.updatedAtMs)}", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+                if (!liveState?.error.isNullOrBlank()) {
+                    Text(liveState!!.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                if (state == "OFF" && !TranscriptionPipelineSettings.isLiveStreaming(pipeline)) {
+                    Text("ライブ文字起こし: オフ", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+
+        if (finals.isEmpty() && partial.isBlank()) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text("まだ確定したライブ会話はありません", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(bottom = 8.dp)
+            ) {
+                itemsIndexed(finals, key = { _, item -> item.id }) { _, item ->
+                    EditableLiveFinalCard(item)
+                }
+                if (partial.isNotBlank()) {
+                    item(key = "live-partial") {
+                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
+                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Text("認識中（暫定）", style = MaterialTheme.typography.labelLarge)
+                                Text(partial, style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun formatLiveTime(value: Long): String {
+    if (value <= 0L) return "--:--:--"
+    return SimpleDateFormat("M/d HH:mm:ss", Locale.JAPAN).format(Date(value))
+}
+
+@Composable
+private fun HistoryScreen(
+    records: List<SegmentRecord>,
+    listState: LazyListState,
+    query: String,
+    filter: HistoryFilter,
+    onQueryChange: (String) -> Unit,
+    onFilterChange: (HistoryFilter) -> Unit,
+    onSelect: (SegmentRecord) -> Unit
+) {
     val filtered = remember(records, query, filter) {
         records.filter { record ->
             val statusOk = when (filter) {
@@ -789,7 +981,7 @@ private fun HistoryScreen(records: List<SegmentRecord>, onSelect: (SegmentRecord
         Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedTextField(
                 value = query,
-                onValueChange = { query = it },
+                onValueChange = onQueryChange,
                 singleLine = true,
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 placeholder = { Text("文字起こし・segment IDを検索") },
@@ -797,7 +989,7 @@ private fun HistoryScreen(records: List<SegmentRecord>, onSelect: (SegmentRecord
             )
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 itemsIndexed(HistoryFilter.entries) { _, item ->
-                    FilterChip(selected = filter == item, onClick = { filter = item }, label = { Text(item.label) })
+                    FilterChip(selected = filter == item, onClick = { onFilterChange(item) }, label = { Text(item.label) })
                 }
             }
         }
@@ -805,7 +997,8 @@ private fun HistoryScreen(records: List<SegmentRecord>, onSelect: (SegmentRecord
             EmptyHistory(query, filter)
         } else {
             LazyColumn(
-                Modifier.fillMaxSize(),
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -857,8 +1050,11 @@ private fun SegmentCard(record: SegmentRecord, onClick: () -> Unit) {
                 when {
                     record.hasTranscript && !record.transcriptText.isNullOrBlank() -> record.transcriptText!!
                     record.hasTranscript -> "文字起こし結果は空です（無音区間の可能性があります）"
+                    record.liveOwned && record.fiveMinuteFinalEnabled && record.status == "TRANSCRIBING" -> "確定文字起こし中"
+                    record.liveOwned && record.fiveMinuteFinalEnabled && record.status in setOf("QUEUED", "RETRY_WAIT", "READY") -> "確定文字起こし待ち"
+                    record.liveOwned && !record.fiveMinuteFinalEnabled -> "ライブ記録確定中"
                     record.status == "TRANSCRIBING" -> "端末内で文字起こし中です"
-                    record.audioAvailable -> "音声は保存済みです。文字起こしを待っています"
+                    record.audioAvailable -> "文字起こし待ち"
                     else -> "文字起こし結果はまだありません"
                 },
                 maxLines = 3,
@@ -940,19 +1136,18 @@ private fun RecordDetailScreen(record: SegmentRecord) {
             }
         }
         item { TranscriptCard(record) }
-        item { ModelComparisonCard(record) }
+        item { TranscriptionProcessingCard(record) }
         item {
             Card {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("詳細", style = MaterialTheme.typography.titleLarge)
-                    InfoRow("状態", record.status)
+                    InfoRow("状態", recordStatusLabel(record))
                     InfoRow("開始", formatDateTime(record.startedAtMs))
                     InfoRow("終了", formatDateTime(record.endedAtMs))
                     InfoRow("長さ", if (record.durationMs > 0L) formatDuration(record.durationMs) else "-")
                     InfoRow("ファイル", record.fileName ?: "-")
                     InfoRow("サイズ", SegmentHistoryRepository.formatBytes(record.fileSizeBytes))
                     InfoRow("文字起こし", record.transcriptModel?.ifBlank { "-" } ?: "-")
-                    if (record.transcribedAtMs > 0L) InfoRow("処理日時", formatDateTime(record.transcribedAtMs))
                     if (!record.reason.isNullOrBlank()) InfoRow("理由", record.reason)
                 }
             }
@@ -1055,7 +1250,7 @@ private fun TranscriptCard(record: SegmentRecord) {
                     if (queued) {
                         AppLogger.event(context, "UI_MANUAL_RETRANSCRIPTION_REQUESTED")
                         Toast.makeText(context, "再文字起こしを登録しました", Toast.LENGTH_SHORT).show()
-                    } else if (!WhisperModelManager.isReady(context)) {
+                    } else if (!TranscriptionPipelineSettings.isSelectedPipelineReady(context, WhisperModelManager.selectedModelId(context))) {
                         Toast.makeText(context, "モデルを準備中です。準備後にもう一度実行してください", Toast.LENGTH_LONG).show()
                     } else {
                         Toast.makeText(context, "再文字起こしを登録できませんでした", Toast.LENGTH_SHORT).show()
@@ -1098,7 +1293,7 @@ private fun TranscriptCard(record: SegmentRecord) {
                 Text(
                     when (record.status) {
                         "TRANSCRIBING" -> "文字起こし処理中です。"
-                        "FAILED" -> "文字起こしに失敗しました。元音声が残っていればこの画面から再実行できます。"
+                        "FAILED" -> "文字起こし失敗"
                         else -> "文字起こし結果はまだありません。"
                     },
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1106,7 +1301,7 @@ private fun TranscriptCard(record: SegmentRecord) {
             } else {
                 if (retranscriptionActive) {
                     Text(
-                        "再文字起こし中も現在の結果を表示しています。新しい結果が正常保存された時点で置き換わります。",
+                        "再文字起こし中",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1164,14 +1359,14 @@ private fun TranscriptCard(record: SegmentRecord) {
                     })
                 }
                 Text(
-                    if (record.hasTranscript) "元M4Aが残っていれば、現在の結果を保持したまま再度キューへ追加できます。"
+                    if (record.hasTranscript) "再処理できます"
                     else "保存済みM4Aを文字起こしキューへ追加します。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else if (record.hasTranscript) {
                 Text(
-                    "元音声が削除済みのため、この記録は再文字起こしできません。",
+                    "元音声なし・再処理不可",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1188,15 +1383,15 @@ private fun isManualRetranscriptionState(record: SegmentRecord): Boolean {
 private fun transcriptionActivityMessage(record: SegmentRecord): String? {
     return when {
         record.status == "QUEUED" && record.reason.orEmpty().endsWith("SLOT_WAIT") ->
-            "Worker起動済み。現在はWhisper実行枠を待っています。他のWhisper処理またはモデル比較が実行枠を使用中です。"
+            "推論枠待ち"
         record.status == "QUEUED" && record.reason.orEmpty().endsWith("WORK_ENQUEUED") ->
-            "WorkManager登録済み・Worker未開始です。明示制約はbattery-not-lowです。OSスケジューラ待ちとの区別は現時点では計測していません。"
+            "実行待ち"
         record.status == "TRANSCRIBING" ->
-            "Whisper large-v3 Q5の実行枠を取得済みです。端末内で文字起こし処理中です。"
+            "文字起こし中"
         record.status == "RETRY_WAIT" ->
-            "前回処理が失敗し、WorkManagerの再試行を待っています。"
+            "再試行待ち"
         record.status == "READY" && record.audioAvailable ->
-            "音声は保存済みですが、現在は文字起こしキュー外です。"
+            "音声保存済み・キュー外"
         else -> null
     }
 }
@@ -1255,50 +1450,14 @@ private fun SettingsScreen(
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        item {
-            Card {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Whisperモデル", style = MaterialTheme.typography.titleLarge)
-                    Text("large-v3 Q5 / 多言語 / デフォルト / ${formatMb(WhisperModelManager.EXPECTED_BYTES)}")
-                    StatusPill(
-                        if (dashboard.modelReady) "準備済み" else if (dashboard.modelBytes > 0L) "取得中" else "未準備",
-                        if (dashboard.modelReady) StatusTone.SUCCESS else StatusTone.WAITING
-                    )
-                    if (!dashboard.modelReady && dashboard.modelBytes > 0L) {
-                        LinearProgressIndicator(
-                            progress = { (dashboard.modelBytes.toFloat() / WhisperModelManager.EXPECTED_BYTES).coerceIn(0f, 1f) },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    if (!dashboard.modelReady) {
-                        Button(onClick = onDownloadModel, modifier = Modifier.fillMaxWidth()) { Text("Whisper large-v3 Q5モデルをダウンロード") }
-                    }
-                    OutlinedButton(onClick = onRetryTranscription, modifier = Modifier.fillMaxWidth()) {
-                        Icon(Icons.Filled.Refresh, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("未処理・旧方式の音声を再登録")
-                    }
-                    if (dashboard.modelBytes > 0L) {
-                        OutlinedButton(
-                            onClick = onDeleteModel,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                        ) {
-                            Icon(Icons.Filled.Delete, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Whisperモデルを削除")
-                        }
-                    }
-                }
-            }
-        }
+        item { WhisperModelSettingsCard() }
         item { AiSettingsCard() }
+        item { MemoketGemSettingsCard() }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("プライバシー", style = MaterialTheme.typography.titleLarge)
-                    Text("録音音声とローカル文字起こしは端末内で処理します。AI分析を有効にした場合のみ、文字起こしテキストをOpenAI APIへ送信します。録音音声はOpenAI APIへ送信しません。")
-                    Text("モデル本体は1GBの作業データ制限の対象外です。", fontWeight = FontWeight.SemiBold)
+                    Text("録音音声は端末内保存。OpenAI利用時は文字起こしテキストのみ送信します。")
                 }
             }
         }
@@ -1306,14 +1465,13 @@ private fun SettingsScreen(
             Card {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Android設定", style = MaterialTheme.typography.titleLarge)
-                    Text("マイク権限、通知権限、バッテリー設定などをAndroidのアプリ情報画面で確認できます。", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     OutlinedButton(onClick = onOpenSystemSettings, modifier = Modifier.fillMaxWidth()) { Text("アプリ設定を開く") }
                 }
             }
         }
         item {
             Text(
-                "端末再起動後はAndroidの制約により録音を自動開始しません。再起動後はホームから録音を再開してください。\n\n24hRecoder $versionName",
+                "24hRecoder $versionName",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(4.dp)
@@ -1326,6 +1484,16 @@ private fun readDashboard(context: Context): DashboardSnapshot {
     val state: JSONObject = RecorderStateStore.read(context)
     val recordingRequested = RecordingIntentStore.isRequested(context)
     val health = RecorderHealth.evaluate(state, recordingRequested, System.currentTimeMillis())
+    val records = SegmentHistoryRepository.load(context)
+    val retainedAudioCount = records.count { it.audioAvailable && it.fileName?.endsWith(".m4a") == true }
+    val audioWithoutTranscriptCount = records.count {
+        it.audioAvailable && it.fileName?.endsWith(".m4a") == true && !it.hasTranscript
+    }
+    val activeQueueCount = records.count {
+        it.status == "QUEUED" || it.status == "RETRY_WAIT" || it.status == "TRANSCRIBING"
+    }
+    val needsAttentionCount = records.count { it.needsAttention }
+    val corruptCount = records.count { it.status == "CORRUPT" }
     return DashboardSnapshot(
         state = state.optString("state", "STOPPED"),
         heartbeatMs = state.optLong("heartbeatMs", 0L),
@@ -1339,17 +1507,47 @@ private fun readDashboard(context: Context): DashboardSnapshot {
         lastSegmentDurationMs = state.optLong("lastSegmentDurationMs", 0L),
         captureSilenced = state.optBoolean("captureSilenced", false),
         health = health,
-        audioBytes = StoragePolicy.audioBytes(context),
+        retainedAudioBytes = StoragePolicy.audioBytes(context),
+        retainedAudioCount = retainedAudioCount,
+        audioWithoutTranscriptCount = audioWithoutTranscriptCount,
+        automaticProcessingCount = TranscriptionScheduler.pendingAudioCount(context),
+        activeQueueCount = activeQueueCount,
+        needsAttentionCount = needsAttentionCount,
+        corruptCount = corruptCount,
         appBytes = StoragePolicy.appDataBytes(context),
         deviceFreeBytes = context.filesDir.usableSpace,
-        modelReady = WhisperModelManager.isReady(context),
-        modelBytes = WhisperModelManager.downloadedBytes(context),
-        pendingAudio = TranscriptionScheduler.pendingAudioCount(context),
+        modelReady = run {
+            val pipeline = TranscriptionPipelineSettings.snapshot(context)
+            val modelId = if (TranscriptionPipelineSettings.isLiveStreaming(pipeline))
+                LiveTranscriptionSettings.selectedLiveModelId(context) else WhisperModelManager.selectedModelId(context)
+            TranscriptionPipelineSettings.unavailableReason(context, pipeline, modelId) == null
+        },
+        modelBytes = run {
+            val pipeline = TranscriptionPipelineSettings.snapshot(context)
+            val modelId = if (TranscriptionPipelineSettings.isLiveStreaming(pipeline))
+                LiveTranscriptionSettings.selectedLiveModelId(context) else WhisperModelManager.selectedModelId(context)
+            WhisperModelManager.downloadedBytesForModel(context, modelId) +
+                WhisperModelManager.vadModelFile(context).let { if (it.isFile) it.length() else 0L }
+        },
         transcriptCount = TranscriptionRepository.count(context)
     )
 }
 
 private fun recordStatusLabel(record: SegmentRecord): String {
+    if (record.liveOwned) {
+        return when {
+            record.hasTranscript && record.fiveMinuteFinalEnabled -> "5分確定済み"
+            record.hasTranscript -> "ライブ確定済み"
+            record.fiveMinuteFinalEnabled && record.status == "TRANSCRIBING" -> "5分確定処理中"
+            record.fiveMinuteFinalEnabled && record.status == "RETRY_WAIT" -> "5分確定再試行待ち"
+            record.fiveMinuteFinalEnabled && record.status == "QUEUED" -> "5分確定待ち"
+            record.fiveMinuteFinalEnabled && record.status == "READY" -> "5分確定登録中"
+            record.status == "FAILED" && record.fiveMinuteFinalEnabled -> "5分確定失敗"
+            record.status == "FAILED" -> "ライブ失敗"
+            record.status == "READY" -> "ライブ確定処理中"
+            else -> "ライブ処理中"
+        }
+    }
     return when (record.status) {
         "QUEUED" -> "キュー待ち"
         "TRANSCRIBING" -> "文字起こし中"

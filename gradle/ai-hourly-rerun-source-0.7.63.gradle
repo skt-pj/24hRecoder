@@ -1,0 +1,259 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8063 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8063 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce063 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.63 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// A generated hourly result already records the exact source segment ids used for the first run.
+// Until daily cleanup completes, those retained transcript files are the authoritative rerun source.
+// Do not let a secondary timestamp-overlap check make the UI say "rerun unavailable" while the
+// source transcripts still exist.
+def repoFile063 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/AiAnalysisRepository.java')
+def repo063 = readUtf8063(repoFile063)
+repo063 = replaceOnce063(repo063,
+'''import com.sktpj.recorder24h.ui.SegmentHistoryRepository;
+import com.sktpj.recorder24h.ui.SegmentRecord;
+''',
+'''import com.sktpj.recorder24h.transcription.TranscriptionRepository;
+import com.sktpj.recorder24h.ui.SegmentHistoryRepository;
+import com.sktpj.recorder24h.ui.SegmentRecord;
+import com.sktpj.recorder24h.ui.TranscriptChunk;
+''', 'repository imports')
+
+repo063 = replaceOnce063(repo063,
+'''    public static File hourlyFile(Context context, long periodStartMs) {
+''',
+'''    public static boolean hasSavedSourceAvailable(Context context, File analysisFile,
+                                                  long periodStartMs, long periodEndMs) {
+        if (context == null || analysisFile == null || !analysisFile.isFile()
+                || periodStartMs <= 0L || periodEndMs <= periodStartMs) {
+            return false;
+        }
+        // Daily finalization is the intentional boundary after which hourly rerun is unavailable.
+        File daily = dailyFile(context, periodStartMs);
+        if (AiDailySourceCleanup.STATUS_COMPLETE.equals(AiDailySourceCleanup.cleanupStatus(daily))) {
+            return false;
+        }
+        for (String segmentId : savedSourceSegmentIds(analysisFile)) {
+            if (TranscriptionRepository.exists(context, segmentId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static SourceWindow buildSourceForRerun(Context context, long periodStartMs,
+                                                    long periodEndMs, File analysisFile) {
+        SourceWindow direct = buildSource(context, periodStartMs, periodEndMs);
+        if (!direct.isEmpty()) return direct;
+
+        Set<String> savedIds = savedSourceSegmentIds(analysisFile);
+        if (savedIds.isEmpty()) return direct;
+
+        List<SegmentRecord> records = new ArrayList<>(SegmentHistoryRepository.load(context));
+        records.sort(Comparator.comparingLong(SegmentRecord::getStartedAtMs));
+        List<SourceEntry> entries = new ArrayList<>();
+        Set<String> segmentIds = new LinkedHashSet<>();
+        int transcriptCount = 0;
+        long lastInsidePeriod = Math.max(periodStartMs, periodEndMs - 1L);
+
+        for (SegmentRecord record : records) {
+            if (!savedIds.contains(record.getSegmentId())) continue;
+            String transcript = record.getTranscriptText();
+            if (transcript == null || transcript.trim().isEmpty()) continue;
+
+            boolean includedRecord = false;
+            long recordStart = record.getStartedAtMs() > 0L
+                    ? record.getStartedAtMs() : record.getSortTimeMs();
+            List<TranscriptChunk> chunks = record.getTranscriptChunks();
+            if (chunks != null && !chunks.isEmpty()) {
+                for (TranscriptChunk chunk : chunks) {
+                    String text = chunk.getText() == null ? "" : chunk.getText().trim();
+                    if (text.isEmpty()) continue;
+                    long candidateStart = recordStart > 0L
+                            ? recordStart + Math.max(0L, chunk.getStartMs()) : periodStartMs;
+                    long candidateEnd = recordStart > 0L
+                            ? recordStart + Math.max(chunk.getStartMs(), chunk.getEndMs())
+                            : candidateStart + Math.max(1L, chunk.getEndMs() - chunk.getStartMs());
+                    long mappedStart;
+                    long mappedEnd;
+                    if (candidateEnd > periodStartMs && candidateStart < periodEndMs) {
+                        mappedStart = Math.max(periodStartMs, candidateStart);
+                        mappedEnd = Math.min(periodEndMs, Math.max(mappedStart + 1L, candidateEnd));
+                    } else {
+                        // The source id proves this segment contributed to the original hourly run.
+                        // If a later timestamp mapping no longer intersects, preserve its text and
+                        // clamp only the evidence time instead of incorrectly declaring no source.
+                        mappedStart = Math.max(periodStartMs, Math.min(lastInsidePeriod,
+                                recordStart > 0L ? recordStart : periodStartMs));
+                        long duration = Math.max(1L, chunk.getEndMs() - chunk.getStartMs());
+                        mappedEnd = Math.min(periodEndMs, mappedStart + Math.min(duration, 300_000L));
+                        if (mappedEnd <= mappedStart) mappedEnd = Math.min(periodEndMs, mappedStart + 1L);
+                    }
+                    String speaker = chunk.getSpeaker();
+                    if (speaker == null || speaker.trim().isEmpty()) speaker = "判定不能";
+                    entries.add(new SourceEntry(mappedStart, mappedEnd,
+                            record.getSegmentId(), speaker, text));
+                    includedRecord = true;
+                }
+            }
+
+            if (!includedRecord) {
+                long mappedStart = Math.max(periodStartMs, Math.min(lastInsidePeriod,
+                        recordStart > 0L ? recordStart : periodStartMs));
+                long recordEnd = record.getEndedAtMs() > recordStart
+                        ? record.getEndedAtMs() : mappedStart + 1L;
+                long mappedEnd = Math.min(periodEndMs, Math.max(mappedStart + 1L, recordEnd));
+                String speaker = record.getTranscriptSpeaker();
+                if (speaker == null || speaker.trim().isEmpty()) speaker = "判定不能";
+                entries.add(new SourceEntry(mappedStart, mappedEnd, record.getSegmentId(),
+                        speaker, transcript.trim()));
+                includedRecord = true;
+            }
+
+            if (includedRecord) {
+                transcriptCount++;
+                segmentIds.add(record.getSegmentId());
+            }
+        }
+
+        if (entries.isEmpty()) return direct;
+        entries.sort(Comparator
+                .comparingLong((SourceEntry entry) -> entry.startMs)
+                .thenComparing(entry -> entry.segmentId));
+        List<String> ids = new ArrayList<>(segmentIds);
+        return new SourceWindow(periodStartMs, periodEndMs, entries, ids,
+                transcriptCount, hash(entries));
+    }
+
+    private static Set<String> savedSourceSegmentIds(File analysisFile) {
+        Set<String> ids = new LinkedHashSet<>();
+        if (analysisFile == null || !analysisFile.isFile()) return ids;
+        try {
+            JSONObject row = new JSONObject(readUtf8(analysisFile));
+            JSONArray sourceIds = row.optJSONArray("sourceSegmentIds");
+            if (sourceIds == null) return ids;
+            for (int i = 0; i < sourceIds.length(); i++) {
+                String id = sourceIds.optString(i, "").trim();
+                if (!id.isEmpty()) ids.add(id);
+            }
+        } catch (Exception ignored) {
+        }
+        return ids;
+    }
+
+    public static File hourlyFile(Context context, long periodStartMs) {
+''', 'saved-source recovery methods')
+writeUtf8063(repoFile063, repo063)
+
+// Manual reruns use the saved-source fallback. Scheduled first-time generation keeps the normal
+// time-window builder so no behavior changes outside this bug fix.
+def workerFile063 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/AiAnalysisWorker.java')
+def worker063 = readUtf8063(workerFile063)
+worker063 = replaceOnce063(worker063,
+'''        AiAnalysisRepository.SourceWindow source =
+                AiAnalysisRepository.buildSource(context, periodStartMs, periodEndMs);
+''',
+'''        AiAnalysisRepository.SourceWindow source = force
+                ? AiAnalysisRepository.buildSourceForRerun(
+                        context, periodStartMs, periodEndMs, target)
+                : AiAnalysisRepository.buildSource(context, periodStartMs, periodEndMs);
+''', 'worker rerun source')
+writeUtf8063(workerFile063, worker063)
+
+// The in-notebook action button must use the same durable source evidence as the worker.
+def actionsFile063 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiNotebookAnalysisActions.kt')
+def actions063 = readUtf8063(actionsFile063)
+actions063 = replaceOnce063(actions063,
+'''                val nowMs = System.currentTimeMillis()
+                NotebookPeriodActionSnapshot(
+                    configured = AiProviderStore.isConfigured(context.applicationContext),
+                    hasSource = notebookHasTranscriptSource(records, periodStartMs, periodEndMs),
+                    pendingTranscription = notebookHasPendingTranscription(records, periodStartMs, periodEndMs),
+''',
+'''                val nowMs = System.currentTimeMillis()
+                val targetFile = if (kind == AiAnalysisScheduler.KIND_HOURLY) {
+                    AiAnalysisRepository.hourlyFile(context.applicationContext, periodStartMs)
+                } else {
+                    AiAnalysisRepository.dailyFile(context.applicationContext, periodStartMs)
+                }
+                val directSource = notebookHasTranscriptSource(records, periodStartMs, periodEndMs)
+                val savedSource = hasResult && AiAnalysisRepository.hasSavedSourceAvailable(
+                    context.applicationContext, targetFile, periodStartMs, periodEndMs
+                )
+                NotebookPeriodActionSnapshot(
+                    configured = AiProviderStore.isConfigured(context.applicationContext),
+                    hasSource = directSource || savedSource,
+                    pendingTranscription = notebookHasPendingTranscription(records, periodStartMs, periodEndMs),
+''', 'notebook period button source')
+
+actions063 = replaceOnce063(actions063,
+'''        val startMs = start.toInstant().toEpochMilli()
+        val endMs = end.toInstant().toEpochMilli()
+        NotebookHourlyActionRow(
+            hour = hour,
+            periodStartMs = startMs,
+            periodEndMs = endMs,
+            hasSource = notebookHasTranscriptSource(records, startMs, endMs),
+            hasResult = AiAnalysisRepository.hourlyFile(context, startMs).isFile,
+''',
+'''        val startMs = start.toInstant().toEpochMilli()
+        val endMs = end.toInstant().toEpochMilli()
+        val hourlyFile = AiAnalysisRepository.hourlyFile(context, startMs)
+        val hasResult = hourlyFile.isFile
+        val hasSource = notebookHasTranscriptSource(records, startMs, endMs) ||
+            (hasResult && AiAnalysisRepository.hasSavedSourceAvailable(
+                context, hourlyFile, startMs, endMs
+            ))
+        NotebookHourlyActionRow(
+            hour = hour,
+            periodStartMs = startMs,
+            periodEndMs = endMs,
+            hasSource = hasSource,
+            hasResult = hasResult,
+''', 'notebook 24-row source')
+writeUtf8063(actionsFile063, actions063)
+
+// Keep the legacy rerun screen consistent with the AI-notebook action logic.
+def rerunFile063 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiRerunActivity.kt')
+def rerun063 = readUtf8063(rerunFile063)
+rerun063 = replaceOnce063(rerun063,
+'''        val hasSource = hasTranscriptSource(records, startMs, endMs)
+        val pending = hasPendingTranscription(records, startMs, endMs)
+        val hasResult = AiAnalysisRepository.hourlyFile(context, startMs).isFile
+''',
+'''        val hourlyFile = AiAnalysisRepository.hourlyFile(context, startMs)
+        val hasResult = hourlyFile.isFile
+        val hasSource = hasTranscriptSource(records, startMs, endMs) ||
+            (hasResult && AiAnalysisRepository.hasSavedSourceAvailable(
+                context, hourlyFile, startMs, endMs
+            ))
+        val pending = hasPendingTranscription(records, startMs, endMs)
+''', 'legacy rerun source')
+writeUtf8063(rerunFile063, rerun063)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1063)
+            output.versionName.set('0.7.63-debug')
+        }
+    }
+}
+
+if (!repoFile063.text.contains('buildSourceForRerun')) {
+    throw new GradleException('0.7.63 saved-source rerun recovery missing')
+}
+if (!workerFile063.text.contains('buildSourceForRerun(')) {
+    throw new GradleException('0.7.63 worker rerun recovery missing')
+}
+if (!actionsFile063.text.contains('hasSavedSourceAvailable(')) {
+    throw new GradleException('0.7.63 notebook availability fix missing')
+}

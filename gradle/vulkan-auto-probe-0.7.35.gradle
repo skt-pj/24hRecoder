@@ -1,0 +1,9 @@
+// One-button diagnostic build. Keep the 0.7.34 instrumentation and only advance the APK version.
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1035)
+            output.versionName.set('0.7.35-debug')
+        }
+    }
+}

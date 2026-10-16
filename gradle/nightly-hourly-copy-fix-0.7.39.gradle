@@ -1,0 +1,100 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8039Copy = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8039Copy = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce039Copy = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.39 copy fix ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// Settings: remove the remaining per-utterance / five-minute wording and prevent the legacy
+// re-register button from immediately resurrecting daytime automatic Whisper work.
+def modelFile039 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/WhisperModelSettingsCard.kt')
+def model039 = readUtf8039Copy(modelFile039)
+model039 = replaceOnce039Copy(
+        model039,
+        'import com.sktpj.recorder24h.transcription.LiveTranscriptionSettings\n',
+        'import com.sktpj.recorder24h.transcription.LiveTranscriptionSettings\nimport com.sktpj.recorder24h.transcription.NightlyHourlyTranscriptionScheduler\n',
+        'nightly model settings import')
+model039 = model039.replace('Text("ライブ文字起こしモデル"', 'Text("30秒暫定文字起こしモデル"')
+model039 = model039.replace(
+        '"リアルタイムの発話ごとの認識に使うWhisperモデルです。5分後の確定・通常文字起こしモデルとは独立して選択します。"',
+        '"録音中の30秒暫定文字起こしに使うWhisperモデルです。夜間確定・手動文字起こしモデルとは独立して選択します。"')
+model039 = model039.replace('"ライブを${spec.label}に変更しました"', '"30秒暫定を${spec.label}に変更しました"')
+model039 = model039.replace('"ライブモデル: 準備済み"', '"30秒暫定モデル: 準備済み"')
+model039 = model039.replace('"ライブモデル: 取得中 / 未完了"', '"30秒暫定モデル: 取得中 / 未完了"')
+model039 = model039.replace('"ライブモデル: 未取得"', '"30秒暫定モデル: 未取得"')
+model039 = model039.replace('"${liveSelected?.label ?: "ライブモデル"}のダウンロードを開始します"', '"${liveSelected?.label ?: "30秒暫定モデル"}のダウンロードを開始します"')
+model039 = model039.replace('Text("ライブモデルをダウンロード")', 'Text("30秒暫定モデルをダウンロード")')
+model039 = model039.replace(
+        '"録音中のモデル変更は次の5分セグメント境界からライブ処理へ反映します。モデルを分けても自動フォールバックは行いません。"',
+        '"録音中のモデル変更は次の内部録音セグメント境界から30秒暫定処理へ反映します。モデルを分けても自動フォールバックは行いません。"')
+model039 = model039.replace('Text("5分後の確定・通常文字起こしモデル"', 'Text("夜間確定・手動文字起こしモデル"')
+model039 = model039.replace(
+        '"5分後の確定文字起こし、自動文字起こしと「この音声を再文字起こし」で使うモデルです。ライブモデル・モデル比較とは別です。"',
+        '"前日分を夜間に確定するときと「この音声を再文字起こし」で使うモデルです。30秒暫定モデル・モデル比較とは別です。"')
+model039 = replaceOnce039Copy(
+        model039,
+'''                            val count = TranscriptionScheduler.enqueueExisting(context)
+                            Toast.makeText(
+                                context,
+                                "自動処理対象・別モデル音声を${count}件再登録しました",
+                                Toast.LENGTH_SHORT
+                            ).show()
+''',
+'''                            val count = NightlyHourlyTranscriptionScheduler.stageRetainedUntranscribed(context)
+                            Toast.makeText(
+                                context,
+                                "未文字起こし音声を${count}件、夜間確定待ちへ再登録しました",
+                                Toast.LENGTH_SHORT
+                            ).show()
+''',
+        'nightly re-register action')
+model039 = model039.replace('Text("自動処理対象・別モデル音声を再登録")', 'Text("未文字起こし音声を夜間確定待ちへ再登録")')
+writeUtf8039Copy(modelFile039, model039)
+
+// Queue copy must describe the new queue policy, not the retired "full streaming" mode.
+def queueFile039 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/UnifiedQueueScreen.kt')
+def queue039 = readUtf8039Copy(queueFile039)
+queue039 = queue039.replace(
+        '"完全ストリーミング中に通常キューを止めたい場合は一時停止してください。"',
+        '"夜間確定・手動再文字起こしのキューを止めたい場合は一時停止してください。30秒暫定表示は継続します。"')
+queue039 = queue039.replace(
+'''private fun transcriptionQueueSourceLabel(record: SegmentRecord): String =
+    if (record.reason.orEmpty().startsWith("MANUAL_")) "ユーザー追加" else "自動追加"
+''',
+'''private fun transcriptionQueueSourceLabel(record: SegmentRecord): String = when {
+    record.reason == "NIGHTLY_HOURLY_WORK_ENQUEUED" -> "夜間確定"
+    record.reason.orEmpty().startsWith("MANUAL_") -> "ユーザー追加"
+    else -> "自動追加"
+}
+''')
+writeUtf8039Copy(queueFile039, queue039)
+
+// Detail/status copy generated from the older UI still names the retired five-minute canonical
+// policy. Keep "5分" only where it truthfully describes the physical recording file boundary.
+def mainFile039Copy = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+def main039Copy = readUtf8039Copy(mainFile039Copy)
+[
+    '5分確定待ち': '夜間確定待ち',
+    '5分確定登録中': '夜間確定登録中',
+    '5分確定処理中': '夜間確定処理中',
+    '5分確定再試行待ち': '夜間確定再試行待ち',
+    '5分確定済み': '確定済み',
+    '5分確定失敗': '夜間確定失敗'
+].each { before, after -> main039Copy = main039Copy.replace(before, after) }
+writeUtf8039Copy(mainFile039Copy, main039Copy)
+
+if (modelFile039.text.contains('5分後の確定')) {
+    throw new GradleException('0.7.39 stale five-minute model copy remains')
+}
+if (queueFile039.text.contains('完全ストリーミング中')) {
+    throw new GradleException('0.7.39 stale full-streaming queue copy remains')
+}
+if (mainFile039Copy.text.contains('5分確定待ち')) {
+    throw new GradleException('0.7.39 stale five-minute status copy remains')
+}

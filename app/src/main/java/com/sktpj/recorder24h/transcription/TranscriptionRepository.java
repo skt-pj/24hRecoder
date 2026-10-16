@@ -2,6 +2,8 @@ package com.sktpj.recorder24h.transcription;
 
 import android.content.Context;
 
+import com.sktpj.recorder24h.ai.AiAnalysisScheduler;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -35,6 +37,14 @@ public final class TranscriptionRepository {
     }
 
     public static boolean isCurrentEngine(Context context, String segmentId, String engineId) {
+        // A live-owned segment bypasses the normal queue only when the user explicitly
+        // disabled the five-minute final pass for that frozen segment. If finalization is ON, the
+        // normal/final model is intentionally independent from the live model and must run.
+        if (FullStreamingStateStore.isOwned(context, segmentId)
+                && (!LiveSegmentPolicyStore.isFiveMinuteFinalEnabled(context, segmentId)
+                    || !LiveTranscriptionSettings.isFiveMinuteFinalEnabled(context))) {
+            return true;
+        }
         File file = fileFor(context, segmentId);
         if (!file.isFile()) {
             return false;
@@ -89,6 +99,46 @@ public final class TranscriptionRepository {
             if (!temp.renameTo(target)) {
                 throw new IllegalStateException("Unable to finalize transcript file");
             }
+        }
+
+        // Full-streaming live edits can happen before the five-minute transcript exists. Once the
+        // authoritative transcript is durable, bind those rolling live rows to canonical chunk
+        // edit keys and apply pending text/speaker/delete operations.
+        applyPendingLiveEdits(context, segmentId);
+        if (FullStreamingStateStore.isOwned(context, segmentId)
+                && LiveSegmentPolicyStore.isFiveMinuteFinalEnabled(context, segmentId)) {
+            FullStreamingStateStore.markFinal(context, segmentId, model);
+        }
+
+        // AI inference is never run here. This only wakes semantic AI queue items whose target
+        // period overlaps the transcript that just became durable.
+        try {
+            AiAnalysisScheduler.wakeWaitingTargets(context, segmentId);
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private static void applyPendingLiveEdits(Context context, String segmentId) {
+        if (!FullStreamingStateStore.isOwned(context, segmentId)) return;
+        File ownership = new File(context.getFilesDir(),
+                "metadata/full-streaming/" + safeSegmentId(segmentId) + ".json");
+        if (!ownership.isFile()) return;
+        try (FileInputStream input = new FileInputStream(ownership);
+             InputStreamReader reader = new InputStreamReader(input, StandardCharsets.UTF_8)) {
+            StringBuilder json = new StringBuilder((int) Math.min(ownership.length(), 32 * 1024L));
+            char[] buffer = new char[4096];
+            int read;
+            while ((read = reader.read(buffer)) >= 0) {
+                if (read > 0) json.append(buffer, 0, read);
+            }
+            JSONObject row = new JSONObject(json.toString());
+            long startedAtMs = row.optLong("startedAtMs", 0L);
+            long endedAtMs = row.optLong("endedAtMs", startedAtMs);
+            if (startedAtMs > 0L) {
+                FullStreamingStateStore.bindAndApplyRecentEditsToSegment(
+                        context, segmentId, startedAtMs, Math.max(startedAtMs, endedAtMs));
+            }
+        } catch (Exception ignored) {
         }
     }
 

@@ -1,0 +1,54 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8059n = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8059n = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce059n = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.59 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// All historical native patches have already run by the time this script is applied. Change only
+// FetchContent transport for the exact same pinned revisions so CI does not depend on GitHub's
+// anonymous codeload archive quota. Dependency versions/revisions are unchanged.
+def cmakeFile059n = rootProject.file('app/src/main/cpp/CMakeLists.txt')
+def cmake059n = readUtf8059n(cmakeFile059n)
+cmake059n = replaceOnce059n(cmake059n,
+'''FetchContent_Declare(
+        spirv_headers_source
+        URL https://github.com/KhronosGroup/SPIRV-Headers/archive/ad9184e76a66b1001c29db9b0a3e87f646c64de0.tar.gz)''',
+'''FetchContent_Declare(
+        spirv_headers_source
+        GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Headers.git
+        GIT_TAG ad9184e76a66b1001c29db9b0a3e87f646c64de0
+        GIT_PROGRESS FALSE)''',
+        'SPIRV-Headers transport')
+cmake059n = replaceOnce059n(cmake059n,
+'''FetchContent_Declare(
+        vulkan_headers_source
+        URL https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.352.tar.gz)''',
+'''FetchContent_Declare(
+        vulkan_headers_source
+        GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
+        GIT_TAG v1.4.352
+        GIT_SHALLOW TRUE
+        GIT_PROGRESS FALSE)''',
+        'Vulkan-Headers transport')
+cmake059n = replaceOnce059n(cmake059n,
+'''FetchContent_Declare(
+        whisper_cpp
+        URL https://github.com/ggml-org/whisper.cpp/archive/5a80d0ad900ae2fd0dcb3bc2a38cafbb25e30246.tar.gz)''',
+'''FetchContent_Declare(
+        whisper_cpp
+        GIT_REPOSITORY https://github.com/ggml-org/whisper.cpp.git
+        GIT_TAG 5a80d0ad900ae2fd0dcb3bc2a38cafbb25e30246
+        GIT_PROGRESS FALSE)''',
+        'whisper.cpp transport')
+writeUtf8059n(cmakeFile059n, cmake059n)
+
+if (!cmakeFile059n.text.contains('GIT_TAG 5a80d0ad900ae2fd0dcb3bc2a38cafbb25e30246')) {
+    throw new GradleException('0.7.59 pinned whisper.cpp revision changed unexpectedly')
+}

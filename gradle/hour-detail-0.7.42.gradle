@@ -1,0 +1,243 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8042h = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8042h = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce042h = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) throw new GradleException("0.7.42 hour detail ${label}: expected exactly one match")
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+def mainFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+def main = readUtf8042h(mainFile)
+
+// History cards are one-hour groups since 0.7.39, but their click still carried only the newest
+// five-minute representative into the old segment detail. Keep segment detail for Queue, and mark
+// History-originated navigation so it opens a full-hour detail instead.
+main = replaceOnce042h(main,
+        '    var selectedId by remember { mutableStateOf<String?>(null) }\n    var records by remember { mutableStateOf<List<SegmentRecord>>(emptyList()) }\n',
+        '    var selectedId by remember { mutableStateOf<String?>(null) }\n    var selectedFromHistory by remember { mutableStateOf(false) }\n    var records by remember { mutableStateOf<List<SegmentRecord>>(emptyList()) }\n',
+        'history navigation state')
+main = replaceOnce042h(main,
+        '    BackHandler(enabled = selected != null) { selectedId = null }\n',
+'''    BackHandler(enabled = selected != null) {
+        selectedId = null
+        selectedFromHistory = false
+    }
+''', 'back clears history detail state')
+main = replaceOnce042h(main,
+        '                            IconButton(onClick = { selectedId = null }) {\n',
+'''                            IconButton(onClick = {
+                                selectedId = null
+                                selectedFromHistory = false
+                            }) {
+''', 'app bar back clears history detail state')
+main = replaceOnce042h(main,
+        '                        selected != null -> RecordDetailScreen(selected, liveFinals)\n',
+'''                        selected != null && selectedFromHistory ->
+                            HourRecordDetailScreen(selected, records, liveFinals)
+                        selected != null -> RecordDetailScreen(selected, liveFinals)
+''', 'hour detail route')
+main = replaceOnce042h(main,
+'''                            records = records,
+                            onSelect = { selectedId = it.segmentId },
+                            onRemove = { record ->
+''',
+'''                            records = records,
+                            onSelect = {
+                                selectedFromHistory = false
+                                selectedId = it.segmentId
+                            },
+                            onRemove = { record ->
+''', 'queue keeps five-minute segment detail')
+main = replaceOnce042h(main,
+'''                            onFilterChange = { historyFilter = it },
+                            onSelect = { selectedId = it.segmentId }
+''',
+'''                            onFilterChange = { historyFilter = it },
+                            onSelect = {
+                                selectedFromHistory = true
+                                selectedId = it.segmentId
+                            }
+''', 'history opens hour detail')
+
+// The representative segment is used only to identify which hour was tapped. Everything rendered
+// below is recomputed from all records in that hour. Five-minute M4A remains an internal durable
+// storage/recovery shard; it no longer truncates the user-facing Record Detail.
+def hourDetail = '''@Composable
+private fun HourRecordDetailScreen(
+    representative: SegmentRecord,
+    records: List<SegmentRecord>,
+    liveFinals: List<FullStreamingStateStore.RecentFinal>
+) {
+    val hourStart = hourStartMs(representative.sortTimeMs)
+    val hourEnd = hourStart + 60L * 60L * 1000L
+    val hourRecords = remember(records, hourStart) {
+        records
+            .filter { it.sortTimeMs >= hourStart && it.sortTimeMs < hourEnd }
+            .sortedBy { it.sortTimeMs }
+    }
+    val canonicalIntervals = remember(hourRecords) {
+        hourRecords.filter { it.hasTranscript }.map { record ->
+            val start = record.startedAtMs
+            val end = if (record.endedAtMs > start) record.endedAtMs
+                else start + 5L * 60L * 1000L
+            start to end
+        }
+    }
+    val provisionalByRecord = remember(hourRecords, liveFinals) {
+        hourRecords.associate { record ->
+            record.segmentId to provisionalFinalsForRecord(record, liveFinals)
+        }
+    }
+    val assignedProvisionalIds = remember(provisionalByRecord) {
+        provisionalByRecord.values.flatten().map { it.id }.toSet()
+    }
+    val trailingProvisional = remember(liveFinals, hourStart, hourEnd, canonicalIntervals, assignedProvisionalIds) {
+        liveFinals.filter { item ->
+            item.id !in assignedProvisionalIds &&
+                item.endAtMs > hourStart && item.startAtMs < hourEnd &&
+                canonicalIntervals.none { (start, end) ->
+                    item.endAtMs > start - 2_500L && item.startAtMs < end + 2_500L
+                }
+        }
+    }
+    val audioRecords = remember(hourRecords) {
+        hourRecords.filter { it.audioAvailable && it.audioPath != null }
+    }
+    val canonicalCount = hourRecords.count { it.hasTranscript }
+    val corruptCount = hourRecords.count { it.status == "CORRUPT" }
+    val hasConversation = hourRecords.any { it.hasTranscript } ||
+        provisionalByRecord.values.any { it.isNotEmpty() } || trailingProvisional.isNotEmpty()
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            ) {
+                Column(
+                    Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(formatHourRange(hourStart), style = MaterialTheme.typography.headlineMedium)
+                    Text(
+                        formatDay(hourStart),
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
+                    )
+                    Text(
+                        "この画面は1時間分の記録です。5分M4Aは内部の保存・復旧単位として扱います。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+        }
+
+        item {
+            Card {
+                Column(
+                    Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text("会話ログ（1時間）", style = MaterialTheme.typography.titleLarge)
+                    if (!hasConversation) {
+                        Text(
+                            if (corruptCount > 0) "この1時間には確認できない録音区間があります。"
+                            else "この1時間の確定文字起こしは夜間処理待ちです。",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    hourRecords.forEach { record ->
+                        when {
+                            record.hasTranscript && record.transcriptChunks.isNotEmpty() -> {
+                                record.transcriptChunks.forEach { chunk ->
+                                    EditableTranscriptChunk(
+                                        record = record,
+                                        chunk = chunk,
+                                        timeLabel = transcriptChunkTimeLabel(record, chunk.startMs, chunk.endMs)
+                                    )
+                                }
+                            }
+                            record.hasTranscript && record.transcriptText != null -> {
+                                Text(
+                                    formatTimeRange(record),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                EditableWholeTranscript(record)
+                            }
+                            else -> {
+                                provisionalByRecord[record.segmentId].orEmpty().forEach { item ->
+                                    EditableLiveSegmentedFinalCard(item)
+                                }
+                            }
+                        }
+                    }
+                    trailingProvisional.forEach { item ->
+                        EditableLiveSegmentedFinalCard(item)
+                    }
+                }
+            }
+        }
+
+        if (audioRecords.isNotEmpty()) {
+            item {
+                Text(
+                    "録音データ（1時間）",
+                    style = MaterialTheme.typography.titleLarge
+                )
+            }
+            audioRecords.forEach { record ->
+                item(key = "hour-audio-${record.segmentId}") {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(formatTimeRange(record), style = MaterialTheme.typography.labelLarge)
+                        AudioPlaybackCard(record)
+                    }
+                }
+            }
+        }
+
+        item {
+            Card {
+                Column(
+                    Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("1時間の状態", style = MaterialTheme.typography.titleLarge)
+                    InfoRow("範囲", formatHourRange(hourStart))
+                    InfoRow("内部保存", "${hourRecords.size}区間")
+                    InfoRow("確定", "${canonicalCount}区間")
+                    InfoRow("音声あり", "${audioRecords.size}区間")
+                    if (corruptCount > 0) InfoRow("破損", "${corruptCount}区間")
+                }
+            }
+        }
+    }
+}
+
+'''
+main = replaceOnce042h(main,
+        '@Composable\nprivate fun AudioPlaybackCard(record: SegmentRecord) {\n',
+        hourDetail + '@Composable\nprivate fun AudioPlaybackCard(record: SegmentRecord) {\n',
+        'insert full-hour detail')
+writeUtf8042h(mainFile, main)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1042)
+            output.versionName.set('0.7.42-debug')
+        }
+    }
+}
+
+if (!mainFile.text.contains('HourRecordDetailScreen(selected, records, liveFinals)')) throw new GradleException('0.7.42 hour detail route missing')
+if (!mainFile.text.contains('会話ログ（1時間）')) throw new GradleException('0.7.42 hour detail UI missing')

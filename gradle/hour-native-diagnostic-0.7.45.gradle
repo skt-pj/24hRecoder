@@ -1,0 +1,37 @@
+import java.nio.charset.StandardCharsets
+
+def hourlyFile045n = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/HourlyCanonicalTranscriber.java')
+def hourly045n = new String(hourlyFile045n.bytes, StandardCharsets.UTF_8)
+def old045n = '''                String raw = LocalWhisperEngine.nativeTranscribeDetailed(
+                        model.getAbsolutePath(), compacted,
+                        new int[]{0}, new int[]{compactDurationMs},
+                        "ja", Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors())),
+                        useGpu, cancellationToken);
+'''
+def new045n = '''                String diagnosticPath = PostprocessAsrDiagnostics.nativeBreadcrumbPath(
+                        context, "postprocess_asr_hour");
+                PostprocessAsrDiagnostics.mark(context, "HOURLY_ONE_SHOT_NATIVE_BEGIN", hourKey,
+                        useGpu ? "whisper-vulkan" : "whisper-cpu", modelId,
+                        new JSONObject().put("speechInputMs", speechInputMs)
+                                .put("sourceAudioMs", sourceAudioMs)
+                                .put("removedSilenceMs", removedSilenceMs));
+                String raw = LocalWhisperEngine.nativeTranscribeDetailed(
+                        model.getAbsolutePath(), compacted,
+                        new int[]{0}, new int[]{compactDurationMs},
+                        "ja", Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors())),
+                        useGpu, cancellationToken, diagnosticPath);
+                PostprocessAsrDiagnostics.mark(context, "HOURLY_ONE_SHOT_NATIVE_END", hourKey,
+                        useGpu ? "whisper-vulkan" : "whisper-cpu", modelId, null);
+'''
+int first045n = hourly045n.indexOf(old045n)
+int last045n = hourly045n.lastIndexOf(old045n)
+if (first045n < 0 || first045n != last045n) {
+    throw new GradleException('0.7.45 hourly native diagnostic call: expected exactly one match')
+}
+hourly045n = hourly045n.substring(0, first045n) + new045n +
+        hourly045n.substring(first045n + old045n.length())
+hourlyFile045n.setText(hourly045n, 'UTF-8')
+
+if (!hourlyFile045n.text.contains('HOURLY_ONE_SHOT_NATIVE_BEGIN')) {
+    throw new GradleException('0.7.45 hourly native diagnostic patch missing')
+}

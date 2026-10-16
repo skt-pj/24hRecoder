@@ -42,7 +42,10 @@ public final class RecorderHealth {
                     heartbeatAge, audioAge, segmentAge);
         }
         if ("RECOVERING".equals(rawState)) {
-            return neutral("RECOVERING", "録音を復旧中", "録音サービスの復旧状態を確認しています。", true,
+            String detail = isBlank(error)
+                    ? "録音サービスを自動再試行しています。"
+                    : "自動再試行中: " + error;
+            return neutral("RECOVERING", "録音を復旧中", detail, true,
                     heartbeatAge, audioAge, segmentAge);
         }
         if ("STARTING".equals(rawState)) {

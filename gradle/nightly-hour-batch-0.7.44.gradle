@@ -1,0 +1,609 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8044 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8044 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce044 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.44 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+def replaceBetween044 = { String source, String startMarker, String endMarker, String replacement, String label ->
+    int start = source.indexOf(startMarker)
+    if (start < 0) throw new GradleException("0.7.44 ${label}: start marker missing")
+    int end = source.indexOf(endMarker, start)
+    if (end < 0) throw new GradleException("0.7.44 ${label}: end marker missing")
+    source.substring(0, start) + replacement + source.substring(end)
+}
+
+// -----------------------------------------------------------------------------
+// Nightly automatic canonical work is a one-hour batch. Five-minute M4A files remain only the
+// durable storage/recovery units inside that batch. Queue insertion happens once per local hour;
+// the postprocess runner then drains all queued subsegments from that hour while it owns the gate.
+// -----------------------------------------------------------------------------
+def nightlyFile044 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/NightlyHourlyTranscriptionScheduler.java')
+def nightly044 = readUtf8044(nightlyFile044)
+
+nightly044 = replaceOnce044(nightly044,
+'''    public static final String ENQUEUED_REASON = "NIGHTLY_HOURLY_WORK_ENQUEUED";
+    public static final int NIGHT_START_HOUR_LOCAL = 2;
+''',
+'''    public static final String ENQUEUED_REASON = "NIGHTLY_HOURLY_WORK_ENQUEUED";
+    public static final String BATCH_REASON_PREFIX = "NIGHTLY_HOURLY_BATCH_";
+    public static final int NIGHT_START_HOUR_LOCAL = 2;
+''', 'nightly batch reason constant')
+
+nightly044 = replaceOnce044(nightly044,
+'''    public static boolean isCharging(Context context) {
+        BatteryManager battery = context.getApplicationContext().getSystemService(BatteryManager.class);
+        return battery != null && battery.isCharging();
+    }
+
+''',
+'''    public static boolean isCharging(Context context) {
+        BatteryManager battery = context.getApplicationContext().getSystemService(BatteryManager.class);
+        return battery != null && battery.isCharging();
+    }
+
+    public static String batchReason(String hourKey) {
+        return BATCH_REASON_PREFIX + (hourKey == null ? "unknown" : hourKey) + "_WORK_ENQUEUED";
+    }
+
+''', 'nightly batch reason helper')
+
+def newEnqueuePreviousDayBatches044 = '''    static int enqueuePreviousDayBatches(Context context) {
+        Context app = context.getApplicationContext();
+        long todayStartMs = startOfLocalDay(System.currentTimeMillis());
+        List<SegmentRecord> eligible = new ArrayList<>();
+        for (SegmentRecord record : SegmentHistoryRepository.load(app)) {
+            if (!record.getAudioAvailable() || record.getHasTranscript()) continue;
+            if (record.getSortTimeMs() <= 0L || record.getSortTimeMs() >= todayStartMs) continue;
+            if (record.getStatus().equals("CORRUPT")) continue;
+            if ("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus())
+                    || "TRANSCRIBING".equals(record.getStatus())) continue;
+            String reason = record.getReason();
+            if (reason != null && reason.startsWith("MANUAL_")) continue;
+            eligible.add(record);
+        }
+        eligible.sort(Comparator.comparingLong(SegmentRecord::getSortTimeMs));
+
+        String modelId = WhisperModelManager.selectedModelId(app);
+        TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(app);
+        String pipelineReason = TranscriptionPipelineSettings.unavailableReason(app, pipeline, modelId);
+        if (pipelineReason != null) {
+            if ("SILERO_VAD_MODEL_MISSING".equals(pipelineReason)
+                    || "LOCAL_WHISPER_MODEL_MISSING".equals(pipelineReason)) {
+                WhisperModelManager.enqueueModelDownload(app, modelId);
+            }
+            try {
+                AppLogger.event(app, "NIGHTLY_HOUR_BATCH_PIPELINE_NOT_READY", new JSONObject()
+                        .put("eligibleSegmentCount", eligible.size())
+                        .put("reason", pipelineReason)
+                        .put("batchUnitMinutes", 60)
+                        .put("storageSegmentMinutes", 5));
+            } catch (Exception ignored) {}
+            return 0;
+        }
+
+        Map<String, List<SegmentRecord>> hours = new LinkedHashMap<>();
+        for (SegmentRecord record : eligible) {
+            String hourKey = localHourKey(record.getSortTimeMs());
+            hours.computeIfAbsent(hourKey, ignored -> new ArrayList<>()).add(record);
+        }
+
+        long baseQueueAt = System.currentTimeMillis();
+        int batchCount = 0;
+        int segmentCount = 0;
+        int hourOrder = 0;
+        JSONArray hourSummary = new JSONArray();
+        for (Map.Entry<String, List<SegmentRecord>> entry : hours.entrySet()) {
+            String hourKey = entry.getKey();
+            List<SegmentRecord> hourRecords = entry.getValue();
+            hourRecords.sort(Comparator.comparingLong(SegmentRecord::getSortTimeMs));
+            int queuedInHour = 0;
+            long hourQueueAt = baseQueueAt + (hourOrder * 10_000L);
+            for (SegmentRecord record : hourRecords) {
+                String audioPath = record.getAudioPath();
+                File audio = audioPath == null ? null : new File(audioPath);
+                if (audio == null || !audio.isFile()) continue;
+                SegmentRepository.appendWithoutNotify(
+                        app,
+                        record.getSegmentId(),
+                        audio,
+                        record.getStartedAtMs(),
+                        hourQueueAt + queuedInHour,
+                        "QUEUED",
+                        batchReason(hourKey));
+                queuedInHour++;
+                segmentCount++;
+            }
+            if (queuedInHour <= 0) continue;
+            batchCount++;
+            hourOrder++;
+            try {
+                AppLogger.event(app, "NIGHTLY_HOUR_BATCH_ENQUEUED", new JSONObject()
+                        .put("hour", hourKey)
+                        .put("segmentCount", queuedInHour)
+                        .put("batchUnitMinutes", 60)
+                        .put("storageSegmentMinutes", 5)
+                        .put("requiresCharging", true));
+            } catch (Exception ignored) {}
+            hourSummary.put(new JSONObject()
+                    .put("hour", hourKey)
+                    .put("segmentCount", queuedInHour));
+        }
+
+        if (segmentCount > 0) {
+            // Exactly one generic drain is needed. The drain worker owns an entire hourly batch
+            // before requesting a continuation for the next hour.
+            TranscriptionScheduler.ensureDrainScheduled(app);
+        }
+        try {
+            AppLogger.event(app, "NIGHTLY_HOURLY_BATCH_ENQUEUED", new JSONObject()
+                    .put("eligibleSegmentCount", eligible.size())
+                    .put("enqueuedSegmentCount", segmentCount)
+                    .put("hourBatchCount", batchCount)
+                    .put("hours", hourSummary)
+                    .put("batchUnitMinutes", 60)
+                    .put("storageSegmentMinutes", 5)
+                    .put("automaticCpuFallback", false)
+                    .put("requiresCharging", true));
+        } catch (Exception ignored) {}
+        return batchCount;
+    }
+
+'''
+nightly044 = replaceBetween044(
+        nightly044,
+        '    static int enqueuePreviousDayBatches(Context context) {',
+        '    private static boolean hasPreviousDayPending(Context context) {',
+        newEnqueuePreviousDayBatches044,
+        'replace nightly segment enqueue with hourly batch enqueue')
+writeUtf8044(nightlyFile044, nightly044)
+
+// -----------------------------------------------------------------------------
+// The legacy five-minute-final switch must never filter a nightly hourly batch merely because the
+// durable storage unit is still a five-minute segment.
+// -----------------------------------------------------------------------------
+def schedulerFile044 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionScheduler.java')
+def scheduler044 = readUtf8044(schedulerFile044)
+scheduler044 = replaceOnce044(scheduler044,
+        '        if (NightlyHourlyTranscriptionScheduler.ENQUEUED_REASON.equals(reason)) return false;\n',
+        '        if (NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(record)) return false;\n',
+        'nightly batch bypass of legacy five-minute policy')
+writeUtf8044(schedulerFile044, scheduler044)
+
+// -----------------------------------------------------------------------------
+// A single WorkManager drain invocation owns one local-hour nightly batch and processes its
+// underlying storage segments sequentially. Manual/non-nightly items remain one-item drains.
+// -----------------------------------------------------------------------------
+def workerFile044 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionWorker.java')
+def worker044 = readUtf8044(workerFile044)
+worker044 = replaceOnce044(worker044,
+'''            SegmentRecord next = nextQueuedRecord(context);
+            if (next == null) {
+                AppLogger.event(context, "TRANSCRIPTION_DRAIN_WORKER_EMPTY");
+                return Result.success();
+            }
+            processOne(context, next);
+            return Result.success();
+''',
+'''            SegmentRecord next = nextQueuedRecord(context);
+            if (next == null) {
+                AppLogger.event(context, "TRANSCRIPTION_DRAIN_WORKER_EMPTY");
+                return Result.success();
+            }
+            if (NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(next)) {
+                List<SegmentRecord> batch = queuedNightlyHourBatch(context, next);
+                String hourKey = NightlyHourlyTranscriptionScheduler.localHourKey(batchSortTime(next));
+                try {
+                    AppLogger.event(context, "NIGHTLY_HOUR_BATCH_STARTED", new JSONObject()
+                            .put("hour", hourKey)
+                            .put("segmentCount", batch.size())
+                            .put("batchUnitMinutes", 60)
+                            .put("requiresCharging", true));
+                } catch (Exception ignored) {}
+                int processed = 0;
+                for (SegmentRecord item : batch) {
+                    if (TranscriptionScheduler.isQueuePaused(context)) break;
+                    if (!NightlyHourlyTranscriptionScheduler.isCharging(context)) break;
+                    processOne(context, item);
+                    processed++;
+                }
+                try {
+                    AppLogger.event(context, "NIGHTLY_HOUR_BATCH_FINISHED", new JSONObject()
+                            .put("hour", hourKey)
+                            .put("plannedSegmentCount", batch.size())
+                            .put("processedSegmentCount", processed)
+                            .put("heldForCharging", !NightlyHourlyTranscriptionScheduler.isCharging(context))
+                            .put("queuePaused", TranscriptionScheduler.isQueuePaused(context)));
+                } catch (Exception ignored) {}
+            } else {
+                processOne(context, next);
+            }
+            return Result.success();
+''', 'hour batch drain')
+
+worker044 = replaceOnce044(worker044,
+        '    private SegmentRecord nextQueuedRecord(Context context) {\n',
+'''    private List<SegmentRecord> queuedNightlyHourBatch(Context context, SegmentRecord first) {
+        String hourKey = NightlyHourlyTranscriptionScheduler.localHourKey(batchSortTime(first));
+        List<SegmentRecord> batch = new ArrayList<>();
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (!("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus()))) continue;
+            if (!record.getAudioAvailable()) continue;
+            if (!NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(record)) continue;
+            if (!hourKey.equals(NightlyHourlyTranscriptionScheduler.localHourKey(batchSortTime(record)))) continue;
+            batch.add(record);
+        }
+        batch.sort(Comparator.comparingLong(this::batchSortTime));
+        return batch;
+    }
+
+    private long batchSortTime(SegmentRecord record) {
+        if (record == null) return 0L;
+        if (record.getSortTimeMs() > 0L) return record.getSortTimeMs();
+        if (record.getStartedAtMs() > 0L) return record.getStartedAtMs();
+        return queueEnqueuedAt(record);
+    }
+
+    private SegmentRecord nextQueuedRecord(Context context) {
+''', 'hour batch helpers')
+writeUtf8044(workerFile044, worker044)
+
+// -----------------------------------------------------------------------------
+// Reordering must keep NIGHTLY_HOURLY_* lineage. 0.7.42 charging gating keys off this lineage;
+// rewriting an hourly batch to LOCAL_PRIORITY_* would otherwise let it run while unplugged.
+// -----------------------------------------------------------------------------
+def priorityFile044 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionPriorityController.java')
+def priority044 = readUtf8044(priorityFile044)
+priority044 = replaceOnce044(priority044,
+'''            boolean manual = record.getReason() != null && record.getReason().startsWith("MANUAL_");
+            String reason = manual
+                    ? "MANUAL_PRIORITY_WORK_ENQUEUED"
+                    : "LOCAL_PRIORITY_WORK_ENQUEUED";
+''',
+'''            boolean manual = record.getReason() != null && record.getReason().startsWith("MANUAL_");
+            boolean nightly = NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(record);
+            String reason = manual
+                    ? "MANUAL_PRIORITY_WORK_ENQUEUED"
+                    : nightly ? "NIGHTLY_HOURLY_PRIORITY_WORK_ENQUEUED"
+                    : "LOCAL_PRIORITY_WORK_ENQUEUED";
+''', 'preserve nightly charging lineage on priority change')
+writeUtf8044(priorityFile044, priority044)
+
+// -----------------------------------------------------------------------------
+// Queue UI: one automatic nightly row per local hour. The five-minute files are not queue rows;
+// they are hidden durable subsegments of the hourly batch. Priority and removal act on the batch.
+// -----------------------------------------------------------------------------
+def queueUiFile044 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/UnifiedQueueScreen.kt')
+def queueUi044 = readUtf8044(queueUiFile044)
+queueUi044 = replaceOnce044(queueUi044,
+        'import java.util.Date\nimport java.util.Locale\n',
+        'import java.util.Calendar\nimport java.util.Date\nimport java.util.Locale\n',
+        'queue Calendar import')
+
+def newTranscriptionQueueTab044 = '''@Composable
+private fun TranscriptionQueueTab(
+    records: List<SegmentRecord>,
+    onSelect: (SegmentRecord) -> Unit,
+    onRemove: (SegmentRecord) -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var queuePaused by remember { mutableStateOf(TranscriptionScheduler.isQueuePaused(context)) }
+    var selectedPriorityId by remember { mutableStateOf<String?>(null) }
+    var priorityRevision by remember { mutableIntStateOf(0) }
+    val groups = remember(records, priorityRevision) { buildTranscriptionQueueGroups(records) }
+
+    LaunchedEffect(groups) {
+        if (selectedPriorityId != null && groups.none { it.id == selectedPriorityId }) {
+            selectedPriorityId = null
+        }
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            queuePaused = withContext(Dispatchers.IO) { TranscriptionScheduler.isQueuePaused(context) }
+            delay(500L)
+        }
+    }
+
+    TranscriptionQueuePauseControls(
+        paused = queuePaused,
+        onToggle = {
+            val next = !queuePaused
+            queuePaused = next
+            scope.launch(Dispatchers.IO) {
+                TranscriptionScheduler.setQueuePaused(context, next)
+            }
+        }
+    )
+
+    if (groups.isEmpty()) {
+        EmptyQueue("文字起こしキューは空です")
+        return
+    }
+
+    val selectedIndex = groups.indexOfFirst { it.id == selectedPriorityId }
+    val selectedGroup = groups.getOrNull(selectedIndex)
+    val canMoveUp = selectedGroup != null && !selectedGroup.active &&
+        selectedIndex > 0 && !groups[selectedIndex - 1].active
+    val canMoveDown = selectedGroup != null && !selectedGroup.active &&
+        selectedIndex >= 0 && selectedIndex + 1 < groups.size && !groups[selectedIndex + 1].active
+
+    Column(Modifier.fillMaxSize()) {
+        PriorityControls(
+            selected = selectedGroup != null,
+            canMoveUp = canMoveUp,
+            canMoveDown = canMoveDown,
+            onMoveUp = {
+                val reordered = swapQueueGroup(groups, selectedIndex, selectedIndex - 1)
+                if (TranscriptionPriorityController.applyOrder(
+                        context,
+                        flattenQueueGroupIds(reordered)
+                    )
+                ) {
+                    priorityRevision++
+                }
+            },
+            onMoveDown = {
+                val reordered = swapQueueGroup(groups, selectedIndex, selectedIndex + 1)
+                if (TranscriptionPriorityController.applyOrder(
+                        context,
+                        flattenQueueGroupIds(reordered)
+                    )
+                ) {
+                    priorityRevision++
+                }
+            }
+        )
+
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(vertical = 4.dp)
+        ) {
+            itemsIndexed(groups, key = { _, item -> item.id }) { index, group ->
+                TranscriptionQueueGroupRow(
+                    group = group,
+                    priority = index + 1,
+                    selectedForPriority = group.id == selectedPriorityId,
+                    onPrioritySelect = {
+                        if (!group.active) {
+                            selectedPriorityId = if (selectedPriorityId == group.id) null else group.id
+                        }
+                    },
+                    onOpen = { onSelect(group.representative) },
+                    onRemove = {
+                        if (group.nightlyHour) {
+                            var removed = 0
+                            group.records.forEach { record ->
+                                val file = record.audioPath?.let { java.io.File(it) }
+                                if (TranscriptionScheduler.removeFromQueue(context, record.segmentId, file)) removed++
+                            }
+                            android.widget.Toast.makeText(
+                                context,
+                                "1時間バッチをキューから削除しました（${removed}件の保存音声は保持）",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        } else {
+                            onRemove(group.representative)
+                        }
+                    }
+                )
+                HorizontalDivider()
+            }
+        }
+    }
+}
+
+private data class TranscriptionQueueGroup(
+    val id: String,
+    val records: List<SegmentRecord>,
+    val nightlyHour: Boolean,
+    val hourStartMs: Long
+) {
+    val representative: SegmentRecord
+        get() = records.firstOrNull { it.status == "TRANSCRIBING" } ?: records.first()
+    val active: Boolean
+        get() = records.any { it.status == "TRANSCRIBING" }
+    val queueAtMs: Long
+        get() = records.minOf { queueTimestamp(it) }
+}
+
+private fun buildTranscriptionQueueGroups(records: List<SegmentRecord>): List<TranscriptionQueueGroup> {
+    val queued = records.filter {
+        it.status == "QUEUED" || it.status == "RETRY_WAIT" || it.status == "TRANSCRIBING"
+    }
+    val hourly = linkedMapOf<Long, MutableList<SegmentRecord>>()
+    val standalone = mutableListOf<TranscriptionQueueGroup>()
+    queued.forEach { record ->
+        if (record.reason?.startsWith("NIGHTLY_HOURLY_") == true) {
+            val hourStart = localHourStart(record)
+            hourly.getOrPut(hourStart) { mutableListOf() }.add(record)
+        } else {
+            standalone += TranscriptionQueueGroup(
+                id = "segment:${record.segmentId}",
+                records = listOf(record),
+                nightlyHour = false,
+                hourStartMs = 0L
+            )
+        }
+    }
+    val groups = mutableListOf<TranscriptionQueueGroup>()
+    hourly.forEach { (hourStart, hourRecords) ->
+        groups += TranscriptionQueueGroup(
+            id = "night-hour:$hourStart",
+            records = hourRecords.sortedBy { queueTimestamp(it) },
+            nightlyHour = true,
+            hourStartMs = hourStart
+        )
+    }
+    groups += standalone
+    return groups.sortedWith(
+        compareBy<TranscriptionQueueGroup> { if (it.active) 0 else 1 }
+            .thenBy { it.queueAtMs }
+    )
+}
+
+private fun localHourStart(record: SegmentRecord): Long {
+    val source = when {
+        record.sortTimeMs > 0L -> record.sortTimeMs
+        record.startedAtMs > 0L -> record.startedAtMs
+        else -> record.stateChangedAtMs
+    }
+    return Calendar.getInstance().apply {
+        timeInMillis = source
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+}
+
+private fun queueTimestamp(record: SegmentRecord): Long =
+    if (record.queueEnqueuedAtMs > 0L) record.queueEnqueuedAtMs else record.stateChangedAtMs
+
+private fun swapQueueGroup(
+    source: List<TranscriptionQueueGroup>,
+    first: Int,
+    second: Int
+): List<TranscriptionQueueGroup> {
+    if (first !in source.indices || second !in source.indices) return source
+    val mutable = source.toMutableList()
+    val value = mutable[first]
+    mutable[first] = mutable[second]
+    mutable[second] = value
+    return mutable
+}
+
+private fun flattenQueueGroupIds(groups: List<TranscriptionQueueGroup>): List<String> =
+    groups.flatMap { group -> group.records.sortedBy { queueTimestamp(it) }.map { it.segmentId } }
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun TranscriptionQueueGroupRow(
+    group: TranscriptionQueueGroup,
+    priority: Int,
+    selectedForPriority: Boolean,
+    onPrioritySelect: () -> Unit,
+    onOpen: () -> Unit,
+    onRemove: () -> Unit
+) {
+    var menuExpanded by remember(group.id) { mutableStateOf(false) }
+    val record = group.representative
+    val status = if (group.nightlyHour) {
+        when {
+            group.records.any { it.status == "TRANSCRIBING" } -> "文字起こし中・夜間確定"
+            group.records.any { it.status == "RETRY_WAIT" } -> "再試行待ち・夜間確定"
+            else -> "実行待ち・夜間確定"
+        }
+    } else {
+        transcriptionQueueStatusLabel(record)
+    }
+
+    Box {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = onOpen,
+                    onLongClick = { if (!group.active) menuExpanded = true }
+                )
+                .padding(horizontal = 10.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            RadioButton(
+                selected = selectedForPriority,
+                onClick = onPrioritySelect,
+                enabled = !group.active
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (group.nightlyHour) formatNightlyHourBatch(group.hourStartMs)
+                    else formatQueueDateTime(record),
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1
+                )
+                Text(
+                    if (group.nightlyHour) "優先度 $priority • 1時間バッチ"
+                    else "優先度 $priority",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Text(
+                status,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
+
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text(if (group.nightlyHour) "1時間バッチをキューから削除" else "キューから削除") },
+                leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+                onClick = {
+                    menuExpanded = false
+                    onRemove()
+                }
+            )
+        }
+    }
+}
+
+private fun formatNightlyHourBatch(hourStartMs: Long): String {
+    val start = Calendar.getInstance().apply { timeInMillis = hourStartMs }
+    val end = Calendar.getInstance().apply {
+        timeInMillis = hourStartMs
+        add(Calendar.HOUR_OF_DAY, 1)
+    }
+    val startLabel = SimpleDateFormat("M/d HH:mm", Locale.JAPAN).format(Date(start.timeInMillis))
+    val endLabel = SimpleDateFormat("HH:mm", Locale.JAPAN).format(Date(end.timeInMillis))
+    return "$startLabel–$endLabel"
+}
+
+'''
+queueUi044 = replaceBetween044(
+        queueUi044,
+        '@Composable\nprivate fun TranscriptionQueueTab(',
+        '@Composable\nprivate fun TranscriptionQueuePauseControls(',
+        newTranscriptionQueueTab044,
+        'replace transcription queue with hourly grouped queue')
+queueUi044 = queueUi044.replace(
+        'if (paused) "通常文字起こしキュー: 一時停止中" else "通常文字起こしキュー: 実行中"',
+        'if (paused) "文字起こしキュー: 一時停止中" else "文字起こしキュー: 実行中"')
+queueUi044 = queueUi044.replace(
+        '"待機中の項目は保持します。実行中の通常文字起こしも中断して待機へ戻します。"',
+        '"夜間確定の1時間バッチと手動再文字起こしを保持して停止します。"')
+queueUi044 = queueUi044.replace(
+        '"完全ストリーミング中に通常キューを止めたい場合は一時停止してください。"',
+        '"夜間確定は1時間バッチで処理し、30秒暫定表示はこのキューとは独立して継続します。"')
+writeUtf8044(queueUiFile044, queueUi044)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1044)
+            output.versionName.set('0.7.44-debug')
+        }
+    }
+}
+
+if (!nightlyFile044.text.contains('NIGHTLY_HOUR_BATCH_ENQUEUED')) {
+    throw new GradleException('0.7.44 hourly batch scheduler missing')
+}
+if (!workerFile044.text.contains('NIGHTLY_HOUR_BATCH_STARTED')) {
+    throw new GradleException('0.7.44 hourly batch runner missing')
+}
+if (!priorityFile044.text.contains('NIGHTLY_HOURLY_PRIORITY_WORK_ENQUEUED')) {
+    throw new GradleException('0.7.44 nightly priority lineage missing')
+}
+if (!queueUiFile044.text.contains('1時間バッチ')) {
+    throw new GradleException('0.7.44 hourly queue UI missing')
+}

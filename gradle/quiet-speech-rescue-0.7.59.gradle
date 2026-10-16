@@ -1,0 +1,418 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8059 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8059 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce059 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.59 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// Quiet-speech front-end: keep the normal path unchanged, but allow a lower absolute activity
+// floor when speech remains clearly above the locally estimated noise floor. Only strong relative
+// separation gets the larger +18 dB rescue gain; low-SNR audio is still never positively boosted.
+def audioFile059 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/AudioPreprocessor.java')
+def audio059 = readUtf8059(audioFile059)
+audio059 = replaceOnce059(audio059,
+'''    private static final double TARGET_SPEECH_DBFS = -22.0;
+    private static final double MAX_GAIN_DB = 12.0;
+    private static final double MIN_GAIN_DB = -6.0;
+
+    // Energy-only speech proxy. Positive gain is suppressed when the estimated speech/noise
+    // separation is weak because gain cannot improve SNR and can make VAD hallucinate on noise.
+    private static final double MIN_ACTIVE_FRAME_DBFS = -50.0;
+    private static final double ACTIVE_OVER_NOISE_DB = 9.0;
+    private static final double MIN_SNR_FOR_BOOST_DB = 6.0;
+    private static final int MIN_ACTIVE_FRAMES = 25; // 0.5 s total activity
+''',
+'''    private static final double TARGET_SPEECH_DBFS = -22.0;
+    private static final double MAX_GAIN_DB = 12.0;
+    private static final double QUIET_RESCUE_MAX_GAIN_DB = 18.0;
+    private static final double MIN_GAIN_DB = -6.0;
+
+    // Activity is primarily relative to the local noise floor. The absolute floor only prevents
+    // quantization/codec residue from being treated as useful acoustic activity. Quiet speech may
+    // therefore be recognized below the old -50 dBFS cutoff when it is clearly separated from
+    // the background.
+    private static final double MIN_ACTIVE_FRAME_DBFS = -68.0;
+    private static final double ACTIVE_OVER_NOISE_DB = 7.0;
+    private static final double MIN_SNR_FOR_BOOST_DB = 6.0;
+    private static final double QUIET_RESCUE_MIN_SNR_DB = 9.0;
+    private static final double QUIET_RESCUE_LEVEL_DBFS = -40.0;
+    private static final int MIN_ACTIVE_FRAMES = 25; // 0.5 s normal activity
+    private static final int MIN_QUIET_ACTIVE_FRAMES = 10; // 0.2 s for well-separated quiet speech
+''', 'audio constants')
+
+audio059 = replaceOnce059(audio059,
+'''        if (activeCount >= MIN_ACTIVE_FRAMES) {
+            active = Arrays.copyOf(active, activeCount);
+            speechRms = percentile(active, 0.60);
+            if (noiseRms > 1.0e-9 && speechRms > 1.0e-9) {
+                snrProxyDb = linearToDb(speechRms / noiseRms);
+            } else if (speechRms > 1.0e-9) {
+                snrProxyDb = 60.0;
+            }
+
+            if (speechRms > 1.0e-9) {
+                gainDb = TARGET_SPEECH_DBFS - linearToDb(speechRms);
+                gainDb = clamp(gainDb, MIN_GAIN_DB, MAX_GAIN_DB);
+                if (gainDb > 0.0 && snrProxyDb < MIN_SNR_FOR_BOOST_DB) {
+                    gainDb = 0.0;
+                    boostSuppressedForLowSnr = true;
+                }
+            }
+        }
+''',
+'''        if (activeCount >= MIN_QUIET_ACTIVE_FRAMES) {
+            active = Arrays.copyOf(active, activeCount);
+            speechRms = percentile(active, 0.60);
+            if (noiseRms > 1.0e-9 && speechRms > 1.0e-9) {
+                snrProxyDb = linearToDb(speechRms / noiseRms);
+            } else if (speechRms > 1.0e-9) {
+                snrProxyDb = 60.0;
+            }
+
+            if (speechRms > 1.0e-9) {
+                double speechLevelDbfs = linearToDb(speechRms);
+                boolean normalActivity = activeCount >= MIN_ACTIVE_FRAMES;
+                boolean quietSpeechRescue = activeCount >= MIN_QUIET_ACTIVE_FRAMES
+                        && speechLevelDbfs <= QUIET_RESCUE_LEVEL_DBFS
+                        && snrProxyDb >= QUIET_RESCUE_MIN_SNR_DB;
+                if (normalActivity || quietSpeechRescue) {
+                    double maxGainDb = quietSpeechRescue
+                            ? QUIET_RESCUE_MAX_GAIN_DB : MAX_GAIN_DB;
+                    gainDb = TARGET_SPEECH_DBFS - speechLevelDbfs;
+                    gainDb = clamp(gainDb, MIN_GAIN_DB, maxGainDb);
+                    if (gainDb > 0.0 && snrProxyDb < MIN_SNR_FOR_BOOST_DB) {
+                        gainDb = 0.0;
+                        boostSuppressedForLowSnr = true;
+                    }
+                }
+            }
+        }
+''', 'quiet speech gain policy')
+writeUtf8059(audioFile059, audio059)
+
+// Streaming VAD quiet-speech rescue. The regular Silero onset stays at 0.5. A lower Silero
+// probability is promoted only when a rolling 4-second energy history says the current audio is
+// quiet in absolute level but clearly above the local noise floor. Once speech is active, a lower
+// deactivation threshold provides hysteresis instead of repeatedly chopping quiet syllables.
+def vadFile059 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/StreamingVadStore.java')
+def vad059 = readUtf8059(vadFile059)
+vad059 = replaceOnce059(vad059,
+'''import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+''',
+'''import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
+''', 'Arrays import')
+vad059 = replaceOnce059(vad059,
+'''    private static final double THRESHOLD = 0.5;
+    private static final long MIN_SPEECH_US = 250_000L;
+    private static final long MIN_SILENCE_US = 200_000L;
+    private static final long SPEECH_PAD_US = 80_000L;
+    private static final long MAX_SPEECH_US = 30_000_000L;
+''',
+'''    private static final double THRESHOLD = 0.5;
+    private static final double DEACTIVATION_THRESHOLD = 0.35;
+    private static final double QUIET_RESCUE_MIN_VAD = 0.28;
+    private static final double QUIET_RESCUE_MIN_RELATIVE_DB = 7.0;
+    private static final double QUIET_RESCUE_MIN_LEVEL_DBFS = -72.0;
+    private static final double QUIET_RESCUE_MAX_LEVEL_DBFS = -34.0;
+    private static final int QUIET_RESCUE_HISTORY_FRAMES = 200; // 4 s at 20 ms
+    private static final int QUIET_RESCUE_HISTORY_MIN_FRAMES = 10; // 0.2 s bootstrap
+    private static final int QUIET_RESCUE_FRAME_SAMPLES = SAMPLE_RATE / 50; // 20 ms
+    private static final long MIN_SPEECH_US = 250_000L;
+    private static final long MIN_SILENCE_US = 200_000L;
+    private static final long SPEECH_PAD_US = 80_000L;
+    private static final long MAX_SPEECH_US = 30_000_000L;
+''', 'VAD quiet constants')
+vad059 = replaceOnce059(vad059,
+'''    private static long processedFrameCount;
+    private static int frameWindowSamples = 512;
+    private static DetectorState detector = new DetectorState();
+''',
+'''    private static long processedFrameCount;
+    private static int frameWindowSamples = 512;
+    private static DetectorState detector = new DetectorState();
+    private static final QuietSpeechTracker quietSpeechTracker = new QuietSpeechTracker();
+    private static long quietRescueFrameCount;
+    private static long quietRescueActivationCount;
+''', 'VAD quiet state')
+vad059 = replaceOnce059(vad059,
+'''            processedFrameCount = 0L;
+            frameWindowSamples = 512;
+            detector = new DetectorState();
+            ensureConfiguredLocked(context, 0L);
+''',
+'''            processedFrameCount = 0L;
+            frameWindowSamples = 512;
+            detector = new DetectorState();
+            quietSpeechTracker.reset();
+            quietRescueFrameCount = 0L;
+            quietRescueActivationCount = 0L;
+            ensureConfiguredLocked(context, 0L);
+''', 'VAD reset quiet state')
+vad059 = replaceOnce059(vad059,
+'''                try {
+                    String raw = nativeStreamingVadProcess(samples);
+''',
+'''                try {
+                    QuietSpeechEvidence quietSpeech = quietSpeechTracker.observe(samples);
+                    String raw = nativeStreamingVadProcess(samples);
+''', 'live quiet evidence')
+vad059 = replaceOnce059(vad059,
+'''                        for (int i = 0; i < probabilities.length(); i++) {
+                            long frameStartUs = streamBasePtsUs + processedFrameCount * frameUs;
+                            detector.accept(probabilities.optDouble(i, 0.0), frameStartUs, frameStartUs + frameUs);
+                            processedFrameCount++;
+                        }
+''',
+'''                        for (int i = 0; i < probabilities.length(); i++) {
+                            long frameStartUs = streamBasePtsUs + processedFrameCount * frameUs;
+                            double probability = probabilities.optDouble(i, 0.0);
+                            boolean quietRescue = quietSpeech.eligible
+                                    && probability >= QUIET_RESCUE_MIN_VAD
+                                    && probability < THRESHOLD;
+                            double detectorProbability = quietRescue ? THRESHOLD : probability;
+                            boolean activeBefore = detector.activeStartUs() >= 0L;
+                            detector.accept(detectorProbability, frameStartUs,
+                                    frameStartUs + frameUs, quietRescue);
+                            if (quietRescue) {
+                                quietRescueFrameCount++;
+                                if (!activeBefore && detector.activeStartUs() >= 0L) {
+                                    quietRescueActivationCount++;
+                                }
+                            }
+                            processedFrameCount++;
+                        }
+''', 'adaptive live VAD gate')
+vad059 = replaceOnce059(vad059,
+'''                        .put("rangeCount", ranges.length())
+                        .put("speechMs", totalMs)
+                        .put("ranges", ranges);
+''',
+'''                        .put("rangeCount", ranges.length())
+                        .put("speechMs", totalMs)
+                        .put("quietRescueFrames", quietRescueFrameCount)
+                        .put("quietRescueActivations", quietRescueActivationCount)
+                        .put("quietNoiseFloorDbfs", quietSpeechTracker.lastNoiseFloorDbfs)
+                        .put("quietLevelDbfs", quietSpeechTracker.lastLevelDbfs)
+                        .put("quietRelativeDb", quietSpeechTracker.lastRelativeDb)
+                        .put("ranges", ranges);
+''', 'quiet VAD diagnostics')
+vad059 = replaceOnce059(vad059,
+'''                log(context, "STREAMING_VAD_SEGMENT", new JSONObject(root.toString())
+                        .put("segmentId", segmentId));
+                detector.pruneBefore(segmentBasePtsUs - SPEECH_PAD_US);
+''',
+'''                log(context, "STREAMING_VAD_SEGMENT", new JSONObject(root.toString())
+                        .put("segmentId", segmentId));
+                quietRescueFrameCount = 0L;
+                quietRescueActivationCount = 0L;
+                detector.pruneBefore(segmentBasePtsUs - SPEECH_PAD_US);
+''', 'quiet diagnostics reset')
+
+int detectorClass059 = vad059.indexOf('    private static final class DetectorState {')
+if (detectorClass059 < 0) throw new GradleException('0.7.59 DetectorState missing')
+int acceptStart059 = vad059.indexOf('        void accept(double probability, long frameStartUs, long frameEndUs) {', detectorClass059)
+if (acceptStart059 < 0) throw new GradleException('0.7.59 DetectorState.accept missing')
+int acceptEnd059 = vad059.indexOf('        int closedCount() {', acceptStart059)
+if (acceptEnd059 < 0) throw new GradleException('0.7.59 DetectorState.accept end missing')
+def acceptReplacement059 = '''        void accept(double probability, long frameStartUs, long frameEndUs) {
+            accept(probability, frameStartUs, frameEndUs, false);
+        }
+
+        void accept(double probability, long frameStartUs, long frameEndUs, boolean quietRescue) {
+            long frameUs = Math.max(1L, frameEndUs - frameStartUs);
+            double threshold = activeStartUs >= 0L ? DEACTIVATION_THRESHOLD : THRESHOLD;
+            if (probability >= threshold) {
+                silenceUs = 0L;
+                if (activeStartUs < 0L) {
+                    if (pendingStartUs < 0L) pendingStartUs = frameStartUs;
+                    pendingSpeechUs += frameUs;
+                    if (pendingSpeechUs >= MIN_SPEECH_US) {
+                        activeStartUs = Math.max(0L, pendingStartUs - SPEECH_PAD_US);
+                        lastSpeechEndUs = frameEndUs;
+                    }
+                } else {
+                    lastSpeechEndUs = frameEndUs;
+                    if (frameEndUs - activeStartUs >= MAX_SPEECH_US) {
+                        closeAt(frameEndUs + SPEECH_PAD_US);
+                        pendingStartUs = frameStartUs;
+                        pendingSpeechUs = frameUs;
+                    }
+                }
+            } else if (activeStartUs >= 0L) {
+                silenceUs += frameUs;
+                if (silenceUs >= MIN_SILENCE_US) {
+                    closeAt(lastSpeechEndUs + SPEECH_PAD_US);
+                }
+            } else {
+                pendingStartUs = -1L;
+                pendingSpeechUs = 0L;
+            }
+        }
+
+'''
+vad059 = vad059.substring(0, acceptStart059) + acceptReplacement059 + vad059.substring(acceptEnd059)
+
+int quietInsert059 = vad059.indexOf('    private static final class DetectorState {')
+def quietClasses059 = '''    private static final class QuietSpeechEvidence {
+        final boolean eligible;
+        final double noiseFloorDbfs;
+        final double levelDbfs;
+        final double relativeDb;
+
+        QuietSpeechEvidence(boolean eligible, double noiseFloorDbfs,
+                            double levelDbfs, double relativeDb) {
+            this.eligible = eligible;
+            this.noiseFloorDbfs = noiseFloorDbfs;
+            this.levelDbfs = levelDbfs;
+            this.relativeDb = relativeDb;
+        }
+    }
+
+    private static final class QuietSpeechTracker {
+        private final double[] historyDbfs = new double[QUIET_RESCUE_HISTORY_FRAMES];
+        private int historyCount;
+        private int historyCursor;
+        double lastNoiseFloorDbfs = -120.0;
+        double lastLevelDbfs = -120.0;
+        double lastRelativeDb = 0.0;
+
+        void reset() {
+            Arrays.fill(historyDbfs, -120.0);
+            historyCount = 0;
+            historyCursor = 0;
+            lastNoiseFloorDbfs = -120.0;
+            lastLevelDbfs = -120.0;
+            lastRelativeDb = 0.0;
+        }
+
+        QuietSpeechEvidence observe(float[] samples) {
+            if (samples == null || samples.length == 0) {
+                return new QuietSpeechEvidence(false, lastNoiseFloorDbfs,
+                        lastLevelDbfs, lastRelativeDb);
+            }
+            int frameCount = Math.max(1,
+                    (samples.length + QUIET_RESCUE_FRAME_SAMPLES - 1)
+                            / QUIET_RESCUE_FRAME_SAMPLES);
+            double[] currentDbfs = new double[frameCount];
+            for (int frame = 0; frame < frameCount; frame++) {
+                int start = frame * QUIET_RESCUE_FRAME_SAMPLES;
+                int end = Math.min(samples.length, start + QUIET_RESCUE_FRAME_SAMPLES);
+                double sumSquares = 0.0;
+                for (int i = start; i < end; i++) {
+                    double sample = samples[i];
+                    sumSquares += sample * sample;
+                }
+                int count = Math.max(1, end - start);
+                double rms = Math.sqrt(sumSquares / count);
+                currentDbfs[frame] = 20.0 * Math.log10(Math.max(rms, 1.0e-9));
+            }
+
+            double levelDbfs = percentile(currentDbfs, 0.65);
+            double noiseFloorDbfs = historyCount >= QUIET_RESCUE_HISTORY_MIN_FRAMES
+                    ? historyPercentile(0.20)
+                    : percentile(currentDbfs, 0.20);
+            double relativeDb = levelDbfs - noiseFloorDbfs;
+            boolean eligible = historyCount >= QUIET_RESCUE_HISTORY_MIN_FRAMES
+                    && levelDbfs >= QUIET_RESCUE_MIN_LEVEL_DBFS
+                    && levelDbfs <= QUIET_RESCUE_MAX_LEVEL_DBFS
+                    && relativeDb >= QUIET_RESCUE_MIN_RELATIVE_DB;
+
+            for (double value : currentDbfs) {
+                historyDbfs[historyCursor] = value;
+                historyCursor = (historyCursor + 1) % historyDbfs.length;
+                if (historyCount < historyDbfs.length) historyCount++;
+            }
+            lastNoiseFloorDbfs = noiseFloorDbfs;
+            lastLevelDbfs = levelDbfs;
+            lastRelativeDb = relativeDb;
+            return new QuietSpeechEvidence(eligible, noiseFloorDbfs, levelDbfs, relativeDb);
+        }
+
+        private double historyPercentile(double q) {
+            if (historyCount <= 0) return -120.0;
+            double[] values = Arrays.copyOf(historyDbfs, historyCount);
+            return percentile(values, q);
+        }
+
+        private static double percentile(double[] values, double q) {
+            if (values == null || values.length == 0) return -120.0;
+            double[] sorted = Arrays.copyOf(values, values.length);
+            Arrays.sort(sorted);
+            double position = Math.max(0.0, Math.min(1.0, q)) * (sorted.length - 1);
+            int left = (int) Math.floor(position);
+            int right = Math.min(sorted.length - 1, left + 1);
+            double fraction = position - left;
+            return sorted[left] + (sorted[right] - sorted[left]) * fraction;
+        }
+    }
+
+'''
+if (quietInsert059 < 0) throw new GradleException('0.7.59 quiet class insertion point missing')
+vad059 = vad059.substring(0, quietInsert059) + quietClasses059 + vad059.substring(quietInsert059)
+writeUtf8059(vadFile059, vad059)
+
+// Log only acoustic metrics when the larger quiet-speech gain actually activates. Transcript text
+// remains excluded from diagnostics.
+def streamFile059 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/StreamingTranscriptionService.java')
+def stream059 = readUtf8059(streamFile059)
+stream059 = replaceOnce059(stream059,
+'''        AudioPreprocessor.Result front = AudioPreprocessor.process(copy);
+        float[] asrSamples = front.samples;
+        int durationMs = Math.max(1, (int) (asrSamples.length * 1000L / 16_000L));
+''',
+'''        AudioPreprocessor.Result front = AudioPreprocessor.process(copy);
+        float[] asrSamples = front.samples;
+        int durationMs = Math.max(1, (int) (asrSamples.length * 1000L / 16_000L));
+        if (front.appliedGainDb > 12.0001) {
+            log("FULL_STREAMING_QUIET_SPEECH_BOOST", details(
+                    "durationMs", durationMs,
+                    "inputRms", front.input.rms,
+                    "inputPeak", front.input.peak,
+                    "estimatedNoiseRms", front.estimatedNoiseRms,
+                    "estimatedSpeechRms", front.estimatedSpeechRms,
+                    "snrProxyDb", front.snrProxyDb,
+                    "activeFrameFraction", front.activeFrameFraction,
+                    "appliedGainDb", front.appliedGainDb));
+        }
+''', 'quiet boost diagnostics')
+writeUtf8059(streamFile059, stream059)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1059)
+            output.versionName.set('0.7.59-debug')
+        }
+    }
+}
+
+if (!audioFile059.text.contains('QUIET_RESCUE_MAX_GAIN_DB = 18.0')) {
+    throw new GradleException('0.7.59 quiet gain policy missing')
+}
+if (!vadFile059.text.contains('QUIET_RESCUE_MIN_VAD = 0.28')) {
+    throw new GradleException('0.7.59 adaptive VAD onset missing')
+}
+if (!vadFile059.text.contains('DEACTIVATION_THRESHOLD = 0.35')) {
+    throw new GradleException('0.7.59 VAD hysteresis missing')
+}
+if (!vadFile059.text.contains('quietRescueActivations')) {
+    throw new GradleException('0.7.59 quiet rescue diagnostics missing')
+}
+if (!streamFile059.text.contains('FULL_STREAMING_QUIET_SPEECH_BOOST')) {
+    throw new GradleException('0.7.59 quiet boost log missing')
+}
+if (!rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/LiveWhisperNoSpeechGuard.java')
+        .text.contains('FULL_STREAMING_MULTISIGNAL_SUPPRESSED')) {
+    throw new GradleException('0.7.59 requires 0.7.58 multi-signal guard')
+}
