@@ -1,0 +1,35 @@
+// Mind Elixir 5.14.0 exports ./style.css as dist/MindElixir.css.
+// Replace the asset preparation action from the main 0.7.55 patch with the exact package path.
+def mindElixirGeneratedAssetsFix055 = layout.buildDirectory.dir('generated/mind-elixir-0.7.55/assets')
+def downloadPinnedMindElixirFix055 = { String url, File target ->
+    target.parentFile.mkdirs()
+    def connection = new URI(url).toURL().openConnection()
+    connection.setConnectTimeout(30_000)
+    connection.setReadTimeout(60_000)
+    connection.setRequestProperty('User-Agent', '24hRecoder-build/0.7.55')
+    connection.inputStream.withCloseable { input ->
+        target.withOutputStream { output -> input.transferTo(output) }
+    }
+    if (!target.isFile() || target.length() < 100L) {
+        throw new GradleException("0.7.55 Mind Elixir asset download failed: ${target.name}")
+    }
+}
+
+tasks.named('prepareMindElixirAssets055').configure { task ->
+    task.actions.clear()
+    task.doLast {
+        File root = mindElixirGeneratedAssetsFix055.get().dir('mindmap').asFile
+        File js = new File(root, 'MindElixir.js')
+        File css = new File(root, 'style.css')
+        downloadPinnedMindElixirFix055(
+                'https://cdn.jsdelivr.net/npm/mind-elixir@5.14.0/dist/MindElixir.js', js)
+        downloadPinnedMindElixirFix055(
+                'https://cdn.jsdelivr.net/npm/mind-elixir@5.14.0/dist/MindElixir.css', css)
+        if (!js.getText('UTF-8').contains('MindElixir')) {
+            throw new GradleException('0.7.55 downloaded MindElixir.js is invalid')
+        }
+        if (!css.getText('UTF-8').contains('me-main')) {
+            throw new GradleException('0.7.55 downloaded MindElixir.css is invalid')
+        }
+    }
+}

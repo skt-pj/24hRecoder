@@ -1,0 +1,763 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8053 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8053 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce053 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.53 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// AIノートの日表示は「1日の概要 + 24時間の要点一覧」を同一画面に保つ。
+// 時間別という別ページは作らず、各時間行をタップしたときだけその1時間の詳細へ入る。
+def screenFile053 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiAnalysisScreen.kt')
+def screen053 = readUtf8053(screenFile053)
+
+screen053 = replaceOnce053(screen053,
+'''    hourlyDetail?.let { doc ->
+        BackHandler { hourlyDetail = null }
+        HourlyNotebookDetailPage(doc = doc)
+        return
+    }
+''',
+'''    hourlyDetail?.let { doc ->
+        BackHandler { hourlyDetail = null }
+        HourlyNotebookDetailPage(
+            doc = doc,
+            onBack = { hourlyDetail = null }
+        )
+        return
+    }
+''', 'hour detail back navigation')
+
+screen053 = replaceOnce053(screen053,
+'''        val hourly = snapshot.hourly
+            .filter {
+                it.periodStartMs >= selectedStartMs && it.periodStartMs < selectedEndMs
+            }
+            .sortedBy { it.periodStartMs }
+        Text("時間別", style = MaterialTheme.typography.titleLarge)
+        if (hourly.isEmpty()) {
+            Text(
+                "この日の時間別概要はまだありません。",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            hourly.forEach { doc ->
+                HourlyOverviewRow(
+                    doc = doc,
+                    onOpenDetail = { onOpenHourlyDetail(doc) }
+                )
+            }
+        }
+''',
+'''        val hourlyByStart = snapshot.hourly
+            .filter {
+                it.periodStartMs >= selectedStartMs && it.periodStartMs < selectedEndMs
+            }
+            .associateBy { it.periodStartMs }
+        Text("時間別", style = MaterialTheme.typography.titleLarge)
+        (0..23).forEach { hour ->
+            val slotStart = selectedDate.atTime(hour, 0).atZone(zone)
+            val slotEnd = slotStart.plusHours(1)
+            val slotStartMs = slotStart.toInstant().toEpochMilli()
+            val slotEndMs = slotEnd.toInstant().toEpochMilli()
+            HourlyOverviewRow(
+                hour = hour,
+                periodStartMs = slotStartMs,
+                periodEndMs = slotEndMs,
+                doc = hourlyByStart[slotStartMs],
+                nowMs = System.currentTimeMillis(),
+                onOpenDetail = onOpenHourlyDetail
+            )
+        }
+''', 'restore 24 hourly rows inside day')
+
+screen053 = replaceOnce053(screen053,
+'''@Composable
+private fun HourlyOverviewRow(
+    doc: AiAnalysisDocument,
+    onOpenDetail: () -> Unit
+) {
+    val summary = doc.analysis.optString("summary", "")
+        .replace("\\n", " ")
+        .trim()
+    val compactSummary = when {
+        summary.length > 90 -> summary.take(90).trimEnd() + "…"
+        else -> summary
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenDetail)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Text(
+                formatHourRange(doc.periodStartMs, doc.periodEndMs),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            if (compactSummary.isNotEmpty()) {
+                Text(
+                    compactSummary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+''',
+'''@Composable
+private fun HourlyOverviewRow(
+    hour: Int,
+    periodStartMs: Long,
+    periodEndMs: Long,
+    doc: AiAnalysisDocument?,
+    nowMs: Long,
+    onOpenDetail: (AiAnalysisDocument) -> Unit
+) {
+    val summary = doc?.analysis?.optString("summary", "")
+        .orEmpty()
+        .replace("\\n", " ")
+        .trim()
+    val compactSummary = when {
+        summary.length > 96 -> summary.take(96).trimEnd() + "…"
+        else -> summary
+    }
+    val stateText = when {
+        doc != null -> ""
+        periodStartMs > nowMs -> "未到達"
+        periodEndMs > nowMs -> "進行中"
+        else -> "要約なし"
+    }
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = doc != null) {
+                doc?.let(onOpenDetail)
+            }
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Text(
+                String.format(Locale.JAPAN, "%02d:00", hour),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 1.dp)
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                if (compactSummary.isNotEmpty()) {
+                    Text(
+                        compactSummary,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                } else {
+                    Text(
+                        stateText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            if (doc != null) {
+                Text(
+                    "›",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+''', 'compact 24-hour overview row')
+
+screen053 = replaceOnce053(screen053,
+'''@Composable
+private fun HourlyNotebookDetailPage(
+    doc: AiAnalysisDocument
+) {
+    val analysis = doc.analysis
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item {
+            Text(
+                formatHourRange(doc.periodStartMs, doc.periodEndMs),
+                style = MaterialTheme.typography.headlineMedium
+            )
+        }
+        item {
+            val summary = analysis.optString("summary", "").trim()
+            if (summary.isNotEmpty()) {
+                AnalysisSectionCard("概要") {
+                    Text(summary, style = MaterialTheme.typography.bodyLarge)
+                }
+            }
+        }
+        item {
+            ObjectListCard("重要な出来事", analysis.optJSONArray("keyEvents")) { row ->
+                val time = row.optString("time", "").trim()
+                val event = row.optString("event", "").trim()
+                listOf(time, event).filter(String::isNotEmpty).joinToString("  ")
+            }
+        }
+        item {
+            StringListCard("意思決定", analysis.optJSONArray("decisions"))
+        }
+        item {
+            ObjectListCard("TODO・約束", analysis.optJSONArray("todos")) { row ->
+                val task = row.optString("task", "").trim()
+                val evidence = row.optString("evidence", "").trim()
+                if (evidence.isEmpty()) task else "$task\\n根拠: $evidence"
+            }
+        }
+        item {
+            StringListCard("アイデア", analysis.optJSONArray("ideas"))
+        }
+        item {
+            StringListCard("未解決", analysis.optJSONArray("unresolved"))
+        }
+        item {
+            StringListCard("トピック", analysis.optJSONArray("topics"))
+        }
+        item {
+            StringListCard("人物", analysis.optJSONArray("people"))
+        }
+        item {
+            StringListCard("場所", analysis.optJSONArray("places"))
+        }
+        item {
+            ObjectListCard("印象的な発言", analysis.optJSONArray("notableQuotes")) { row ->
+                val time = row.optString("time", "").trim()
+                val text = row.optString("text", "").trim()
+                listOf(time, text).filter(String::isNotEmpty).joinToString("  ")
+            }
+        }
+    }
+}
+''',
+'''@Composable
+private fun HourlyNotebookDetailPage(
+    doc: AiAnalysisDocument,
+    onBack: () -> Unit
+) {
+    val analysis = doc.analysis
+    val summary = analysis.optString("summary", "").trim()
+    val decisions = analysis.optJSONArray("decisions").stringValues()
+    val todos = analysis.optJSONArray("todos").objectValues()
+    val unresolved = analysis.optJSONArray("unresolved").stringValues()
+    val ideas = analysis.optJSONArray("ideas").stringValues()
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Text(
+                "‹ 1日の一覧",
+                modifier = Modifier.clickable(onClick = onBack),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    formatHourRange(doc.periodStartMs, doc.periodEndMs),
+                    style = MaterialTheme.typography.headlineMedium
+                )
+                val signalCount = decisions.size + todos.size + unresolved.size + ideas.size
+                if (signalCount > 0) {
+                    val labels = buildList {
+                        if (decisions.isNotEmpty()) add("決定 ${decisions.size}")
+                        if (todos.isNotEmpty()) add("次にやる ${todos.size}")
+                        if (ideas.isNotEmpty()) add("アイデア ${ideas.size}")
+                        if (unresolved.isNotEmpty()) add("保留 ${unresolved.size}")
+                    }
+                    Text(
+                        labels.joinToString("  •  "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        if (summary.isNotEmpty()) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("要点", style = MaterialTheme.typography.titleMedium)
+                        Text(summary, style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+            }
+        }
+        item {
+            HourlyImportantSignalsCard(
+                decisions = decisions,
+                todos = todos,
+                ideas = ideas,
+                unresolved = unresolved
+            )
+        }
+        item {
+            HourlyConversationFlowCard(
+                chapters = analysis.optJSONArray("chapters"),
+                keyEvents = analysis.optJSONArray("keyEvents")
+            )
+        }
+        item {
+            HourlyMindMapCard(
+                mindMap = analysis.optJSONArray("mindMap"),
+                topics = analysis.optJSONArray("topics")
+            )
+        }
+        item {
+            HourlyContextChipsCard(
+                topics = analysis.optJSONArray("topics"),
+                people = analysis.optJSONArray("people"),
+                places = analysis.optJSONArray("places")
+            )
+        }
+        item {
+            HourlyQuotesCard(analysis.optJSONArray("notableQuotes"))
+        }
+    }
+}
+
+@Composable
+private fun HourlyImportantSignalsCard(
+    decisions: List<String>,
+    todos: List<JSONObject>,
+    ideas: List<String>,
+    unresolved: List<String>
+) {
+    if (decisions.isEmpty() && todos.isEmpty() && ideas.isEmpty() && unresolved.isEmpty()) return
+    AnalysisSectionCard("重要ポイント") {
+        decisions.forEach { value ->
+            VoiceMemoSignalRow("決定", value)
+        }
+        todos.forEach { row ->
+            val task = row.optString("task", "").trim()
+            if (task.isNotEmpty()) VoiceMemoSignalRow("次にやる", task)
+        }
+        ideas.forEach { value ->
+            VoiceMemoSignalRow("アイデア", value)
+        }
+        unresolved.forEach { value ->
+            VoiceMemoSignalRow("保留", value)
+        }
+    }
+}
+
+@Composable
+private fun VoiceMemoSignalRow(label: String, text: String) {
+    if (text.isBlank()) return
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.primaryContainer,
+            shape = MaterialTheme.shapes.small
+        ) {
+            Text(
+                label,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+        Text(
+            text,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium
+        )
+    }
+}
+
+@Composable
+private fun HourlyConversationFlowCard(
+    chapters: JSONArray?,
+    keyEvents: JSONArray?
+) {
+    val chapterRows = chapters.objectValues().filter {
+        it.optString("title", "").isNotBlank() || it.optString("summary", "").isNotBlank()
+    }
+    val eventRows = keyEvents.objectValues().filter {
+        it.optString("event", "").isNotBlank()
+    }
+    if (chapterRows.isEmpty() && eventRows.isEmpty()) return
+
+    AnalysisSectionCard("会話の流れ") {
+        if (chapterRows.isNotEmpty()) {
+            chapterRows.take(4).forEachIndexed { index, row ->
+                if (index > 0) HorizontalDivider()
+                val start = row.optString("startTime", "").trim()
+                val end = row.optString("endTime", "").trim()
+                val title = row.optString("title", "").trim()
+                val detail = row.optString("summary", "").trim()
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 9.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Text(
+                        listOf(start, end).filter(String::isNotEmpty).joinToString("–"),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        if (title.isNotEmpty()) {
+                            Text(title, fontWeight = FontWeight.SemiBold)
+                        }
+                        if (detail.isNotEmpty()) {
+                            Text(
+                                detail,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            eventRows.take(4).forEachIndexed { index, row ->
+                if (index > 0) HorizontalDivider()
+                val time = row.optString("time", "").trim()
+                val event = row.optString("event", "").trim()
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 9.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Text(
+                        time,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(event, modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HourlyMindMapCard(
+    mindMap: JSONArray?,
+    topics: JSONArray?
+) {
+    val nodes = mindMap.objectValues().filter { it.optString("label", "").isNotBlank() }
+    val fallbackTopics = topics.stringValues().take(5)
+    if (nodes.isEmpty() && fallbackTopics.isEmpty()) return
+
+    AnalysisSectionCard("マインドマップ") {
+        if (nodes.isEmpty()) {
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer,
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    "この時間",
+                    modifier = Modifier.padding(12.dp),
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+            fallbackTopics.forEach { topic ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("↳", color = MaterialTheme.colorScheme.primary)
+                    Surface(
+                        tonalElevation = 1.dp,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(topic, modifier = Modifier.padding(10.dp))
+                    }
+                }
+            }
+            return@AnalysisSectionCard
+        }
+
+        val byId = nodes.associateBy { it.optString("id", "") }
+        val root = nodes.firstOrNull { it.optString("parentId", "").isBlank() } ?: nodes.first()
+        val rootId = root.optString("id", "")
+        val branches = nodes.filter { it.optString("parentId", "") == rootId }.take(5)
+
+        Surface(
+            color = MaterialTheme.colorScheme.primaryContainer,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                root.optString("label", "この時間"),
+                modifier = Modifier.padding(12.dp),
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+
+        branches.forEach { branch ->
+            val branchId = branch.optString("id", "")
+            val children = nodes.filter { it.optString("parentId", "") == branchId }.take(3)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                Text("↳", color = MaterialTheme.colorScheme.primary)
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Surface(
+                        tonalElevation = 1.dp,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            branch.optString("label", ""),
+                            modifier = Modifier.padding(10.dp),
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    children.forEach { child ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(start = 14.dp),
+                            horizontalArrangement = Arrangement.spacedBy(7.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("•", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                child.optString("label", ""),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HourlyContextChipsCard(
+    topics: JSONArray?,
+    people: JSONArray?,
+    places: JSONArray?
+) {
+    val chips = buildList {
+        topics.stringValues().take(5).forEach { add("話題" to it) }
+        people.stringValues().take(4).forEach { add("人物" to it) }
+        places.stringValues().take(3).forEach { add("場所" to it) }
+    }
+    if (chips.isEmpty()) return
+
+    AnalysisSectionCard("手がかり") {
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(chips) { chip ->
+                Surface(
+                    tonalElevation = 1.dp,
+                    shape = MaterialTheme.shapes.large
+                ) {
+                    Text(
+                        "${chip.first}: ${chip.second}",
+                        modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HourlyQuotesCard(array: JSONArray?) {
+    val quotes = array.objectValues().filter { it.optString("text", "").isNotBlank() }.take(2)
+    if (quotes.isEmpty()) return
+    AnalysisSectionCard("残しておく発言") {
+        quotes.forEachIndexed { index, row ->
+            if (index > 0) HorizontalDivider()
+            val time = row.optString("time", "").trim()
+            val text = row.optString("text", "").trim()
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                if (time.isNotEmpty()) {
+                    Text(
+                        time,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Text("「$text」", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+    }
+}
+''', 'visual single-hour detail')
+
+screen053 = replaceOnce053(screen053,
+'''                    "日表示では日全体の概要と時間別の短い概要だけを表示します。各時間帯をタップすると、その1時間の詳細を確認できます。",
+''',
+'''                    "日表示では1日の概要と24時間の要点一覧を同じ画面に表示します。内容がある時間帯をタップすると、その1時間だけを可視化して確認できます。",
+''', 'status wording')
+
+writeUtf8053(screenFile053, screen053)
+
+// OpenAIの1時間分析を、長文メモではなく「要点 + 時系列チャプター + 関係図」にする。
+def lunaFile053 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/OpenAiLunaClient.java')
+def luna053 = readUtf8053(lunaFile053)
+
+luna053 = replaceOnce053(luna053,
+'''                "{\\\"summary\\\":string,\\\"topics\\\":[string],\\\"keyEvents\\\":[{\\\"time\\\":string,\\\"event\\\":string}]," +
+                "\\\"ideas\\\":[string],\\\"decisions\\\":[string],\\\"todos\\\":[{\\\"task\\\":string,\\\"evidence\\\":string}]," +
+                "\\\"people\\\":[string],\\\"places\\\":[string],\\\"notableQuotes\\\":[{\\\"time\\\":string,\\\"text\\\":string}]," +
+                "\\\"unresolved\\\":[string]}\\n" +
+''',
+'''                "{\\\"summary\\\":string,\\\"chapters\\\":[{\\\"startTime\\\":string,\\\"endTime\\\":string,\\\"title\\\":string,\\\"summary\\\":string}]," +
+                "\\\"mindMap\\\":[{\\\"id\\\":string,\\\"label\\\":string,\\\"parentId\\\":string}]," +
+                "\\\"topics\\\":[string],\\\"keyEvents\\\":[{\\\"time\\\":string,\\\"event\\\":string}]," +
+                "\\\"ideas\\\":[string],\\\"decisions\\\":[string],\\\"todos\\\":[{\\\"task\\\":string,\\\"evidence\\\":string}]," +
+                "\\\"people\\\":[string],\\\"places\\\":[string],\\\"notableQuotes\\\":[{\\\"time\\\":string,\\\"text\\\":string}]," +
+                "\\\"unresolved\\\":[string]}\\n" +
+''', 'OpenAI hourly format')
+
+luna053 = replaceOnce053(luna053,
+'''                "For a content-rich hour, keep summary to 2-4 sentences. Normally keep at most 3 topics, 4 key events, 3 decisions, 5 TODOs, 3 ideas, and 3 unresolved items. " +
+                "People, places, and quotes should be empty unless they materially help explain what happened. If there is no meaningful content, say so plainly without inventing significance. " +
+''',
+'''                "For a content-rich hour, keep summary to 2-3 sentences. Normally keep at most 5 topics, 4 key events, 3 decisions, 5 TODOs, 3 ideas, and 3 unresolved items. " +
+                "Create at most 4 chapters only when the conversation meaningfully changes topic or goal; each chapter needs a short title and one-sentence summary with evidence-backed times. " +
+                "Create a compact mind map with one root and normally 2-5 branches; use at most 10 nodes total and connect only relationships actually supported by the transcript. " +
+                "People, places, and quotes should be empty unless they materially help explain what happened. Keep at most 2 quotes. If there is no meaningful content, say so plainly without inventing significance. " +
+''', 'OpenAI hourly visualization rules')
+
+luna053 = replaceOnce053(luna053,
+'''        properties.put("summary", stringSchema());
+        properties.put("topics", arraySchema(stringSchema()));
+''',
+'''        properties.put("summary", stringSchema());
+        properties.put("chapters", arraySchema(objectSchema(new JSONObject()
+                .put("startTime", stringSchema())
+                .put("endTime", stringSchema())
+                .put("title", stringSchema())
+                .put("summary", stringSchema()))));
+        properties.put("mindMap", arraySchema(objectSchema(new JSONObject()
+                .put("id", stringSchema())
+                .put("label", stringSchema())
+                .put("parentId", stringSchema()))));
+        properties.put("topics", arraySchema(stringSchema()));
+''', 'OpenAI hourly schema')
+
+luna053 = luna053.replace('Write 4-7 concise sentences that answer what mattered today',
+        'Write 3-5 concise sentences that answer what mattered today')
+
+writeUtf8053(lunaFile053, luna053)
+
+// ローカルGemmaも同じ構造を返す。古い保存JSONはUI側でchapters/mindMap欠落時にfallbackする。
+def gemmaHourlyFile053 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/GemmaHourlyConversationAnalyzer.kt')
+def gemmaHourly053 = readUtf8053(gemmaHourlyFile053)
+
+gemmaHourly053 = replaceOnce053(gemmaHourly053,
+'''    private val hourlyKeys = listOf(
+        "summary", "topics", "keyEvents", "ideas", "decisions", "todos",
+        "people", "places", "notableQuotes", "unresolved"
+    )
+''',
+'''    private val hourlyKeys = listOf(
+        "summary", "chapters", "mindMap", "topics", "keyEvents", "ideas", "decisions", "todos",
+        "people", "places", "notableQuotes", "unresolved"
+    )
+''', 'Gemma hourly keys')
+
+gemmaHourly053 = replaceOnce053(gemmaHourly053,
+'''            "{\\\"summary\\\":string,\\\"topics\\\":[string],\\\"keyEvents\\\":[{\\\"time\\\":string,\\\"event\\\":string}]," +
+            "\\\"ideas\\\":[string],\\\"decisions\\\":[string],\\\"todos\\\":[{\\\"task\\\":string,\\\"evidence\\\":string}]," +
+            "\\\"people\\\":[string],\\\"places\\\":[string],\\\"notableQuotes\\\":[{\\\"time\\\":string,\\\"text\\\":string}]," +
+            "\\\"unresolved\\\":[string]}\\n"
+''',
+'''            "{\\\"summary\\\":string,\\\"chapters\\\":[{\\\"startTime\\\":string,\\\"endTime\\\":string,\\\"title\\\":string,\\\"summary\\\":string}]," +
+            "\\\"mindMap\\\":[{\\\"id\\\":string,\\\"label\\\":string,\\\"parentId\\\":string}]," +
+            "\\\"topics\\\":[string],\\\"keyEvents\\\":[{\\\"time\\\":string,\\\"event\\\":string}]," +
+            "\\\"ideas\\\":[string],\\\"decisions\\\":[string],\\\"todos\\\":[{\\\"task\\\":string,\\\"evidence\\\":string}]," +
+            "\\\"people\\\":[string],\\\"places\\\":[string],\\\"notableQuotes\\\":[{\\\"time\\\":string,\\\"text\\\":string}]," +
+            "\\\"unresolved\\\":[string]}\\n"
+''', 'Gemma hourly format')
+
+gemmaHourly053 = gemmaHourly053.replace(
+        'Keep the summary to 2-4 sentences for a content-rich hour and keep structured lists selective. People, places, and quotes should be empty unless materially useful. ',
+        'Keep the summary to 2-3 sentences for a content-rich hour and keep structured lists selective. Create at most 4 evidence-backed chapters for meaningful topic changes, plus a compact mind map with one root, 2-5 branches, and at most 10 nodes. People, places, and quotes should be empty unless materially useful; keep at most 2 quotes. ')
+
+writeUtf8053(gemmaHourlyFile053, gemmaHourly053)
+
+// Gemma日次概要も一覧で読む前提に合わせて少し短くする。
+def gemmaFile053 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/Gemma4LocalClient.kt')
+def gemma053 = readUtf8053(gemmaFile053)
+gemma053 = gemma053.replace('Write 4-7 concise sentences that answer what mattered today',
+        'Write 3-5 concise sentences that answer what mattered today')
+writeUtf8053(gemmaFile053, gemma053)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1053)
+            output.versionName.set('0.7.53-debug')
+        }
+    }
+}
+
+if (!screenFile053.text.contains('(0..23).forEach { hour ->')) {
+    throw new GradleException('0.7.53 24-hour list missing from day view')
+}
+if (screenFile053.text.contains('時間別の詳細を見る')) {
+    throw new GradleException('0.7.53 obsolete hourly page button returned')
+}
+if (!screenFile053.text.contains('HourlyConversationFlowCard(')) {
+    throw new GradleException('0.7.53 conversation flow visualization missing')
+}
+if (!screenFile053.text.contains('HourlyMindMapCard(')) {
+    throw new GradleException('0.7.53 hourly mind map visualization missing')
+}
+if (!lunaFile053.text.contains('\\\"chapters\\\"')) {
+    throw new GradleException('0.7.53 OpenAI hourly chapters missing')
+}
+if (!lunaFile053.text.contains('compact mind map')) {
+    throw new GradleException('0.7.53 OpenAI mind map prompt missing')
+}
+if (!gemmaHourlyFile053.text.contains('"chapters", "mindMap"')) {
+    throw new GradleException('0.7.53 Gemma hourly visualization keys missing')
+}

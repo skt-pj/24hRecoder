@@ -2,22 +2,28 @@ package com.sktpj.recorder24h.transcription;
 
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 
 import androidx.work.BackoffPolicy;
 import androidx.work.Constraints;
-import androidx.work.Data;
 import androidx.work.ExistingWorkPolicy;
 import androidx.work.OneTimeWorkRequest;
-import androidx.work.OutOfQuotaPolicy;
 import androidx.work.WorkManager;
 
 import com.sktpj.recorder24h.storage.SegmentRepository;
 import com.sktpj.recorder24h.storage.StoragePolicy;
+import com.sktpj.recorder24h.ui.SegmentHistoryRepository;
+import com.sktpj.recorder24h.ui.SegmentRecord;
 import com.sktpj.recorder24h.util.AppLogger;
 
 import org.json.JSONObject;
 
 import java.io.File;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 public final class TranscriptionScheduler {
@@ -25,6 +31,13 @@ public final class TranscriptionScheduler {
     public static final String EXTRA_FILE_PATH = "filePath";
     public static final String EXTRA_FORCE_RETRANSCRIBE = "forceRetranscribe";
     static final String ACTION_SEGMENT_READY = "com.sktpj.recorder24h.action.SEGMENT_READY";
+
+    private static final String DRAIN_WORK_NAME = "transcription-drain-single-runner";
+    private static final String PREFS = "transcription_scheduler";
+    private static final String KEY_SINGLE_RUNNER_MIGRATED = "single_runner_migrated_v1";
+    private static final String KEY_QUEUE_PAUSED = "queue_paused";
+    private static final ExecutorService RECOVERY_EXECUTOR = Executors.newSingleThreadExecutor();
+    private static final long LIVE_ORPHAN_STALE_MS = 30L * 60L * 1000L;
 
     private TranscriptionScheduler() {
     }
@@ -40,25 +53,97 @@ public final class TranscriptionScheduler {
         context.sendBroadcast(intent);
     }
 
-    public static void enqueue(Context context, String segmentId, File file) {
-        enqueueInternal(context, segmentId, file, false, ExistingWorkPolicy.KEEP);
+    public static boolean isQueuePaused(Context context) {
+        Context app = context.getApplicationContext();
+        return app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getBoolean(KEY_QUEUE_PAUSED, false);
     }
 
     /**
-     * Explicit user requests do not wait behind WorkManager/JobScheduler in the normal path.
-     * The request is persisted as QUEUED, any old scheduled copy is cancelled, and a
-     * mediaProcessing foreground service drains the queue immediately while the app is visible.
-     * WorkManager is only used as a fallback if Android refuses the direct FGS start.
+     * Explicit user-controlled pause for the persisted transcription backlog.
+     * A currently running item is not cancelled; the drain stops before starting the next item.
+     */
+    public static void setQueuePaused(Context context, boolean paused) {
+        Context app = context.getApplicationContext();
+        boolean before = isQueuePaused(app);
+        if (before == paused) {
+            if (!paused) ensureDrainScheduled(app);
+            return;
+        }
+        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_QUEUE_PAUSED, paused)
+                .commit();
+        long cancellationGeneration = paused ? TranscriptionCancellation.cancelCurrent() : -1L;
+        try {
+            JSONObject details = new JSONObject();
+            details.put("paused", paused);
+            details.put("queuedItemsRetained", true);
+            details.put("runningItemCancelledOnPause", paused);
+            details.put("cancellationGeneration", cancellationGeneration);
+            AppLogger.event(app,
+                    paused ? "TRANSCRIPTION_QUEUE_PAUSED_BY_USER"
+                            : "TRANSCRIPTION_QUEUE_RESUMED_BY_USER",
+                    details);
+        } catch (Exception ignored) {
+        }
+        if (!paused) {
+            ensureDrainScheduled(app);
+        }
+    }
+
+    /** Immediately remove automatic five-minute final work owned by the live pipeline. */
+    public static int disableAutomaticLiveFinals(Context context) {
+        Context app = context.getApplicationContext();
+        int removed = 0;
+        boolean runningRemoved = false;
+        for (SegmentRecord record : SegmentHistoryRepository.load(app)) {
+            if (!isAutomaticLiveFinalDisabled(app, record)) continue;
+            String status = record.getStatus();
+            if (!("QUEUED".equals(status) || "RETRY_WAIT".equals(status)
+                    || "TRANSCRIBING".equals(status))) {
+                continue;
+            }
+            if ("TRANSCRIBING".equals(status)) runningRemoved = true;
+            LiveSegmentPolicyStore.setFiveMinuteFinalEnabled(app, record.getSegmentId(), false);
+            settleAutomaticLiveFinalDisabled(app, record, "FIVE_MINUTE_FINAL_DISABLED_BY_USER");
+            removed++;
+        }
+        long cancellationGeneration = runningRemoved ? TranscriptionCancellation.cancelCurrent() : -1L;
+        try {
+            JSONObject details = new JSONObject();
+            details.put("removedCount", removed);
+            details.put("runningCancelled", runningRemoved);
+            details.put("cancellationGeneration", cancellationGeneration);
+            AppLogger.event(app, "LIVE_FIVE_MINUTE_FINAL_DISABLED_IMMEDIATELY", details);
+        } catch (Exception ignored) {
+        }
+        ensureDrainScheduled(app);
+        return removed;
+    }
+
+    public static void enqueue(Context context, String segmentId, File file) {
+        enqueueInternal(context, segmentId, file, false);
+    }
+
+    /**
+     * Explicit user requests are persisted first and normally drained by the mediaProcessing FGS.
+     * If Android refuses the FGS start, the same persisted queue is handled by the single
+     * WorkManager drain worker; no per-segment Worker is created.
      */
     public static boolean enqueueForceRetranscription(Context context, String segmentId, File file) {
         if (segmentId == null || segmentId.isEmpty() || file == null || !file.isFile()) {
             return false;
         }
-        if (!WhisperModelManager.isReady(context)) {
-            WhisperModelManager.enqueueDownload(context);
-            String reason = WhisperModelManager.isAsrReady(context)
-                    ? "SILERO_VAD_MODEL_MISSING" : "LOCAL_MODEL_MISSING";
-            log(context, "TRANSCRIPTION_WAITING_FOR_LOCAL_MODELS", segmentId, file, reason);
+        TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
+        String pipelineReason = TranscriptionPipelineSettings.unavailableReason(
+                context, pipeline, WhisperModelManager.selectedModelId(context));
+        if (pipelineReason != null) {
+            if ("SILERO_VAD_MODEL_MISSING".equals(pipelineReason)
+                    || "LOCAL_WHISPER_MODEL_MISSING".equals(pipelineReason)) {
+                WhisperModelManager.enqueueDownload(context);
+            }
+            log(context, "TRANSCRIPTION_SELECTED_PIPELINE_NOT_READY", segmentId, file, pipelineReason);
             return false;
         }
 
@@ -67,12 +152,19 @@ public final class TranscriptionScheduler {
                 System.currentTimeMillis(), "QUEUED", "MANUAL_DIRECT_QUEUE_ENQUEUED");
         log(context, "MANUAL_RETRANSCRIPTION_DIRECT_ENQUEUED", segmentId, file, null);
 
+        if (isQueuePaused(context)) {
+            log(context, "MANUAL_RETRANSCRIPTION_QUEUED_PAUSED", segmentId, file,
+                    "QUEUED_ITEM_RETAINED_UNTIL_QUEUE_RESUME");
+            return true;
+        }
+
         if (TranscriptionQueueService.kick(context)) {
             return true;
         }
 
         log(context, "MANUAL_RETRANSCRIPTION_DIRECT_FALLBACK_WORKMANAGER", segmentId, file, null);
-        return enqueueInternal(context, segmentId, file, true, ExistingWorkPolicy.REPLACE);
+        ensureDrainScheduled(context);
+        return true;
     }
 
     public static boolean removeFromQueue(Context context, String segmentId, File file) {
@@ -94,58 +186,28 @@ public final class TranscriptionScheduler {
         return true;
     }
 
-    private static boolean enqueueAfterReset(Context context, String segmentId, File file) {
-        return enqueueInternal(context, segmentId, file, false, ExistingWorkPolicy.REPLACE);
-    }
-
     private static boolean enqueueInternal(Context context, String segmentId, File file,
-                                           boolean forceRetranscribe, ExistingWorkPolicy workPolicy) {
+                                           boolean forceRetranscribe) {
         if (segmentId == null || segmentId.isEmpty() || file == null || !file.isFile()) {
             return false;
         }
+        String currentEngine = LocalWhisperEngine.engineId(context);
         if (!forceRetranscribe &&
-                TranscriptionRepository.isCurrentEngine(context, segmentId, LocalWhisperEngine.ENGINE_ID)) {
+                TranscriptionRepository.isCurrentEngine(context, segmentId, currentEngine)) {
             log(context, "TRANSCRIPT_CURRENT_ENGINE_AUDIO_RETAINED", segmentId, file, null);
             return false;
         }
-        if (!WhisperModelManager.isReady(context)) {
-            WhisperModelManager.enqueueDownload(context);
-            String reason = WhisperModelManager.isAsrReady(context)
-                    ? "SILERO_VAD_MODEL_MISSING" : "LOCAL_MODEL_MISSING";
-            log(context, "TRANSCRIPTION_WAITING_FOR_LOCAL_MODELS", segmentId, file, reason);
+        TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(context);
+        String pipelineReason = TranscriptionPipelineSettings.unavailableReason(
+                context, pipeline, WhisperModelManager.selectedModelId(context));
+        if (pipelineReason != null) {
+            if ("SILERO_VAD_MODEL_MISSING".equals(pipelineReason)
+                    || "LOCAL_WHISPER_MODEL_MISSING".equals(pipelineReason)) {
+                WhisperModelManager.enqueueDownload(context);
+            }
+            log(context, "TRANSCRIPTION_SELECTED_PIPELINE_NOT_READY", segmentId, file, pipelineReason);
             return false;
         }
-
-        Constraints.Builder constraintBuilder = new Constraints.Builder();
-        // Automatic background work yields to recording when Android considers the battery low.
-        // Explicit user requests never inherit this constraint.
-        if (!forceRetranscribe) {
-            constraintBuilder.setRequiresBatteryNotLow(true);
-        }
-        Constraints constraints = constraintBuilder.build();
-
-        Data input = new Data.Builder()
-                .putString(EXTRA_SEGMENT_ID, segmentId)
-                .putString(EXTRA_FILE_PATH, file.getAbsolutePath())
-                .putBoolean(EXTRA_FORCE_RETRANSCRIBE, forceRetranscribe)
-                .putInt(TranscriptionResetManager.EXTRA_GENERATION,
-                        TranscriptionResetManager.currentGeneration(context))
-                .build();
-        OneTimeWorkRequest.Builder requestBuilder = new OneTimeWorkRequest.Builder(TranscriptionWorker.class)
-                .setInputData(input)
-                .setConstraints(constraints)
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-                .addTag("transcription")
-                .addTag("segment:" + segmentId)
-                .addTag(forceRetranscribe ? "manual-retranscription" : "automatic-transcription");
-        if (forceRetranscribe) {
-            requestBuilder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST);
-        }
-        OneTimeWorkRequest request = requestBuilder.build();
-        WorkManager.getInstance(context.getApplicationContext()).enqueueUniqueWork(
-                uniqueWorkName(segmentId),
-                workPolicy,
-                request);
 
         boolean replacingExistingTranscript = TranscriptionRepository.exists(context, segmentId);
         String queuedReason = forceRetranscribe
@@ -159,11 +221,217 @@ public final class TranscriptionScheduler {
         if (forceRetranscribe) {
             log(context, "MANUAL_RETRANSCRIPTION_ENQUEUED", segmentId, file, null);
         } else {
-            log(context, TranscriptionRepository.exists(context, segmentId)
+            log(context, replacingExistingTranscript
                             ? "LOCAL_RETRANSCRIPTION_ENQUEUED" : "LOCAL_TRANSCRIPTION_ENQUEUED",
                     segmentId, file, null);
         }
+        ensureDrainScheduled(context);
         return true;
+    }
+
+    public static void ensureDrainScheduled(Context context) {
+        Context app = context.getApplicationContext();
+        if (isQueuePaused(app)) {
+            return;
+        }
+        if (!hasQueuedWork(app)) {
+            return;
+        }
+        OneTimeWorkRequest request = buildDrainRequest(true);
+        WorkManager.getInstance(app).enqueueUniqueWork(
+                DRAIN_WORK_NAME,
+                ExistingWorkPolicy.KEEP,
+                request);
+    }
+
+    static void appendDrainContinuationIfPending(Context context) {
+        Context app = context.getApplicationContext();
+        if (isQueuePaused(app) || !hasQueuedWork(app)) {
+            return;
+        }
+        WorkManager.getInstance(app).enqueueUniqueWork(
+                DRAIN_WORK_NAME,
+                ExistingWorkPolicy.APPEND_OR_REPLACE,
+                buildDrainRequest(true));
+    }
+
+    private static OneTimeWorkRequest buildDrainRequest(boolean batteryNotLow) {
+        Constraints.Builder constraints = new Constraints.Builder();
+        if (batteryNotLow) {
+            constraints.setRequiresBatteryNotLow(true);
+        }
+        return new OneTimeWorkRequest.Builder(TranscriptionWorker.class)
+                .setConstraints(constraints.build())
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag("transcription")
+                .addTag("transcription-drain")
+                .build();
+    }
+
+    public static void recoverInterruptedAndEnsureDrainAsync(Context context) {
+        Context app = context.getApplicationContext();
+        RECOVERY_EXECUTOR.execute(() -> {
+            boolean migrated = false;
+            try {
+                SharedPreferences prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+                if (!prefs.getBoolean(KEY_SINGLE_RUNNER_MIGRATED, false)) {
+                    WorkManager.getInstance(app)
+                            .cancelAllWorkByTag("transcription")
+                            .getResult()
+                            .get(15, TimeUnit.SECONDS);
+                    prefs.edit().putBoolean(KEY_SINGLE_RUNNER_MIGRATED, true).apply();
+                    migrated = true;
+                }
+
+                int recovered = 0;
+                int disabledLiveFinals = 0;
+                List<SegmentRecord> records = SegmentHistoryRepository.load(app);
+                for (SegmentRecord record : records) {
+                    if (isAutomaticLiveFinalDisabled(app, record)
+                            && ("QUEUED".equals(record.getStatus())
+                                || "RETRY_WAIT".equals(record.getStatus())
+                                || "TRANSCRIBING".equals(record.getStatus()))) {
+                        LiveSegmentPolicyStore.setFiveMinuteFinalEnabled(app, record.getSegmentId(), false);
+                        settleAutomaticLiveFinalDisabled(app, record,
+                                "FIVE_MINUTE_FINAL_DISABLED_RECOVERY");
+                        disabledLiveFinals++;
+                        continue;
+                    }
+                    if (!"TRANSCRIBING".equals(record.getStatus()) || !record.getAudioAvailable()) {
+                        continue;
+                    }
+                    String audioPath = record.getAudioPath();
+                    File audioFile = audioPath == null ? null : new File(audioPath);
+                    if (audioFile == null || !audioFile.isFile()) {
+                        continue;
+                    }
+                    SegmentRepository.appendWithoutNotify(
+                            app,
+                            record.getSegmentId(),
+                            audioFile,
+                            audioFile.lastModified(),
+                            System.currentTimeMillis(),
+                            "QUEUED",
+                            "RECOVERED_INTERRUPTED_TRANSCRIPTION");
+                    recovered++;
+                }
+
+                int liveOrphansReconciled = reconcileStaleLiveOrphans(app);
+
+                JSONObject details = new JSONObject();
+                details.put("legacyWorkCancelled", migrated);
+                details.put("recoveredTranscribingCount", recovered);
+                details.put("disabledLiveFinalCount", disabledLiveFinals);
+                details.put("liveOrphansReconciled", liveOrphansReconciled);
+                details.put("queuePaused", isQueuePaused(app));
+                AppLogger.event(app, "TRANSCRIPTION_SINGLE_RUNNER_RECOVERY_COMPLETED", details);
+            } catch (Exception error) {
+                try {
+                    JSONObject details = new JSONObject();
+                    details.put("type", error.getClass().getSimpleName());
+                    details.put("message", error.getMessage() == null ? "" : error.getMessage());
+                    AppLogger.event(app, "TRANSCRIPTION_SINGLE_RUNNER_RECOVERY_FAILED", details);
+                } catch (Exception ignored) {
+                }
+            } finally {
+                ensureDrainScheduled(app);
+            }
+        });
+    }
+
+    private static int reconcileStaleLiveOrphans(Context context) {
+        long now = System.currentTimeMillis();
+        int reconciled = 0;
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (!record.getLiveOwned() || !record.getAudioAvailable() || record.getHasTranscript()) continue;
+            String status = record.getStatus();
+            if ("QUEUED".equals(status) || "RETRY_WAIT".equals(status) || "TRANSCRIBING".equals(status)) continue;
+            FullStreamingStateStore.OwnershipState ownership =
+                    FullStreamingStateStore.readOwnershipState(context, record.getSegmentId());
+            boolean durableFailure = ownership.owned && "FAILED".equals(ownership.state);
+            long ageBase = Math.max(record.getEndedAtMs(), record.getStateChangedAtMs());
+            boolean staleOwned = ownership.owned && "OWNED".equals(ownership.state)
+                    && ageBase > 0L && now - ageBase >= LIVE_ORPHAN_STALE_MS;
+            if (!durableFailure && !staleOwned) continue;
+
+            String audioPath = record.getAudioPath();
+            File audioFile = audioPath == null || audioPath.isEmpty() ? null : new File(audioPath);
+            String reason = durableFailure
+                    ? (ownership.error == null || ownership.error.isEmpty()
+                        ? "FULL_STREAMING_ASR_FAILED"
+                        : "FULL_STREAMING_ASR_FAILED:" + ownership.error)
+                    : "LIVE_CANONICAL_TRANSCRIPT_MISSING";
+            if (!"FAILED".equals(status) || !reason.equals(record.getReason())) {
+                SegmentRepository.appendWithoutNotify(
+                        context,
+                        record.getSegmentId(),
+                        audioFile,
+                        audioFile != null && audioFile.isFile() ? audioFile.lastModified() : 0L,
+                        now,
+                        "FAILED",
+                        reason);
+                reconciled++;
+            }
+        }
+        if (reconciled > 0) {
+            try {
+                JSONObject details = new JSONObject();
+                details.put("count", reconciled);
+                details.put("staleThresholdMs", LIVE_ORPHAN_STALE_MS);
+                AppLogger.event(context, "TRANSCRIPTION_LIVE_ORPHANS_RECONCILED", details);
+            } catch (Exception ignored) {
+            }
+        }
+        return reconciled;
+    }
+
+    static boolean isAutomaticLiveFinalDisabled(Context context, SegmentRecord record) {
+        if (record == null || record.getSegmentId() == null) return false;
+        String reason = record.getReason();
+        if (reason != null && reason.startsWith("MANUAL_")) return false;
+        if (!FullStreamingStateStore.isOwned(context, record.getSegmentId())) return false;
+        return !LiveSegmentPolicyStore.isFiveMinuteFinalEnabled(context, record.getSegmentId())
+                || !LiveTranscriptionSettings.isFiveMinuteFinalEnabled(context);
+    }
+
+    static void settleAutomaticLiveFinalDisabled(Context context, SegmentRecord record, String reason) {
+        if (record == null) return;
+        String audioPath = record.getAudioPath();
+        File audioFile = audioPath == null || audioPath.isEmpty() ? null : new File(audioPath);
+        boolean hasTranscript = TranscriptionRepository.exists(context, record.getSegmentId());
+        FullStreamingStateStore.OwnershipState ownership =
+                FullStreamingStateStore.readOwnershipState(context, record.getSegmentId());
+        String status;
+        String storedReason = reason;
+        if (hasTranscript) {
+            status = "TRANSCRIBED";
+        } else if (ownership.owned && "FAILED".equals(ownership.state)) {
+            status = "FAILED";
+            storedReason = ownership.error == null || ownership.error.isEmpty()
+                    ? "FULL_STREAMING_ASR_FAILED"
+                    : "FULL_STREAMING_ASR_FAILED:" + ownership.error;
+        } else {
+            status = "READY";
+        }
+        SegmentRepository.appendWithoutNotify(
+                context,
+                record.getSegmentId(),
+                audioFile,
+                audioFile != null && audioFile.isFile() ? audioFile.lastModified() : 0L,
+                System.currentTimeMillis(),
+                status,
+                storedReason);
+    }
+
+    private static boolean hasQueuedWork(Context context) {
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus()))
+                    && record.getAudioAvailable()
+                    && !isAutomaticLiveFinalDisabled(context, record)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static int enqueueExisting(Context context) {
@@ -176,16 +444,29 @@ public final class TranscriptionScheduler {
         if (files == null) {
             return 0;
         }
+        String currentEngine = LocalWhisperEngine.engineId(context);
+        Map<String, String> currentStates = new HashMap<>();
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            currentStates.put(record.getSegmentId(), record.getStatus());
+        }
         int count = 0;
         for (File file : files) {
             String segmentId = extractSegmentId(file.getName());
             if (segmentId == null ||
-                    TranscriptionRepository.isCurrentEngine(context, segmentId, LocalWhisperEngine.ENGINE_ID)) {
+                    TranscriptionRepository.isCurrentEngine(context, segmentId, currentEngine)) {
                 continue;
             }
-            enqueue(context, segmentId, file);
-            count++;
+            String status = currentStates.get(segmentId);
+            if ("QUEUED".equals(status)
+                    || "RETRY_WAIT".equals(status)
+                    || "TRANSCRIBING".equals(status)) {
+                continue;
+            }
+            if (enqueueInternal(context, segmentId, file, false)) {
+                count++;
+            }
         }
+        ensureDrainScheduled(context);
         return count;
     }
 
@@ -205,10 +486,11 @@ public final class TranscriptionScheduler {
             if (segmentId == null) {
                 continue;
             }
-            if (enqueueAfterReset(context, segmentId, file)) {
+            if (enqueueInternal(context, segmentId, file, false)) {
                 count++;
             }
         }
+        ensureDrainScheduled(context);
         return count;
     }
 
@@ -218,11 +500,12 @@ public final class TranscriptionScheduler {
         if (files == null) {
             return 0;
         }
+        String currentEngine = LocalWhisperEngine.engineId(context);
         int pending = 0;
         for (File file : files) {
             String segmentId = extractSegmentId(file.getName());
             if (segmentId != null &&
-                    !TranscriptionRepository.isCurrentEngine(context, segmentId, LocalWhisperEngine.ENGINE_ID)) {
+                    !TranscriptionRepository.isCurrentEngine(context, segmentId, currentEngine)) {
                 pending++;
             }
         }
@@ -250,8 +533,10 @@ public final class TranscriptionScheduler {
             JSONObject details = new JSONObject();
             details.put("segmentId", segmentId == null ? JSONObject.NULL : segmentId);
             details.put("file", file == null ? JSONObject.NULL : file.getName());
-            details.put("engine", LocalWhisperEngine.ENGINE_ID);
+            details.put("engine", LocalWhisperEngine.engineId(context));
+            details.put("modelId", WhisperModelManager.selectedModelId(context));
             details.put("vadReady", WhisperModelManager.isVadReady(context));
+            details.put("queuePaused", isQueuePaused(context));
             if (message != null) {
                 details.put("message", message);
             }

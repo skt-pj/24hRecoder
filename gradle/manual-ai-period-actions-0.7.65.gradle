@@ -1,0 +1,363 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8065 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8065 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce065 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.65 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// A generated hourly note remains manually rerunnable until the daily source cleanup is complete.
+// Do not make the button depend on fragile timestamp remapping or a stale automatic WAITING_DATA row.
+def repoFile065 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/AiAnalysisRepository.java')
+def repo065 = readUtf8065(repoFile065)
+repo065 = replaceOnce065(repo065,
+'''    public static boolean hasSavedSourceAvailable(Context context, File analysisFile,
+                                                  long periodStartMs, long periodEndMs) {
+''',
+'''    public static boolean isDailySourceFinalized(Context context, long periodStartMs) {
+        if (context == null || periodStartMs <= 0L) return false;
+        File daily = dailyFile(context, periodStartMs);
+        return AiDailySourceCleanup.STATUS_COMPLETE.equals(
+                AiDailySourceCleanup.cleanupStatus(daily));
+    }
+
+    public static boolean hasSavedSourceAvailable(Context context, File analysisFile,
+                                                  long periodStartMs, long periodEndMs) {
+''', 'daily source finalized helper')
+repo065 = replaceOnce065(repo065,
+'''        File daily = dailyFile(context, periodStartMs);
+        if (AiDailySourceCleanup.STATUS_COMPLETE.equals(AiDailySourceCleanup.cleanupStatus(daily))) {
+            return false;
+        }
+''',
+'''        if (isDailySourceFinalized(context, periodStartMs)) {
+            return false;
+        }
+''', 'saved source cleanup check')
+writeUtf8065(repoFile065, repo065)
+
+// Shared hourly/day action: a stale automatic wait/retry must not lock out an explicit user action.
+// Manual enqueue uses REPLACE, so only an actually queued/running target blocks the button.
+def actionsFile065 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiNotebookAnalysisActions.kt')
+def actions065 = readUtf8065(actionsFile065)
+actions065 = replaceOnce065(actions065,
+'''                val savedSource = hasResult && AiAnalysisRepository.hasSavedSourceAvailable(
+                    context.applicationContext, targetFile, periodStartMs, periodEndMs
+                )
+                NotebookPeriodActionSnapshot(
+                    configured = AiProviderStore.isConfigured(context.applicationContext),
+                    hasSource = directSource || savedSource,
+''',
+'''                val savedSource = hasResult && AiAnalysisRepository.hasSavedSourceAvailable(
+                    context.applicationContext, targetFile, periodStartMs, periodEndMs
+                )
+                val retainedLifecycleSource = hasResult &&
+                    kind == AiAnalysisScheduler.KIND_HOURLY &&
+                    !AiAnalysisRepository.isDailySourceFinalized(
+                        context.applicationContext, periodStartMs
+                    )
+                NotebookPeriodActionSnapshot(
+                    configured = AiProviderStore.isConfigured(context.applicationContext),
+                    hasSource = directSource || savedSource || retainedLifecycleSource,
+''', 'shared hourly retained-source availability')
+actions065 = replaceOnce065(actions065,
+'''    val isHourly = kind == AiAnalysisScheduler.KIND_HOURLY
+    val activeQueue = snapshot.queueState != null && snapshot.queueState != AiQueueStore.STATE_FAILED
+    val canRun = if (isHourly) {
+''',
+'''    val isHourly = kind == AiAnalysisScheduler.KIND_HOURLY
+    val activeQueue = when (snapshot.queueState) {
+        AiQueueStore.STATE_RUNNING, AiQueueStore.STATE_QUEUED -> true
+        AiQueueStore.STATE_WAITING_DATA, AiQueueStore.STATE_RETRY_WAIT -> !snapshot.hasSource
+        else -> false
+    }
+    val canRun = if (isHourly) {
+''', 'shared manual queue override')
+actions065 = replaceOnce065(actions065,
+'''        snapshot.queueState == AiQueueStore.STATE_FAILED && snapshot.hasSource -> "再試行"
+        hasResult && snapshot.hasSource -> if (isHourly) "再実行" else "再分析"
+        hasResult -> if (isHourly) "再実行不可" else "再分析不可"
+        snapshot.hasSource -> if (isHourly) "実行" else "分析"
+''',
+'''        snapshot.queueState == AiQueueStore.STATE_FAILED && snapshot.hasSource ->
+            if (isHourly) "再試行" else "1日のノートを再試行"
+        hasResult && snapshot.hasSource ->
+            if (isHourly) "再実行" else "1日のノートを再生成"
+        hasResult -> if (isHourly) "再実行不可" else "再生成不可"
+        snapshot.hasSource -> if (isHourly) "実行" else "1日のノートを生成"
+''', 'explicit daily action labels')
+
+// Make the normal day overview action visually explicit rather than a small generic action.
+actions065 = actions065
+writeUtf8065(actionsFile065, actions065)
+
+// The 24-hour action rows use the same lifecycle and manual-override rules.
+def actions065b = readUtf8065(actionsFile065)
+actions065b = replaceOnce065(actions065b,
+'''        val hasSource = notebookHasTranscriptSource(records, startMs, endMs) ||
+            (hasResult && AiAnalysisRepository.hasSavedSourceAvailable(
+                context, hourlyFile, startMs, endMs
+            ))
+''',
+'''        val hasSource = notebookHasTranscriptSource(records, startMs, endMs) ||
+            (hasResult && AiAnalysisRepository.hasSavedSourceAvailable(
+                context, hourlyFile, startMs, endMs
+            )) ||
+            (hasResult && !AiAnalysisRepository.isDailySourceFinalized(context, startMs))
+''', '24-row retained-source availability')
+actions065b = replaceOnce065(actions065b,
+'''    val activeQueue = row.queueState != null && row.queueState != AiQueueStore.STATE_FAILED
+    val canRun = configured &&
+''',
+'''    val activeQueue = when (row.queueState) {
+        AiQueueStore.STATE_RUNNING, AiQueueStore.STATE_QUEUED -> true
+        AiQueueStore.STATE_WAITING_DATA, AiQueueStore.STATE_RETRY_WAIT -> !row.hasSource
+        else -> false
+    }
+    val canRun = configured &&
+''', '24-row manual queue override')
+writeUtf8065(actionsFile065, actions065b)
+
+// Public manual rollup target support. Automatic rollup scheduling remains unchanged.
+def schedulerFile065 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/AiAnalysisScheduler.java')
+def scheduler065 = readUtf8065(schedulerFile065)
+scheduler065 = replaceOnce065(scheduler065,
+'''    static final String KIND_WEEKLY = "weekly";
+    static final String KIND_MONTHLY = "monthly";
+    static final String KIND_YEARLY = "yearly";
+''',
+'''    public static final String KIND_WEEKLY = "weekly";
+    public static final String KIND_MONTHLY = "monthly";
+    public static final String KIND_YEARLY = "yearly";
+''', 'public rollup kinds')
+scheduler065 = replaceOnce065(scheduler065,
+'''    static boolean enqueueScheduledPeriod(
+''',
+'''    public static boolean enqueueRollupPeriod(
+            Context context,
+            String kind,
+            long periodStartMs,
+            long periodEndMs) {
+        Context app = context.getApplicationContext();
+        if (!AiProviderStore.isConfigured(app)) return false;
+        if (!KIND_WEEKLY.equals(kind) && !KIND_MONTHLY.equals(kind)
+                && !KIND_YEARLY.equals(kind)) return false;
+        if (periodStartMs <= 0L || periodEndMs <= periodStartMs) return false;
+
+        String queueId = targetQueueId(kind, periodStartMs, periodEndMs);
+        AiQueueStore.upsert(
+                app,
+                queueId,
+                kind,
+                periodStartMs,
+                periodEndMs,
+                AiQueueStore.REQUEST_MANUAL,
+                AiQueueStore.STATE_QUEUED,
+                0,
+                "ユーザー指定期間");
+
+        Data input = new Data.Builder()
+                .putString(EXTRA_KIND, kind)
+                .putLong(EXTRA_PERIOD_START_MS, periodStartMs)
+                .putLong(EXTRA_PERIOD_END_MS, periodEndMs)
+                .putString(EXTRA_QUEUE_ID, queueId)
+                .putString(EXTRA_REQUEST_TYPE, AiQueueStore.REQUEST_MANUAL)
+                .putBoolean(EXTRA_FORCE, true)
+                .build();
+        OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(AiRollupWorker.class)
+                .setInputData(input)
+                .setConstraints(analysisConstraints(app))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag("ai-analysis")
+                .addTag("ai-rollup")
+                .addTag("ai-rollup-target")
+                .build();
+        WorkManager.getInstance(app).enqueueUniqueWork(
+                targetWorkName(kind, periodStartMs, periodEndMs),
+                ExistingWorkPolicy.REPLACE,
+                request);
+        return true;
+    }
+
+    static boolean enqueueScheduledPeriod(
+''', 'manual rollup scheduler')
+writeUtf8065(schedulerFile065, scheduler065)
+
+// AiRollupWorker can now process one explicit user-selected period and force regeneration.
+def rollupWorkerFile065 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/AiRollupWorker.java')
+def rollupWorker065 = readUtf8065(rollupWorkerFile065)
+rollupWorker065 = replaceOnce065(rollupWorker065,
+'''import java.util.ArrayList;
+import java.util.List;
+''',
+'''import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+''', 'rollup collections import')
+rollupWorker065 = replaceOnce065(rollupWorker065,
+'''        String modelId = AiInferenceClient.modelId(context);
+
+        int generated = 0;
+        for (PeriodSpec spec : completedPeriods()) {
+''',
+'''        String modelId = AiInferenceClient.modelId(context);
+        String explicitKind = getInputData().getString(AiAnalysisScheduler.EXTRA_KIND);
+        long explicitStartMs = getInputData().getLong(
+                AiAnalysisScheduler.EXTRA_PERIOD_START_MS, 0L);
+        long explicitEndMs = getInputData().getLong(
+                AiAnalysisScheduler.EXTRA_PERIOD_END_MS, 0L);
+        String explicitQueueId = getInputData().getString(AiAnalysisScheduler.EXTRA_QUEUE_ID);
+        String requestType = getInputData().getString(AiAnalysisScheduler.EXTRA_REQUEST_TYPE);
+        if (requestType == null || requestType.isEmpty()) {
+            requestType = AiQueueStore.REQUEST_SCHEDULED;
+        }
+        boolean force = getInputData().getBoolean(AiAnalysisScheduler.EXTRA_FORCE, false);
+        boolean explicitTarget = (AiAnalysisScheduler.KIND_WEEKLY.equals(explicitKind)
+                || AiAnalysisScheduler.KIND_MONTHLY.equals(explicitKind)
+                || AiAnalysisScheduler.KIND_YEARLY.equals(explicitKind))
+                && explicitStartMs > 0L && explicitEndMs > explicitStartMs;
+        List<PeriodSpec> periods = explicitTarget
+                ? Collections.singletonList(new PeriodSpec(
+                        explicitKind, explicitStartMs, explicitEndMs))
+                : completedPeriods();
+
+        int generated = 0;
+        for (PeriodSpec spec : periods) {
+''', 'explicit rollup input')
+rollupWorker065 = replaceOnce065(rollupWorker065,
+'''            String queueId = AiAnalysisScheduler.targetQueueId(
+                    spec.kind, spec.periodStartMs, spec.periodEndMs);
+''',
+'''            String queueId = explicitTarget && explicitQueueId != null && !explicitQueueId.isEmpty()
+                    ? explicitQueueId
+                    : AiAnalysisScheduler.targetQueueId(
+                            spec.kind, spec.periodStartMs, spec.periodEndMs);
+''', 'explicit rollup queue id')
+rollupWorker065 = replaceOnce065(rollupWorker065,
+'''            if (AiRollupRepository.isCurrent(target, source.sourceHash, modelId)) {
+''',
+'''            if (!force && AiRollupRepository.isCurrent(target, source.sourceHash, modelId)) {
+''', 'forced rollup regeneration')
+rollupWorker065 = rollupWorker065.replace(
+        '''                    AiQueueStore.REQUEST_SCHEDULED,
+                    AiQueueStore.STATE_RUNNING,
+''',
+        '''                    requestType,
+                    AiQueueStore.STATE_RUNNING,
+''')
+rollupWorker065 = rollupWorker065.replace(
+        '''                        AiQueueStore.REQUEST_SCHEDULED,
+                        canRetry ? AiQueueStore.STATE_RETRY_WAIT : AiQueueStore.STATE_FAILED,
+''',
+        '''                        requestType,
+                        canRetry ? AiQueueStore.STATE_RETRY_WAIT : AiQueueStore.STATE_FAILED,
+''')
+writeUtf8065(rollupWorkerFile065, rollupWorker065)
+
+// Add a direct monthly generate/regenerate action to the month page. It summarizes the daily notes
+// currently available for the selected month; automatic month-end generation remains in place.
+def screenFile065 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiAnalysisScreen.kt')
+def screen065 = readUtf8065(screenFile065)
+screen065 = replaceOnce065(screen065,
+'''package com.sktpj.recorder24h
+
+''',
+'''package com.sktpj.recorder24h
+
+import android.widget.Toast
+''', 'Toast import')
+screen065 = replaceOnce065(screen065,
+'''    val zone = ZoneId.systemDefault()
+    val monthly = snapshot.monthly.firstOrNull {
+''',
+'''    val context = LocalContext.current
+    val zone = ZoneId.systemDefault()
+    val monthly = snapshot.monthly.firstOrNull {
+''', 'month context')
+screen065 = replaceOnce065(screen065,
+'''    val currentMonth = YearMonth.now(zone)
+    val days = snapshot.daily.filter {
+''',
+'''    val currentMonth = YearMonth.now(zone)
+    val monthStartMs = month.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
+    val monthEndMs = month.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
+    val days = snapshot.daily.filter {
+''', 'month period bounds')
+screen065 = replaceOnce065(screen065,
+'''        MonthCalendar(
+            month = month,
+            daily = snapshot.daily,
+''',
+'''        Button(
+            onClick = {
+                val queued = AiAnalysisScheduler.enqueueRollupPeriod(
+                    context,
+                    AiAnalysisScheduler.KIND_MONTHLY,
+                    monthStartMs,
+                    monthEndMs
+                )
+                Toast.makeText(
+                    context,
+                    if (queued) "月のまとめをAI要約キューに追加しました" else "AI要約を登録できませんでした",
+                    Toast.LENGTH_SHORT
+                ).show()
+            },
+            enabled = snapshot.aiConfigured && days.isNotEmpty(),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (monthly != null) "月のまとめを再生成" else "月のまとめを生成")
+        }
+
+        MonthCalendar(
+            month = month,
+            daily = snapshot.daily,
+''', 'monthly manual action')
+
+// The existing day action inserted by 0.7.54 stays in the normal day view; make it full width.
+screen065 = replaceOnce065(screen065,
+'''        AiNotebookPeriodAnalysisButton(
+            kind = AiAnalysisScheduler.KIND_DAILY,
+            periodStartMs = selectedStartMs,
+            periodEndMs = selectedEndMs,
+            hasResult = selectedDaily != null
+        )
+''',
+'''        AiNotebookPeriodAnalysisButton(
+            kind = AiAnalysisScheduler.KIND_DAILY,
+            periodStartMs = selectedStartMs,
+            periodEndMs = selectedEndMs,
+            hasResult = selectedDaily != null,
+            modifier = Modifier.fillMaxWidth()
+        )
+''', 'full-width daily action')
+writeUtf8065(screenFile065, screen065)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1065)
+            output.versionName.set('0.7.65-debug')
+        }
+    }
+}
+
+if (!repoFile065.text.contains('isDailySourceFinalized')) {
+    throw new GradleException('0.7.65 lifecycle source helper missing')
+}
+if (!actionsFile065.text.contains('retainedLifecycleSource')) {
+    throw new GradleException('0.7.65 hourly rerun lifecycle availability missing')
+}
+if (!actionsFile065.text.contains('1日のノートを再生成')) {
+    throw new GradleException('0.7.65 explicit day action label missing')
+}
+if (!schedulerFile065.text.contains('enqueueRollupPeriod')) {
+    throw new GradleException('0.7.65 manual rollup scheduler missing')
+}
+if (!screenFile065.text.contains('月のまとめを再生成')) {
+    throw new GradleException('0.7.65 monthly manual action missing')
+}

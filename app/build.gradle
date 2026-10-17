@@ -4,6 +4,102 @@ plugins {
     id 'org.jetbrains.kotlin.plugin.compose'
 }
 
+apply from: rootProject.file('gradle/live-history-backpressure-0.7.30.gradle')
+apply from: rootProject.file('gradle/vulkan-diagnostics-0.7.34.gradle')
+apply from: rootProject.file('gradle/vulkan-diagnostics-ui-fix-0.7.34.gradle')
+apply from: rootProject.file('gradle/vulkan-auto-probe-0.7.35.gradle')
+apply from: rootProject.file('gradle/vulkan-upstream-fix-0.7.36.gradle')
+apply from: rootProject.file('gradle/cpu-vulkan-benchmark-0.7.37.gradle')
+apply from: rootProject.file('gradle/version-0.7.38.gradle')
+apply from: rootProject.file('gradle/nightly-hourly-transcription-0.7.39.gradle')
+apply from: rootProject.file('gradle/nightly-hourly-transcription-fix-0.7.39.gradle')
+apply from: rootProject.file('gradle/nightly-hourly-transcription-java-fix-0.7.39.gradle')
+apply from: rootProject.file('gradle/nightly-hourly-copy-fix-0.7.39.gradle')
+apply from: rootProject.file('gradle/user-data-reset-0.7.40.gradle')
+apply from: rootProject.file('gradle/live-segment-editor-0.7.41.gradle')
+apply from: rootProject.file('gradle/live-segment-display-0.7.41.gradle')
+apply from: rootProject.file('gradle/nightly-charging-0.7.42.gradle')
+apply from: rootProject.file('gradle/nightly-charging-recovery-0.7.42.gradle')
+apply from: rootProject.file('gradle/hour-detail-0.7.42.gradle')
+apply from: rootProject.file('gradle/model-30s-benchmark-0.7.43.gradle')
+apply from: rootProject.file('gradle/nightly-hour-batch-compat-0.7.44.gradle')
+apply from: rootProject.file('gradle/nightly-hour-batch-0.7.44.gradle')
+apply from: rootProject.file('gradle/nightly-hour-batch-java-fix-0.7.44.gradle')
+apply from: rootProject.file('gradle/hour-audio-vad-compaction-0.7.45.gradle')
+apply from: rootProject.file('gradle/hour-canonical-persist-0.7.45.gradle')
+apply from: rootProject.file('gradle/hour-native-diagnostic-0.7.45.gradle')
+apply from: rootProject.file('gradle/realtime-only-mode-0.7.46.gradle')
+apply from: rootProject.file('gradle/vad-diagnostics-presets-0.7.47.gradle')
+apply from: rootProject.file('gradle/vad-diagnostics-presets-fix-0.7.47.gradle')
+apply from: rootProject.file('gradle/vad-diagnostics-presets-java-fix-0.7.47.gradle')
+apply from: rootProject.file('gradle/ai-hourly-resilience-0.7.48.gradle')
+apply from: rootProject.file('gradle/recorder-service-auto-recovery-0.7.49.gradle')
+apply from: rootProject.file('gradle/capture-silenced-retry-0.7.50.gradle')
+apply from: rootProject.file('gradle/ai-notebook-editorial-0.7.51.gradle')
+apply from: rootProject.file('gradle/ai-notebook-tap-detail-0.7.52.gradle')
+apply from: rootProject.file('gradle/ai-notebook-visual-hour-detail-0.7.53.gradle')
+apply from: rootProject.file('gradle/ai-notebook-restore-actions-0.7.54.gradle')
+apply from: rootProject.file('gradle/ai-notebook-mind-elixir-0.7.55.gradle')
+apply from: rootProject.file('gradle/ai-notebook-mind-elixir-assets-fix-0.7.55.gradle')
+apply from: rootProject.file('gradle/ai-notebook-clean-ui-0.7.56.gradle')
+apply from: rootProject.file('gradle/ui-copy-policy-0.7.57.gradle')
+apply from: rootProject.file('gradle/ui-copy-policy-sweep-0.7.57.gradle')
+apply from: rootProject.file('gradle/live-hallucination-multisignal-0.7.58.gradle')
+apply from: rootProject.file('gradle/live-hallucination-multisignal-fix-0.7.58.gradle')
+apply from: rootProject.file('gradle/live-hallucination-vad-threshold-fix-0.7.58.gradle')
+apply from: rootProject.file('gradle/quiet-speech-rescue-prep-0.7.59.gradle')
+apply from: rootProject.file('gradle/quiet-speech-rescue-corrected-0.7.59.gradle')
+apply from: rootProject.file('gradle/native-fetch-transport-0.7.59.gradle')
+apply from: rootProject.file('gradle/diagnostic-log-levels-mindmap-0.7.60.gradle')
+apply from: rootProject.file('gradle/manual-drive-sync-0.7.61.gradle')
+apply from: rootProject.file('gradle/manual-drive-sync-ui-fix-0.7.61.gradle')
+apply from: rootProject.file('gradle/mindmap-layout-sync-status-0.7.62.gradle')
+apply from: rootProject.file('gradle/ai-hourly-rerun-source-0.7.63.gradle')
+apply from: rootProject.file('gradle/ai-rerun-button-mindmap-0.7.64.gradle')
+apply from: rootProject.file('gradle/manual-ai-period-actions-0.7.65.gradle')
+apply from: rootProject.file('gradle/hourly-rerun-persisted-result-0.7.66.gradle')
+apply from: rootProject.file('gradle/manual-ai-force-regeneration-0.7.67.gradle')
+apply from: rootProject.file('gradle/realtime-orphan-recovery-ai-note-0.7.68.gradle')
+apply from: rootProject.file('gradle/state-transition-tracing-0.7.69.gradle')
+apply from: rootProject.file('gradle/full-streaming-ownership-tracing-0.7.69.gradle')
+apply from: rootProject.file('gradle/state-transition-tracing-java-fix-0.7.69.gradle')
+apply from: rootProject.file('gradle/realtime-orphan-live-model-recovery-0.7.70.gradle')
+apply from: rootProject.file('gradle/storage-retention-headroom-0.7.70.gradle')
+apply from: rootProject.file('gradle/ai-action-mode-0.7.71.gradle')
+apply from: rootProject.file('gradle/battery-transcription-prep-0.7.72.gradle')
+apply from: rootProject.file('gradle/battery-transcription-0.7.72.gradle')
+apply from: rootProject.file('gradle/ai-hierarchy-0.7.73.gradle')
+apply from: rootProject.file('gradle/startup-version-log-0.7.74.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.82.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.83.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.84.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.85.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.86.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.87.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.88.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.89.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.90.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.91.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.92.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.93.gradle')
+apply from: rootProject.file('gradle/ui-copy-version-0.7.94.gradle')
+apply from: rootProject.file('gradle/ui-copy-final-0.7.95.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.96.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.97.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.98.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.99.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.100.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.101.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.102.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.103.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.104.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.105.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.106.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.107.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.108.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.110.gradle')
+apply from: rootProject.file('gradle/memoket-version-0.7.111.gradle')
+
 android {
     namespace 'com.sktpj.recorder24h'
     compileSdk 36
@@ -13,29 +109,16 @@ android {
         applicationId 'com.sktpj.recorder24h'
         minSdk 29
         targetSdk 36
-        versionCode 24
-        versionName '0.6.3'
-        // Canonical local transcription model: Whisper large-v3 Q5.
-        // User-triggered queue requests run immediately in a mediaProcessing FGS.
-        // Automatic background transcription still uses WorkManager with battery-not-low.
-
-        ndk {
-            abiFilters 'arm64-v8a'
-        }
-
-        externalNativeBuild {
-            cmake {
-                cppFlags '-std=c++17'
-            }
-        }
+        versionCode 1030
+        versionName '0.7.30'
+        ndk { abiFilters 'arm64-v8a' }
+        externalNativeBuild { cmake { cppFlags '-std=c++17' } }
     }
 
     buildTypes {
         debug {
             applicationIdSuffix '.debug'
             versionNameSuffix '-debug'
-            // CI applies a fixed development-only signing certificate after assembleDebug.
-            // Do not use that certificate for production releases.
             signingConfig null
         }
         release {
@@ -50,33 +133,27 @@ android {
             version '3.22.1'
         }
     }
-
-    buildFeatures {
-        compose true
-    }
-
+    buildFeatures { compose true }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
 }
 
-kotlin {
-    jvmToolchain(17)
-}
+kotlin { jvmToolchain(17) }
 
 dependencies {
+    testImplementation 'junit:junit:4.13.2'
     implementation 'androidx.work:work-runtime:2.11.2'
     implementation 'com.github.k2-fsa:sherpa-onnx:1.13.4'
-
+    implementation 'com.google.ai.edge.litertlm:litertlm-android:0.14.0'
+    implementation 'io.github.kaleyravideo:android-deepfilternet:0.0.8'
     def composeBom = platform('androidx.compose:compose-bom:2026.06.00')
     implementation composeBom
-
     implementation 'androidx.activity:activity-compose:1.13.0'
     implementation 'androidx.compose.ui:ui'
     implementation 'androidx.compose.ui:ui-tooling-preview'
     implementation 'androidx.compose.material3:material3'
     implementation 'androidx.compose.material:material-icons-core'
-
     debugImplementation 'androidx.compose.ui:ui-tooling'
 }

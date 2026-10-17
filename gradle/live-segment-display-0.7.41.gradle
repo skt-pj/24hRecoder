@@ -1,0 +1,86 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8041Display = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8041Display = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce041Display = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.41 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// The realtime tab now uses one card per Whisper segment. Keep the same granularity in the
+// provisional text shown inside the one-hour history/current-conversation cards as well.
+def mainFile041Display = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+def main041Display = readUtf8041Display(mainFile041Display)
+main041Display = replaceOnce041Display(
+        main041Display,
+'''private fun liveConversationText(
+    finals: List<FullStreamingStateStore.RecentFinal>
+): String = finals
+    .filter { it.text.isNotBlank() }
+    .joinToString("\\n") { item ->
+        val speaker = item.speaker?.trim().orEmpty()
+        if (speaker.isNotBlank() && speaker != "判定不能") {
+            "$speaker: ${item.text}"
+        } else {
+            item.text
+        }
+    }
+    .trim()
+''',
+'''private fun liveConversationText(
+    finals: List<FullStreamingStateStore.RecentFinal>
+): String = finals
+    .flatMap { item ->
+        if (item.segments.isNotEmpty()) {
+            item.segments.map { segment ->
+                val time = if (item.startAtMs > 0L) {
+                    SimpleDateFormat("HH:mm:ss", Locale.JAPAN)
+                        .format(Date(item.startAtMs + segment.startMs))
+                } else {
+                    "--:--:--"
+                }
+                val speaker = segment.speaker.trim()
+                if (speaker.isNotBlank() && speaker != "判定不能") {
+                    "$time  $speaker: ${segment.text}"
+                } else {
+                    "$time  ${segment.text}"
+                }
+            }
+        } else if (item.text.isNotBlank()) {
+            val time = if (item.startAtMs > 0L) {
+                SimpleDateFormat("HH:mm:ss", Locale.JAPAN).format(Date(item.startAtMs))
+            } else {
+                "--:--:--"
+            }
+            val speaker = item.speaker?.trim().orEmpty()
+            listOf(
+                if (speaker.isNotBlank() && speaker != "判定不能") {
+                    "$time  $speaker: ${item.text}"
+                } else {
+                    "$time  ${item.text}"
+                }
+            )
+        } else {
+            emptyList()
+        }
+    }
+    .joinToString("\\n")
+    .trim()
+''',
+        'realtime segment history text')
+writeUtf8041Display(mainFile041Display, main041Display)
+
+// recent.json now supports per-segment overrides. Keep its root schema marker at v3 after any
+// later append/mutation rather than allowing an append to downgrade only the marker back to v2.
+def storeFile041Display = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/FullStreamingStateStore.java')
+def store041Display = readUtf8041Display(storeFile041Display)
+store041Display = store041Display.replace('root.put("schemaVersion", 2);', 'root.put("schemaVersion", 3);')
+writeUtf8041Display(storeFile041Display, store041Display)
+
+if (!mainFile041Display.text.contains('segment.startMs')) {
+    throw new GradleException('0.7.41 segment time preview patch was not applied')
+}

@@ -1,0 +1,42 @@
+import java.nio.charset.StandardCharsets
+
+def file058fix = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/LiveWhisperNoSpeechGuard.java')
+def text058fix = new String(file058fix.bytes, StandardCharsets.UTF_8)
+def start058fix = text058fix.indexOf('    private static boolean isKnownOutroHallucination(String text) {')
+if (start058fix < 0) throw new GradleException('0.7.58 fix: outro method start missing')
+def end058fix = text058fix.indexOf('    private static void logSuppressed(', start058fix)
+if (end058fix < 0) throw new GradleException('0.7.58 fix: outro method end missing')
+def replacement058fix = '''    private static boolean isKnownOutroHallucination(String text) {
+        if (text == null || text.trim().isEmpty()) return false;
+        String compact = text
+                .replace(" ", "")
+                .replace("　", "")
+                .replace("。", "")
+                .replace("、", "")
+                .replace("，", "")
+                .replace("．", "")
+                .replace("！", "")
+                .replace("!", "")
+                .replace("？", "")
+                .replace("?", "")
+                .replace("「", "")
+                .replace("」", "")
+                .replace("『", "")
+                .replace("』", "")
+                .replace("【", "")
+                .replace("】", "")
+                .replace("（", "")
+                .replace("）", "");
+        return compact.contains("ご視聴ありがとうございました")
+                || compact.contains("ご視聴ありがとう")
+                || compact.contains("チャンネル登録")
+                || compact.equals("ありがとうございました");
+    }
+
+'''
+text058fix = text058fix.substring(0, start058fix) + replacement058fix + text058fix.substring(end058fix)
+file058fix.setText(text058fix, 'UTF-8')
+
+if (file058fix.text.contains('replaceAll("[')) {
+    throw new GradleException('0.7.58 fix: regex normalizer still present')
+}

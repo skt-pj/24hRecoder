@@ -1,0 +1,236 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8066 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8066 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce066 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.66 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// A generated result can exist on disk even when an in-memory screen snapshot has not associated it
+// with the current row yet. The persisted analysis file is the result source of truth.
+def actionsFile066 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiNotebookAnalysisActions.kt')
+def actions066 = readUtf8066(actionsFile066)
+
+actions066 = replaceOnce066(actions066,
+'''private data class NotebookPeriodActionSnapshot(
+    val configured: Boolean,
+    val hasSource: Boolean,
+    val pendingTranscription: Boolean,
+    val queueState: String?,
+    val periodStarted: Boolean,
+    val periodFinished: Boolean
+)
+''',
+'''private data class NotebookPeriodActionSnapshot(
+    val configured: Boolean,
+    val persistedResult: Boolean,
+    val hasSource: Boolean,
+    val pendingTranscription: Boolean,
+    val queueState: String?,
+    val periodStarted: Boolean,
+    val periodFinished: Boolean
+)
+''', 'period snapshot persisted result')
+
+actions066 = replaceOnce066(actions066,
+'''            NotebookPeriodActionSnapshot(
+                configured = AiProviderStore.isConfigured(context),
+                hasSource = false,
+                pendingTranscription = false,
+''',
+'''            NotebookPeriodActionSnapshot(
+                configured = AiProviderStore.isConfigured(context),
+                persistedResult = hasResult,
+                hasSource = false,
+                pendingTranscription = false,
+''', 'initial persisted result')
+
+actions066 = replaceOnce066(actions066,
+'''                val directSource = notebookHasTranscriptSource(records, periodStartMs, periodEndMs)
+                val savedSource = hasResult && AiAnalysisRepository.hasSavedSourceAvailable(
+                    context.applicationContext, targetFile, periodStartMs, periodEndMs
+                )
+                val retainedLifecycleSource = hasResult &&
+                    kind == AiAnalysisScheduler.KIND_HOURLY &&
+                    !AiAnalysisRepository.isDailySourceFinalized(
+                        context.applicationContext, periodStartMs
+                    )
+                NotebookPeriodActionSnapshot(
+                    configured = AiProviderStore.isConfigured(context.applicationContext),
+                    hasSource = directSource || savedSource || retainedLifecycleSource,
+''',
+'''                val persistedResult = targetFile.isFile
+                val directSource = notebookHasTranscriptSource(records, periodStartMs, periodEndMs)
+                val savedSource = persistedResult && AiAnalysisRepository.hasSavedSourceAvailable(
+                    context.applicationContext, targetFile, periodStartMs, periodEndMs
+                )
+                val retainedLifecycleSource = persistedResult &&
+                    kind == AiAnalysisScheduler.KIND_HOURLY &&
+                    !AiAnalysisRepository.isDailySourceFinalized(
+                        context.applicationContext, periodStartMs
+                    )
+                NotebookPeriodActionSnapshot(
+                    configured = AiProviderStore.isConfigured(context.applicationContext),
+                    persistedResult = persistedResult,
+                    hasSource = directSource || savedSource || retainedLifecycleSource,
+''', 'persisted result source of truth')
+
+actions066 = replaceOnce066(actions066,
+'''    val isHourly = kind == AiAnalysisScheduler.KIND_HOURLY
+    val activeQueue = when (snapshot.queueState) {
+''',
+'''    val isHourly = kind == AiAnalysisScheduler.KIND_HOURLY
+    val effectiveHasResult = snapshot.persistedResult || hasResult
+    val activeQueue = when (snapshot.queueState) {
+''', 'effective persisted result')
+
+actions066 = replaceOnce066(actions066,
+'''        hasResult && snapshot.hasSource ->
+            if (isHourly) "再実行" else "1日のノートを再生成"
+        hasResult -> if (isHourly) "再実行不可" else "再生成不可"
+''',
+'''        effectiveHasResult && snapshot.hasSource ->
+            if (isHourly) "再実行" else "1日のノートを再生成"
+        effectiveHasResult -> if (isHourly) "再実行不可" else "再生成不可"
+''', 'result label uses persisted state')
+
+writeUtf8066(actionsFile066, actions066)
+
+// There is also a legacy/manual rerun activity. It retained the older stricter eligibility rule,
+// so the notebook fix alone could never make that screen's button active. Apply the same source,
+// queue, and partial-transcription policy there.
+def rerunFile066 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiRerunActivity.kt')
+def rerun066 = readUtf8066(rerunFile066)
+
+// 0.7.63 has already added the saved sourceSegmentIds fallback by the time this patch runs.
+rerun066 = replaceOnce066(rerun066,
+'''        val hourlyFile = AiAnalysisRepository.hourlyFile(context, startMs)
+        val hasResult = hourlyFile.isFile
+        val hasSource = hasTranscriptSource(records, startMs, endMs) ||
+            (hasResult && AiAnalysisRepository.hasSavedSourceAvailable(
+                context, hourlyFile, startMs, endMs
+            ))
+        val pending = hasPendingTranscription(records, startMs, endMs)
+''',
+'''        val hourlyFile = AiAnalysisRepository.hourlyFile(context, startMs)
+        val hasResult = hourlyFile.isFile
+        val hasSource = hasTranscriptSource(records, startMs, endMs) ||
+            (hasResult && AiAnalysisRepository.hasSavedSourceAvailable(
+                context, hourlyFile, startMs, endMs
+            )) ||
+            (hasResult && !AiAnalysisRepository.isDailySourceFinalized(context, startMs))
+        val pending = hasPendingTranscription(records, startMs, endMs)
+''', 'legacy rerun retained lifecycle source')
+
+rerun066 = replaceOnce066(rerun066,
+'''    val activeQueue = row.queueState != null && row.queueState != AiQueueStore.STATE_FAILED
+    val canRun = row.periodFinished &&
+        !row.pendingTranscription &&
+        !activeQueue &&
+        row.hasSource
+''',
+'''    val activeQueue = when (row.queueState) {
+        AiQueueStore.STATE_RUNNING, AiQueueStore.STATE_QUEUED -> true
+        AiQueueStore.STATE_WAITING_DATA, AiQueueStore.STATE_RETRY_WAIT -> !row.hasSource
+        else -> false
+    }
+    val canRun = row.periodFinished &&
+        !activeQueue &&
+        row.hasSource
+''', 'legacy rerun manual eligibility')
+
+rerun066 = replaceOnce066(rerun066,
+'''    val statusText = when {
+        activeQueue -> queueStateLabel(row.queueState)
+        !row.periodFinished && row.periodStarted -> "進行中"
+        !row.periodStarted -> "未到達"
+        row.pendingTranscription -> "文字起こし待ち"
+        row.queueState == AiQueueStore.STATE_FAILED && row.hasSource -> "前回失敗・再試行可能"
+        row.queueState == AiQueueStore.STATE_FAILED -> "前回失敗・元データなし"
+        row.hasResult && row.hasSource -> "生成済み"
+        row.hasResult -> "生成済み・元データなし"
+        row.hasSource -> "未生成・実行可能"
+        else -> "データなし"
+    }
+
+    val actionLabel = when {
+        activeQueue -> queueStateLabel(row.queueState)
+        !row.periodFinished && row.periodStarted -> "進行中"
+        !row.periodStarted -> "未到達"
+        row.pendingTranscription -> "待機"
+        row.queueState == AiQueueStore.STATE_FAILED && row.hasSource -> "再試行"
+        row.hasResult && row.hasSource -> "再実行"
+        row.hasResult -> "再実行不可"
+        row.hasSource -> "実行"
+        else -> "実行不可"
+    }
+''',
+'''    val statusText = when {
+        activeQueue -> queueStateLabel(row.queueState)
+        !row.periodFinished && row.periodStarted -> "進行中"
+        !row.periodStarted -> "未到達"
+        row.queueState == AiQueueStore.STATE_FAILED && row.hasSource -> "前回失敗・再試行可能"
+        row.queueState == AiQueueStore.STATE_FAILED -> "前回失敗・元データなし"
+        row.hasResult && row.hasSource -> "生成済み"
+        row.hasResult -> "生成済み・元データなし"
+        row.hasSource && row.pendingTranscription -> "一部文字起こし待ち・手動実行可能"
+        row.hasSource -> "未生成・実行可能"
+        row.pendingTranscription -> "文字起こし待ち"
+        else -> "データなし"
+    }
+
+    val actionLabel = when {
+        activeQueue -> queueStateLabel(row.queueState)
+        !row.periodFinished && row.periodStarted -> "進行中"
+        !row.periodStarted -> "未到達"
+        row.queueState == AiQueueStore.STATE_FAILED && row.hasSource -> "再試行"
+        row.hasResult && row.hasSource -> "再実行"
+        row.hasResult -> "再実行不可"
+        row.hasSource -> "実行"
+        row.pendingTranscription -> "待機"
+        else -> "実行不可"
+    }
+''', 'legacy rerun partial transcript status')
+
+rerun066 = replaceOnce066(rerun066,
+'''    for (record in records) {
+        if (!recordOverlaps(record, periodStartMs, periodEndMs)) continue
+        if (!record.audioAvailable) continue
+''',
+'''    for (record in records) {
+        if (!recordOverlaps(record, periodStartMs, periodEndMs)) continue
+        if (record.status == "CORRUPT") continue
+        if (!record.audioAvailable) continue
+''', 'legacy pending corrupt exclusion')
+
+writeUtf8066(rerunFile066, rerun066)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1066)
+            output.versionName.set('0.7.66-debug')
+        }
+    }
+}
+
+if (!actionsFile066.text.contains('val persistedResult = targetFile.isFile')) {
+    throw new GradleException('0.7.66 persisted hourly result lookup missing')
+}
+if (!actionsFile066.text.contains('effectiveHasResult = snapshot.persistedResult || hasResult')) {
+    throw new GradleException('0.7.66 persisted result UI state missing')
+}
+if (!rerunFile066.text.contains('hasResult && !AiAnalysisRepository.isDailySourceFinalized(context, startMs)')) {
+    throw new GradleException('0.7.66 legacy retained lifecycle source missing')
+}
+if (!rerunFile066.text.contains('STATE_WAITING_DATA, AiQueueStore.STATE_RETRY_WAIT -> !row.hasSource')) {
+    throw new GradleException('0.7.66 legacy stale queue override missing')
+}
+if (rerunFile066.text.contains('row.periodFinished &&\n        !row.pendingTranscription &&')) {
+    throw new GradleException('0.7.66 legacy hourly action still blocked by partial transcription')
+}

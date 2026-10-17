@@ -1,0 +1,492 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8069 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8069 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce069 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.69 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// -----------------------------------------------------------------------------
+// Central segment-state tracing.
+// Every journal status/reason write now records the exact Java/Kotlin caller in both segments.jsonl
+// and AppLogger. This turns the segment journal into a state-transition trace instead of a final
+// snapshot that requires guessing which code path performed the write.
+// -----------------------------------------------------------------------------
+def segmentRepoFile069 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/storage/SegmentRepository.java')
+def segmentRepo069 = readUtf8069(segmentRepoFile069)
+segmentRepo069 = replaceOnce069(segmentRepo069,
+'''import com.sktpj.recorder24h.transcription.TranscriptionScheduler;
+''',
+'''import com.sktpj.recorder24h.transcription.TranscriptionScheduler;
+import com.sktpj.recorder24h.util.AppLogger;
+''', 'segment state logger import')
+segmentRepo069 = replaceOnce069(segmentRepo069,
+'''        synchronized (LOCK) {
+            try {
+''',
+'''        StackTraceElement stateWriter = stateWriter();
+        long stateWriteAtMs = System.currentTimeMillis();
+        synchronized (LOCK) {
+            try {
+''', 'segment writer capture')
+segmentRepo069 = replaceOnce069(segmentRepo069,
+'''                row.put("status", status);
+                row.put("reason", reason == null ? JSONObject.NULL : reason);
+
+                try (FileOutputStream out = new FileOutputStream(journal, true)) {
+''',
+'''                row.put("status", status);
+                row.put("reason", reason == null ? JSONObject.NULL : reason);
+                row.put("stateWriteAtMs", stateWriteAtMs);
+                row.put("stateWriterClass", stateWriter == null ? JSONObject.NULL : stateWriter.getClassName());
+                row.put("stateWriterMethod", stateWriter == null ? JSONObject.NULL : stateWriter.getMethodName());
+                row.put("stateWriterLine", stateWriter == null ? -1 : stateWriter.getLineNumber());
+
+                try (FileOutputStream out = new FileOutputStream(journal, true)) {
+''', 'persist segment state writer')
+segmentRepo069 = replaceOnce069(segmentRepo069,
+'''        if (newlyReady) {
+            TranscriptionScheduler.notifySegmentReady(context, segmentId, file);
+        }
+    }
+}
+''',
+'''        try {
+            JSONObject details = new JSONObject();
+            details.put("segmentId", segmentId == null ? JSONObject.NULL : segmentId);
+            details.put("file", file == null ? JSONObject.NULL : file.getName());
+            details.put("fileSize", file == null ? 0L : file.length());
+            details.put("status", status == null ? JSONObject.NULL : status);
+            details.put("reason", reason == null ? JSONObject.NULL : reason);
+            details.put("startedAtMs", startedAtMs);
+            details.put("endedAtMs", endedAtMs);
+            details.put("stateWriteAtMs", stateWriteAtMs);
+            details.put("notifyReady", notifyReady);
+            details.put("newlyReady", newlyReady);
+            details.put("writerClass", stateWriter == null ? JSONObject.NULL : stateWriter.getClassName());
+            details.put("writerMethod", stateWriter == null ? JSONObject.NULL : stateWriter.getMethodName());
+            details.put("writerLine", stateWriter == null ? -1 : stateWriter.getLineNumber());
+            details.put("thread", Thread.currentThread().getName());
+            AppLogger.event(context, "SEGMENT_STATE_WRITTEN", details);
+        } catch (Exception ignored) {
+        }
+
+        if (newlyReady) {
+            TranscriptionScheduler.notifySegmentReady(context, segmentId, file);
+        }
+    }
+
+    private static StackTraceElement stateWriter() {
+        StackTraceElement[] stack = Thread.currentThread().getStackTrace();
+        String self = SegmentRepository.class.getName();
+        for (StackTraceElement frame : stack) {
+            String className = frame.getClassName();
+            if (self.equals(className) || Thread.class.getName().equals(className)) continue;
+            if (className.startsWith("java.lang.reflect.")
+                    || className.startsWith("jdk.internal.reflect.")) continue;
+            return frame;
+        }
+        return null;
+    }
+}
+''', 'segment state write event')
+writeUtf8069(segmentRepoFile069, segmentRepo069)
+
+// -----------------------------------------------------------------------------
+// AI queue state tracing.
+// AiQueueStore is the single persisted queue mutation point, so record before/after state and the
+// caller that performed the transition. This exposes scheduled/manual overwrites and stale waits.
+// -----------------------------------------------------------------------------
+def aiQueueFile069 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/AiQueueStore.java')
+def aiQueue069 = readUtf8069(aiQueueFile069)
+aiQueue069 = replaceOnce069(aiQueue069,
+'''import android.content.Context;
+
+import org.json.JSONArray;
+''',
+'''import android.content.Context;
+
+import com.sktpj.recorder24h.util.AppLogger;
+
+import org.json.JSONArray;
+''', 'AI queue logger import')
+aiQueue069 = replaceOnce069(aiQueue069,
+'''        synchronized (LOCK) {
+            List<Entry> entries = loadLocked(context);
+            long now = System.currentTimeMillis();
+            Entry existing = null;
+''',
+'''        String previousState = null;
+        String previousRequestType = null;
+        int previousAttempt = -1;
+        String previousMessage = null;
+        long now;
+        synchronized (LOCK) {
+            List<Entry> entries = loadLocked(context);
+            now = System.currentTimeMillis();
+            Entry existing = null;
+''', 'AI queue previous state capture vars')
+aiQueue069 = replaceOnce069(aiQueue069,
+'''            if (existing == null) {
+                entries.add(new Entry(
+''',
+'''            if (existing != null) {
+                previousState = existing.state;
+                previousRequestType = existing.requestType;
+                previousAttempt = existing.attempt;
+                previousMessage = existing.message;
+            }
+            if (existing == null) {
+                entries.add(new Entry(
+''', 'AI queue previous state values')
+aiQueue069 = replaceOnce069(aiQueue069,
+'''        }
+        AiPriorityGate.signalChanged();
+    }
+
+    public static void remove(Context context, String id) {
+''',
+'''        }
+        try {
+            StackTraceElement writer = stateWriter();
+            JSONObject details = new JSONObject();
+            details.put("id", id);
+            details.put("kind", kind);
+            details.put("periodStartMs", periodStartMs);
+            details.put("periodEndMs", periodEndMs);
+            details.put("previousState", previousState == null ? JSONObject.NULL : previousState);
+            details.put("state", state);
+            details.put("previousRequestType", previousRequestType == null ? JSONObject.NULL : previousRequestType);
+            details.put("requestType", requestType);
+            details.put("previousAttempt", previousAttempt);
+            details.put("attempt", attempt);
+            details.put("previousMessage", previousMessage == null ? JSONObject.NULL : previousMessage);
+            details.put("message", message == null ? "" : message);
+            details.put("updatedAtMs", now);
+            details.put("writerClass", writer == null ? JSONObject.NULL : writer.getClassName());
+            details.put("writerMethod", writer == null ? JSONObject.NULL : writer.getMethodName());
+            details.put("writerLine", writer == null ? -1 : writer.getLineNumber());
+            details.put("thread", Thread.currentThread().getName());
+            AppLogger.event(context, "AI_QUEUE_STATE_WRITTEN", details);
+        } catch (Exception ignored) {
+        }
+        AiPriorityGate.signalChanged();
+    }
+
+    public static void remove(Context context, String id) {
+''', 'AI queue state event')
+aiQueue069 = replaceOnce069(aiQueue069,
+'''    private static String readUtf8(File file) throws Exception {
+''',
+'''    private static StackTraceElement stateWriter() {
+        StackTraceElement[] stack = Thread.currentThread().getStackTrace();
+        String self = AiQueueStore.class.getName();
+        for (StackTraceElement frame : stack) {
+            String className = frame.getClassName();
+            if (self.equals(className) || Thread.class.getName().equals(className)) continue;
+            if (className.startsWith("java.lang.reflect.")
+                    || className.startsWith("jdk.internal.reflect.")) continue;
+            return frame;
+        }
+        return null;
+    }
+
+    private static String readUtf8(File file) throws Exception {
+''', 'AI queue writer helper')
+writeUtf8069(aiQueueFile069, aiQueue069)
+
+// -----------------------------------------------------------------------------
+// AI notebook eligibility tracing.
+// Log the exact equation behind every gray/active daily and hourly button, only when its inputs
+// change. Daily logs include the concrete segment rows that make pendingTranscription=true.
+// -----------------------------------------------------------------------------
+def actionsFile069 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiNotebookAnalysisActions.kt')
+def actions069 = readUtf8069(actionsFile069)
+actions069 = replaceOnce069(actions069,
+'''import com.sktpj.recorder24h.ui.SegmentRecord
+''',
+'''import com.sktpj.recorder24h.ui.SegmentRecord
+import com.sktpj.recorder24h.util.AppLogger
+''', 'AI notebook logger import')
+actions069 = replaceOnce069(actions069,
+'''import java.util.Locale
+''',
+'''import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
+import org.json.JSONArray
+import org.json.JSONObject
+''', 'AI notebook diagnostic imports')
+actions069 = replaceOnce069(actions069,
+'''@Composable
+internal fun AiNotebookDayAnalysisActions(
+''',
+'''private val notebookEligibilitySignatures = ConcurrentHashMap<String, String>()
+
+@Composable
+internal fun AiNotebookDayAnalysisActions(
+''', 'AI notebook signature cache')
+actions069 = replaceOnce069(actions069,
+'''    return NotebookDayActionSnapshot(
+        configured = AiProviderStore.isConfigured(context),
+        dailyHasSource = notebookHasTranscriptSource(records, dailyStartMs, dailyEndMs),
+        dailyPendingTranscription = notebookHasPendingTranscription(records, dailyStartMs, dailyEndMs),
+        dailyQueueState = dailyQueueState,
+        dailyProcessingDurationMs = AiProcessingDurationStore.get(
+            context,
+            AiAnalysisScheduler.KIND_DAILY,
+            dailyStartMs,
+            dailyEndMs
+        ),
+        rows = rows
+    )
+}
+
+private fun notebookHasTranscriptSource(
+''',
+'''    val configured = AiProviderStore.isConfigured(context)
+    val dailyHasSource = notebookHasTranscriptSource(records, dailyStartMs, dailyEndMs)
+    val dailyPendingTranscription = notebookHasPendingTranscription(records, dailyStartMs, dailyEndMs)
+    logNotebookEligibilityIfChanged(
+        context = context,
+        date = date,
+        zone = zone,
+        configured = configured,
+        dailyStartMs = dailyStartMs,
+        dailyEndMs = dailyEndMs,
+        dailyHasSource = dailyHasSource,
+        dailyPendingTranscription = dailyPendingTranscription,
+        dailyQueueState = dailyQueueState,
+        queueEntries = queueEntries,
+        records = records,
+        rows = rows
+    )
+
+    return NotebookDayActionSnapshot(
+        configured = configured,
+        dailyHasSource = dailyHasSource,
+        dailyPendingTranscription = dailyPendingTranscription,
+        dailyQueueState = dailyQueueState,
+        dailyProcessingDurationMs = AiProcessingDurationStore.get(
+            context,
+            AiAnalysisScheduler.KIND_DAILY,
+            dailyStartMs,
+            dailyEndMs
+        ),
+        rows = rows
+    )
+}
+
+private fun logNotebookEligibilityIfChanged(
+    context: Context,
+    date: LocalDate,
+    zone: ZoneId,
+    configured: Boolean,
+    dailyStartMs: Long,
+    dailyEndMs: Long,
+    dailyHasSource: Boolean,
+    dailyPendingTranscription: Boolean,
+    dailyQueueState: String?,
+    queueEntries: List<AiQueueStore.Entry>,
+    records: List<SegmentRecord>,
+    rows: List<NotebookHourlyActionRow>
+) {
+    val dailyActiveQueue = when (dailyQueueState) {
+        AiQueueStore.STATE_RUNNING, AiQueueStore.STATE_QUEUED -> true
+        AiQueueStore.STATE_WAITING_DATA, AiQueueStore.STATE_RETRY_WAIT -> !dailyHasSource
+        else -> false
+    }
+    val dateAllowed = date <= LocalDate.now(zone)
+    val dailyCanRun = configured && dateAllowed && !dailyActiveQueue &&
+        !dailyPendingTranscription && dailyHasSource
+    val blockers = JSONArray()
+    val blockerSignature = StringBuilder()
+    var blockerCount = 0
+    for (record in records) {
+        if (!notebookRecordOverlaps(record, dailyStartMs, dailyEndMs)) continue
+        if (record.status == "CORRUPT") continue
+        if (!record.audioAvailable) continue
+        val pending = !record.hasTranscript ||
+            record.status == "READY" ||
+            record.status == "QUEUED" ||
+            record.status == "RETRY_WAIT" ||
+            record.status == "TRANSCRIBING"
+        if (!pending) continue
+        blockerCount++
+        blockerSignature.append(record.segmentId).append(':')
+            .append(record.status).append(':').append(record.reason).append('|')
+        if (blockers.length() < 50) {
+            blockers.put(JSONObject()
+                .put("segmentId", record.segmentId)
+                .put("status", record.status)
+                .put("reason", record.reason ?: JSONObject.NULL)
+                .put("queueState", record.queueState)
+                .put("dataState", record.dataState)
+                .put("audioAvailable", record.audioAvailable)
+                .put("hasTranscript", record.hasTranscript)
+                .put("liveOwned", record.liveOwned)
+                .put("startedAtMs", record.startedAtMs)
+                .put("endedAtMs", record.endedAtMs))
+        }
+    }
+    val dailyEntry = queueEntries.firstOrNull {
+        it.kind == AiAnalysisScheduler.KIND_DAILY && it.periodStartMs == dailyStartMs
+    }
+    val disabledReasons = JSONArray()
+    if (!configured) disabledReasons.put("AI_NOT_CONFIGURED")
+    if (!dateAllowed) disabledReasons.put("FUTURE_DATE")
+    if (dailyActiveQueue) disabledReasons.put("ACTIVE_AI_QUEUE:${dailyQueueState}")
+    if (dailyPendingTranscription) disabledReasons.put("PENDING_TRANSCRIPTION")
+    if (!dailyHasSource) disabledReasons.put("NO_TRANSCRIPT_SOURCE")
+
+    val dailySignature = listOf(
+        configured, dateAllowed, dailyHasSource, dailyPendingTranscription,
+        dailyQueueState, dailyCanRun, blockerCount, blockerSignature.toString(),
+        dailyEntry?.requestType, dailyEntry?.attempt, dailyEntry?.message
+    ).joinToString("|")
+    val dailyKey = "daily:$dailyStartMs"
+    if (notebookEligibilitySignatures.put(dailyKey, dailySignature) != dailySignature) {
+        try {
+            AppLogger.event(context, "AI_NOTEBOOK_DAILY_ELIGIBILITY", JSONObject()
+                .put("date", date.toString())
+                .put("periodStartMs", dailyStartMs)
+                .put("periodEndMs", dailyEndMs)
+                .put("configured", configured)
+                .put("dateAllowed", dateAllowed)
+                .put("hasSource", dailyHasSource)
+                .put("pendingTranscription", dailyPendingTranscription)
+                .put("queueState", dailyQueueState ?: JSONObject.NULL)
+                .put("queueRequestType", dailyEntry?.requestType ?: JSONObject.NULL)
+                .put("queueAttempt", dailyEntry?.attempt ?: -1)
+                .put("queueMessage", dailyEntry?.message ?: JSONObject.NULL)
+                .put("activeQueue", dailyActiveQueue)
+                .put("canRun", dailyCanRun)
+                .put("disabledReasons", disabledReasons)
+                .put("blockerCount", blockerCount)
+                .put("blockers", blockers))
+        } catch (_: Exception) {
+        }
+    }
+
+    for (row in rows) {
+        val activeQueue = when (row.queueState) {
+            AiQueueStore.STATE_RUNNING, AiQueueStore.STATE_QUEUED -> true
+            AiQueueStore.STATE_WAITING_DATA, AiQueueStore.STATE_RETRY_WAIT -> !row.hasSource
+            else -> false
+        }
+        val canRun = configured && row.periodFinished && !activeQueue && row.hasSource
+        val disabled = JSONArray()
+        if (!configured) disabled.put("AI_NOT_CONFIGURED")
+        if (!row.periodFinished) disabled.put(if (row.periodStarted) "PERIOD_IN_PROGRESS" else "PERIOD_NOT_STARTED")
+        if (activeQueue) disabled.put("ACTIVE_AI_QUEUE:${row.queueState}")
+        if (!row.hasSource) disabled.put("NO_TRANSCRIPT_SOURCE")
+        val signature = listOf(
+            configured, row.hasSource, row.hasResult, row.pendingTranscription,
+            row.queueState, row.periodFinished, row.periodStarted, canRun
+        ).joinToString("|")
+        val key = "hourly:${row.periodStartMs}"
+        if (notebookEligibilitySignatures.put(key, signature) == signature) continue
+        try {
+            AppLogger.event(context, "AI_NOTEBOOK_HOURLY_ELIGIBILITY", JSONObject()
+                .put("periodStartMs", row.periodStartMs)
+                .put("periodEndMs", row.periodEndMs)
+                .put("hour", row.hour)
+                .put("configured", configured)
+                .put("hasSource", row.hasSource)
+                .put("hasResult", row.hasResult)
+                .put("pendingTranscription", row.pendingTranscription)
+                .put("queueState", row.queueState ?: JSONObject.NULL)
+                .put("periodFinished", row.periodFinished)
+                .put("periodStarted", row.periodStarted)
+                .put("activeQueue", activeQueue)
+                .put("canRun", canRun)
+                .put("disabledReasons", disabled))
+        } catch (_: Exception) {
+        }
+    }
+}
+
+private fun notebookHasTranscriptSource(
+''', 'AI notebook eligibility logs')
+writeUtf8069(actionsFile069, actions069)
+
+// -----------------------------------------------------------------------------
+// Queue-runner progress tracing. If a process says DRAIN_STARTED and then appears idle, these
+// markers distinguish history-load/selection stalls from native inference or state-write stalls.
+// -----------------------------------------------------------------------------
+def workerFile069 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionWorker.java')
+def worker069 = readUtf8069(workerFile069)
+worker069 = replaceOnce069(worker069,
+'''            SegmentRecord next = nextQueuedRecord(context);
+            if (next == null) {
+''',
+'''            long queueScanStartedAtMs = System.currentTimeMillis();
+            AppLogger.event(context, "TRANSCRIPTION_QUEUE_SCAN_STARTED", new JSONObject()
+                    .put("runner", "workmanager-single-drain"));
+            SegmentRecord next = nextQueuedRecord(context);
+            JSONObject queueScan = new JSONObject()
+                    .put("runner", "workmanager-single-drain")
+                    .put("scanMs", Math.max(0L, System.currentTimeMillis() - queueScanStartedAtMs));
+            if (next != null) {
+                queueScan.put("segmentId", next.getSegmentId())
+                        .put("status", next.getStatus())
+                        .put("reason", next.getReason() == null ? JSONObject.NULL : next.getReason())
+                        .put("queueEnqueuedAtMs", next.getQueueEnqueuedAtMs());
+            }
+            AppLogger.event(context, "TRANSCRIPTION_QUEUE_SCAN_FINISHED", queueScan);
+            if (next == null) {
+''', 'workmanager queue scan tracing')
+writeUtf8069(workerFile069, worker069)
+
+def serviceFile069 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionQueueService.java')
+def service069 = readUtf8069(serviceFile069)
+service069 = replaceOnce069(service069,
+'''                SegmentRecord next = nextQueuedRecord(context);
+                if (next == null) {
+''',
+'''                long queueScanStartedAtMs = System.currentTimeMillis();
+                AppLogger.event(context, "TRANSCRIPTION_QUEUE_SCAN_STARTED", new JSONObject()
+                        .put("runner", "foreground-single-drain"));
+                SegmentRecord next = nextQueuedRecord(context);
+                JSONObject queueScan = new JSONObject()
+                        .put("runner", "foreground-single-drain")
+                        .put("scanMs", Math.max(0L, System.currentTimeMillis() - queueScanStartedAtMs));
+                if (next != null) {
+                    queueScan.put("segmentId", next.getSegmentId())
+                            .put("status", next.getStatus())
+                            .put("reason", next.getReason() == null ? JSONObject.NULL : next.getReason())
+                            .put("queueEnqueuedAtMs", next.getQueueEnqueuedAtMs());
+                }
+                AppLogger.event(context, "TRANSCRIPTION_QUEUE_SCAN_FINISHED", queueScan);
+                if (next == null) {
+''', 'foreground queue scan tracing')
+writeUtf8069(serviceFile069, service069)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1069)
+            output.versionName.set('0.7.69-debug')
+        }
+    }
+}
+
+if (!segmentRepoFile069.text.contains('SEGMENT_STATE_WRITTEN')) {
+    throw new GradleException('0.7.69 segment state tracing missing')
+}
+if (!aiQueueFile069.text.contains('AI_QUEUE_STATE_WRITTEN')) {
+    throw new GradleException('0.7.69 AI queue state tracing missing')
+}
+if (!actionsFile069.text.contains('AI_NOTEBOOK_DAILY_ELIGIBILITY')) {
+    throw new GradleException('0.7.69 AI notebook eligibility tracing missing')
+}
+if (!workerFile069.text.contains('TRANSCRIPTION_QUEUE_SCAN_FINISHED')) {
+    throw new GradleException('0.7.69 worker queue scan tracing missing')
+}
+if (!serviceFile069.text.contains('foreground-single-drain')) {
+    throw new GradleException('0.7.69 service queue scan tracing missing')
+}

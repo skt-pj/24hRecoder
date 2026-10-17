@@ -1,0 +1,458 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce034 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.34 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+def localWhisperFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/LocalWhisperEngine.java')
+def nativeFile = rootProject.file('app/src/main/cpp/whisper_jni.cpp')
+def manifestFile = rootProject.file('app/src/main/AndroidManifest.xml')
+def mainActivityFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+def recoveryFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/PostprocessProcessRecovery.java')
+
+// Add Java-side stage breadcrumbs around the production JNI call and expose the isolated probe JNI.
+def localWhisper = readUtf8(localWhisperFile)
+if (!localWhisper.contains('nativeProbeWhisper')) {
+    localWhisper = replaceOnce034(
+            localWhisper,
+            '''            String raw = nativeTranscribeDetailed(model.getAbsolutePath(), asrSamples,
+                    chunks.startsMs, chunks.endsMs, LANGUAGE, threads, useGpu, cancellationToken);
+''',
+            '''            String diagnosticPath = PostprocessAsrDiagnostics.nativeBreadcrumbPath(context, "postprocess_asr");
+            PostprocessAsrDiagnostics.mark(context, "NATIVE_TRANSCRIBE_BEGIN", segmentId,
+                    useGpu ? "whisper-vulkan" : "whisper-cpu", modelId,
+                    new JSONObject().put("sampleCount", asrSamples.length)
+                            .put("speechChunkCount", chunks.count())
+                            .put("speechInputMs", chunks.totalMs));
+            String raw = nativeTranscribeDetailed(model.getAbsolutePath(), asrSamples,
+                    chunks.startsMs, chunks.endsMs, LANGUAGE, threads, useGpu, cancellationToken,
+                    diagnosticPath);
+            PostprocessAsrDiagnostics.mark(context, "NATIVE_TRANSCRIBE_END", segmentId,
+                    useGpu ? "whisper-vulkan" : "whisper-cpu", modelId, null);
+''',
+            'LocalWhisperEngine production JNI call')
+    localWhisper = replaceOnce034(
+            localWhisper,
+            '''    static native String nativeTranscribeDetailed(String modelPath, float[] pcm,
+                                                           int[] chunkStartsMs, int[] chunkEndsMs,
+                                                           String language, int threads, boolean useGpu,
+                                                           long cancellationGeneration);
+''',
+            '''    static native String nativeTranscribeDetailed(String modelPath, float[] pcm,
+                                                           int[] chunkStartsMs, int[] chunkEndsMs,
+                                                           String language, int threads, boolean useGpu,
+                                                           long cancellationGeneration, String diagnosticPath);
+
+    static native String nativeProbeWhisper(String modelPath, float[] pcm, String language,
+                                            int threads, boolean useGpu, long durationMs,
+                                            String profile, String diagnosticPath);
+''',
+            'LocalWhisperEngine native declarations')
+    writeUtf8(localWhisperFile, localWhisper)
+}
+
+// Native breadcrumb writes use fflush+fsync so the last stage survives SIGABRT/native process death.
+def nativeSource = readUtf8(nativeFile)
+if (!nativeSource.contains('nativeProbeWhisper(')) {
+    nativeSource = replaceOnce034(
+            nativeSource,
+            '''#include <jni.h>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <sstream>
+#include <string>
+#include <vector>
+#include <mutex>
+''',
+            '''#include <jni.h>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <sstream>
+#include <string>
+#include <vector>
+#include <mutex>
+#include <sys/syscall.h>
+#include <unistd.h>
+''',
+            'native includes')
+
+    nativeSource = replaceOnce034(
+            nativeSource,
+            '''long long elapsed_ms(const std::chrono::steady_clock::time_point & start,
+                     const std::chrono::steady_clock::time_point & end) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+}
+
+bool app_has_gpu_backend() {
+''',
+            '''long long elapsed_ms(const std::chrono::steady_clock::time_point & start,
+                     const std::chrono::steady_clock::time_point & end) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+}
+
+std::string jstring_utf8(JNIEnv * env, jstring value) {
+    if (value == nullptr) return {};
+    const char * raw = env->GetStringUTFChars(value, nullptr);
+    if (raw == nullptr) return {};
+    std::string out(raw);
+    env->ReleaseStringUTFChars(value, raw);
+    return out;
+}
+
+long long wall_clock_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+void native_breadcrumb(const std::string & path, const char * stage, const std::string & details = {}) {
+    if (path.empty() || stage == nullptr) return;
+    FILE * file = fopen(path.c_str(), "a");
+    if (file == nullptr) return;
+    const char * coop = std::getenv("GGML_VK_DISABLE_COOPMAT");
+    const char * graph = std::getenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE");
+    fprintf(file,
+            "{\\\"timestampMs\\\":%lld,\\\"stage\\\":\\\"%s\\\",\\\"pid\\\":%d,\\\"tid\\\":%ld,"
+            "\\\"coopmatOff\\\":\\\"%s\\\",\\\"graphOptimizeOff\\\":\\\"%s\\\"",
+            wall_clock_ms(), stage, getpid(), static_cast<long>(syscall(SYS_gettid)),
+            coop == nullptr ? "unset" : coop, graph == nullptr ? "unset" : graph);
+    if (!details.empty()) fprintf(file, ",\\\"details\\\":{%s}", details.c_str());
+    fprintf(file, "}\\n");
+    fflush(file);
+    fsync(fileno(file));
+    fclose(file);
+}
+
+void apply_probe_profile(const std::string & profile) {
+    unsetenv("GGML_VK_DISABLE_COOPMAT");
+    unsetenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE");
+    if (profile == "vulkan-coopmat-off") {
+        setenv("GGML_VK_DISABLE_COOPMAT", "1", 1);
+    } else if (profile == "vulkan-graph-optimize-off") {
+        setenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE", "1", 1);
+    } else if (profile == "vulkan-current-safe") {
+        setenv("GGML_VK_DISABLE_COOPMAT", "1", 1);
+        setenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE", "1", 1);
+    }
+}
+
+bool app_has_gpu_backend() {
+''',
+            'native breadcrumb helpers')
+
+    nativeSource = replaceOnce034(
+            nativeSource,
+            '''        jint threads,
+        jboolean use_gpu,
+        jlong cancellation_generation) {
+    const long long expected_generation = static_cast<long long>(cancellation_generation);
+''',
+            '''        jint threads,
+        jboolean use_gpu,
+        jlong cancellation_generation,
+        jstring diagnostic_path) {
+    const std::string diagnostic = jstring_utf8(env, diagnostic_path);
+    native_breadcrumb(diagnostic, "JNI_ENTER",
+            std::string("\\\"useGpu\\\":") + (use_gpu == JNI_TRUE ? "true" : "false"));
+    const long long expected_generation = static_cast<long long>(cancellation_generation);
+''',
+            'native production signature')
+
+    nativeSource = replaceOnce034(
+            nativeSource,
+            '''    if (use_gpu == JNI_TRUE && !app_has_gpu_backend()) {
+        env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+''',
+            '''    if (use_gpu == JNI_TRUE) {
+        native_breadcrumb(diagnostic, "GPU_BACKEND_CHECK_BEGIN");
+    }
+    if (use_gpu == JNI_TRUE && !app_has_gpu_backend()) {
+        native_breadcrumb(diagnostic, "GPU_BACKEND_CHECK_FAILED");
+        env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+''',
+            'native GPU check begin')
+
+    nativeSource = replaceOnce034(
+            nativeSource,
+            '''        return nullptr;
+    }
+    whisper_context_params context_params = whisper_context_default_params();
+''',
+            '''        return nullptr;
+    }
+    if (use_gpu == JNI_TRUE) native_breadcrumb(diagnostic, "GPU_BACKEND_CHECK_END");
+    whisper_context_params context_params = whisper_context_default_params();
+''',
+            'native GPU check end')
+
+    nativeSource = replaceOnce034(
+            nativeSource,
+            '''    const auto model_load_started = std::chrono::steady_clock::now();
+    whisper_context * ctx = whisper_init_from_file_with_params(model, context_params);
+    const auto model_load_finished = std::chrono::steady_clock::now();
+    if (ctx == nullptr) {
+''',
+            '''    native_breadcrumb(diagnostic, "MODEL_LOAD_BEGIN");
+    const auto model_load_started = std::chrono::steady_clock::now();
+    whisper_context * ctx = whisper_init_from_file_with_params(model, context_params);
+    const auto model_load_finished = std::chrono::steady_clock::now();
+    native_breadcrumb(diagnostic, ctx == nullptr ? "MODEL_LOAD_FAILED" : "MODEL_LOAD_END",
+            std::string("\\\"modelLoadMs\\\":") + std::to_string(elapsed_ms(model_load_started, model_load_finished)));
+    if (ctx == nullptr) {
+''',
+            'native model load breadcrumbs')
+
+    nativeSource = replaceOnce034(
+            nativeSource,
+            '''        const auto whisper_started = std::chrono::steady_clock::now();
+        const int result = whisper_full(ctx, params, samples + start_sample, chunk_sample_count);
+        const auto whisper_finished = std::chrono::steady_clock::now();
+        whisper_full_ms += elapsed_ms(whisper_started, whisper_finished);
+''',
+            '''        native_breadcrumb(diagnostic, "WHISPER_FULL_BEGIN",
+                std::string("\\\"chunkIndex\\\":") + std::to_string(chunk_index)
+                        + ",\\\"chunkDurationMs\\\":" + std::to_string(chunk_end_ms - chunk_start_ms)
+                        + ",\\\"chunkSamples\\\":" + std::to_string(chunk_sample_count));
+        const auto whisper_started = std::chrono::steady_clock::now();
+        const int result = whisper_full(ctx, params, samples + start_sample, chunk_sample_count);
+        const auto whisper_finished = std::chrono::steady_clock::now();
+        const long long current_whisper_ms = elapsed_ms(whisper_started, whisper_finished);
+        whisper_full_ms += current_whisper_ms;
+        native_breadcrumb(diagnostic, result == 0 ? "WHISPER_FULL_END" : "WHISPER_FULL_FAILED",
+                std::string("\\\"chunkIndex\\\":") + std::to_string(chunk_index)
+                        + ",\\\"result\\\":" + std::to_string(result)
+                        + ",\\\"whisperMs\\\":" + std::to_string(current_whisper_ms));
+''',
+            'native whisper full breadcrumbs')
+
+    nativeSource = replaceOnce034(
+            nativeSource,
+            '''    const std::string output = json.str();
+    whisper_free(ctx);
+    env->ReleaseStringUTFChars(language, lang);
+''',
+            '''    const std::string output = json.str();
+    native_breadcrumb(diagnostic, "MODEL_FREE_BEGIN");
+    whisper_free(ctx);
+    native_breadcrumb(diagnostic, "MODEL_FREE_END");
+    env->ReleaseStringUTFChars(language, lang);
+''',
+            'native model free breadcrumbs')
+
+    nativeSource = replaceOnce034(
+            nativeSource,
+            '''    env->ReleaseStringUTFChars(model_path, model);
+    return env->NewStringUTF(output.c_str());
+}''',
+            '''    env->ReleaseStringUTFChars(model_path, model);
+    native_breadcrumb(diagnostic, "JNI_SUCCESS");
+    return env->NewStringUTF(output.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_sktpj_recorder24h_transcription_LocalWhisperEngine_nativeProbeWhisper(
+        JNIEnv * env,
+        jclass,
+        jstring model_path,
+        jfloatArray pcm,
+        jstring language,
+        jint threads,
+        jboolean use_gpu,
+        jlong duration_ms,
+        jstring profile,
+        jstring diagnostic_path) {
+    if (model_path == nullptr || pcm == nullptr || language == nullptr || profile == nullptr) {
+        throw_runtime(env, "Invalid Vulkan probe arguments");
+        return nullptr;
+    }
+    const std::string profile_value = jstring_utf8(env, profile);
+    const std::string diagnostic = jstring_utf8(env, diagnostic_path);
+    apply_probe_profile(profile_value);
+    native_breadcrumb(diagnostic, "PROBE_PROFILE_APPLIED",
+            std::string("\\\"profile\\\":\\\"") + json_escape(profile_value.c_str()) + "\\\""
+                    + ",\\\"useGpu\\\":" + (use_gpu == JNI_TRUE ? "true" : "false")
+                    + ",\\\"durationMs\\\":" + std::to_string(static_cast<long long>(duration_ms)));
+
+    const jsize sample_count = env->GetArrayLength(pcm);
+    if (sample_count <= 0) {
+        throw_runtime(env, "Vulkan probe audio is empty");
+        return nullptr;
+    }
+    const char * model = env->GetStringUTFChars(model_path, nullptr);
+    const char * lang = env->GetStringUTFChars(language, nullptr);
+    jfloat * samples = env->GetFloatArrayElements(pcm, nullptr);
+    if (model == nullptr || lang == nullptr || samples == nullptr) {
+        if (samples != nullptr) env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+        if (lang != nullptr) env->ReleaseStringUTFChars(language, lang);
+        if (model != nullptr) env->ReleaseStringUTFChars(model_path, model);
+        throw_runtime(env, "Unable to access Vulkan probe input");
+        return nullptr;
+    }
+
+    if (use_gpu == JNI_TRUE) native_breadcrumb(diagnostic, "PROBE_GPU_BACKEND_CHECK_BEGIN");
+    if (use_gpu == JNI_TRUE && !app_has_gpu_backend()) {
+        native_breadcrumb(diagnostic, "PROBE_GPU_BACKEND_CHECK_FAILED");
+        env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+        env->ReleaseStringUTFChars(language, lang);
+        env->ReleaseStringUTFChars(model_path, model);
+        throw_runtime(env, "Selected Vulkan GPU backend is unavailable");
+        return nullptr;
+    }
+    if (use_gpu == JNI_TRUE) native_breadcrumb(diagnostic, "PROBE_GPU_BACKEND_CHECK_END");
+
+    whisper_context_params context_params = whisper_context_default_params();
+    context_params.use_gpu = use_gpu == JNI_TRUE;
+    context_params.flash_attn = false;
+    native_breadcrumb(diagnostic, "PROBE_MODEL_LOAD_BEGIN");
+    const auto model_load_started = std::chrono::steady_clock::now();
+    whisper_context * ctx = whisper_init_from_file_with_params(model, context_params);
+    const auto model_load_finished = std::chrono::steady_clock::now();
+    const long long model_load_ms = elapsed_ms(model_load_started, model_load_finished);
+    native_breadcrumb(diagnostic, ctx == nullptr ? "PROBE_MODEL_LOAD_FAILED" : "PROBE_MODEL_LOAD_END",
+            std::string("\\\"modelLoadMs\\\":") + std::to_string(model_load_ms));
+    if (ctx == nullptr) {
+        env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+        env->ReleaseStringUTFChars(language, lang);
+        env->ReleaseStringUTFChars(model_path, model);
+        throw_runtime(env, "Unable to load Whisper model in probe");
+        return nullptr;
+    }
+
+    long long whisper_ms = 0;
+    int result = 0;
+    int used_samples = 0;
+    int output_segments = 0;
+    if (duration_ms > 0) {
+        const long long requested_samples = static_cast<long long>(duration_ms) * 16LL;
+        used_samples = static_cast<int>(std::max(0LL,
+                std::min(requested_samples, static_cast<long long>(sample_count))));
+        whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+        params.n_threads = threads > 0 ? threads : 1;
+        params.translate = false;
+        params.no_context = true;
+        params.no_timestamps = false;
+        params.print_progress = false;
+        params.print_realtime = false;
+        params.print_timestamps = false;
+        params.language = lang;
+        params.suppress_blank = true;
+        params.suppress_nst = true;
+        params.temperature = 0.0f;
+        params.vad = false;
+        native_breadcrumb(diagnostic, "PROBE_WHISPER_FULL_BEGIN",
+                std::string("\\\"durationMs\\\":") + std::to_string(static_cast<long long>(duration_ms))
+                        + ",\\\"sampleCount\\\":" + std::to_string(used_samples));
+        const auto whisper_started = std::chrono::steady_clock::now();
+        result = whisper_full(ctx, params, samples, used_samples);
+        const auto whisper_finished = std::chrono::steady_clock::now();
+        whisper_ms = elapsed_ms(whisper_started, whisper_finished);
+        if (result == 0) output_segments = whisper_full_n_segments(ctx);
+        native_breadcrumb(diagnostic, result == 0 ? "PROBE_WHISPER_FULL_END" : "PROBE_WHISPER_FULL_FAILED",
+                std::string("\\\"result\\\":") + std::to_string(result)
+                        + ",\\\"whisperMs\\\":" + std::to_string(whisper_ms)
+                        + ",\\\"segments\\\":" + std::to_string(output_segments));
+    }
+
+    native_breadcrumb(diagnostic, "PROBE_MODEL_FREE_BEGIN");
+    whisper_free(ctx);
+    native_breadcrumb(diagnostic, "PROBE_MODEL_FREE_END");
+    env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+    env->ReleaseStringUTFChars(language, lang);
+    env->ReleaseStringUTFChars(model_path, model);
+    if (result != 0) {
+        throw_runtime(env, "whisper_full failed in Vulkan probe");
+        return nullptr;
+    }
+
+    std::ostringstream output;
+    output << "{\\\"profile\\\":\\\"" << json_escape(profile_value.c_str())
+           << "\\\",\\\"useGpu\\\":" << (use_gpu == JNI_TRUE ? "true" : "false")
+           << ",\\\"durationMs\\\":" << static_cast<long long>(duration_ms)
+           << ",\\\"sampleCount\\\":" << used_samples
+           << ",\\\"modelLoadMs\\\":" << model_load_ms
+           << ",\\\"whisperFullMs\\\":" << whisper_ms
+           << ",\\\"segmentCount\\\":" << output_segments << "}";
+    native_breadcrumb(diagnostic, "PROBE_SUCCESS");
+    return env->NewStringUTF(output.str().c_str());
+}''',
+            'native probe implementation')
+    writeUtf8(nativeFile, nativeSource)
+}
+
+// The build-generated recovery class already records ApplicationExitInfo. Mark process boot as well,
+// so its processStateSummary and the fsynced native file can be correlated by timestamp.
+if (recoveryFile.isFile()) {
+    def recovery = readUtf8(recoveryFile)
+    if (!recovery.contains('POSTPROCESS_PROCESS_BOOT_DIAGNOSTIC')) {
+        recovery = replaceOnce034(
+                recovery,
+                '''        if (!STARTED.compareAndSet(false, true)) return;
+        logPreviousExit(app);
+''',
+                '''        if (!STARTED.compareAndSet(false, true)) return;
+        PostprocessAsrDiagnostics.mark(app, "POSTPROCESS_PROCESS_BOOT_DIAGNOSTIC", null,
+                null, null, null);
+        logPreviousExit(app);
+''',
+                'postprocess recovery boot diagnostic')
+        writeUtf8(recoveryFile, recovery)
+    }
+}
+
+// Expose the isolated probe from Settings.
+def mainActivity = readUtf8(mainActivityFile)
+if (!mainActivity.contains('VulkanDiagnosticCard()')) {
+    mainActivity = replaceOnce034(
+            mainActivity,
+            '''        item { WhisperModelSettingsCard() }
+        item { AiSettingsCard() }
+''',
+            '''        item { WhisperModelSettingsCard() }
+        item { AiSettingsCard() }
+        item { VulkanDiagnosticCard() }
+''',
+            'Settings diagnostic card')
+    writeUtf8(mainActivityFile, mainActivity)
+}
+
+// A native crash in this process must not terminate recording, UI, streaming ASR or final ASR.
+def manifest = readUtf8(manifestFile)
+if (!manifest.contains('android:process=":vulkan_probe"')) {
+    manifest = replaceOnce034(
+            manifest,
+            '''    </application>
+</manifest>
+''',
+            '''        <service
+            android:name=".transcription.VulkanProbeService"
+            android:exported="false"
+            android:process=":vulkan_probe" />
+
+    </application>
+</manifest>
+''',
+            'probe service manifest')
+    writeUtf8(manifestFile, manifest)
+}
+
+// GitHub source of truth is 0.7.33; diagnostic test build increments to 0.7.34 / 1034.
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1034)
+            output.versionName.set('0.7.34-debug')
+        }
+    }
+}

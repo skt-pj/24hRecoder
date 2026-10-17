@@ -1,0 +1,192 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8054 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8054 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce054 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.54 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// 0.7.51-0.7.53 のUI整理で消してしまった既存の分析/再分析/再試行操作を戻す。
+// 24時間一覧・要点概要・行タップ詳細の構造は変えない。
+def screenFile054 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiAnalysisScreen.kt')
+def screen054 = readUtf8054(screenFile054)
+
+screen054 = replaceOnce054(screen054,
+'''        }
+
+        val hourlyByStart = snapshot.hourly
+''',
+'''        }
+
+        AiNotebookPeriodAnalysisButton(
+            kind = AiAnalysisScheduler.KIND_DAILY,
+            periodStartMs = selectedStartMs,
+            periodEndMs = selectedEndMs,
+            hasResult = selectedDaily != null
+        )
+
+        val hourlyByStart = snapshot.hourly
+''', 'daily analysis action')
+
+screen054 = replaceOnce054(screen054,
+'''            if (doc != null) {
+                Text(
+                    "›",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+''',
+'''            AiNotebookPeriodAnalysisButton(
+                kind = AiAnalysisScheduler.KIND_HOURLY,
+                periodStartMs = periodStartMs,
+                periodEndMs = periodEndMs,
+                hasResult = doc != null
+            )
+            if (doc != null) {
+                Text(
+                    "›",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+''', 'hourly analysis action')
+
+writeUtf8054(screenFile054, screen054)
+
+def actionsFile054 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiNotebookAnalysisActions.kt')
+def actions054 = readUtf8054(actionsFile054)
+
+actions054 = replaceOnce054(actions054,
+'''private fun loadNotebookDayActionSnapshot(
+''',
+'''private data class NotebookPeriodActionSnapshot(
+    val configured: Boolean,
+    val hasSource: Boolean,
+    val pendingTranscription: Boolean,
+    val queueState: String?,
+    val periodStarted: Boolean,
+    val periodFinished: Boolean
+)
+
+@Composable
+internal fun AiNotebookPeriodAnalysisButton(
+    kind: String,
+    periodStartMs: Long,
+    periodEndMs: Long,
+    hasResult: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var refreshToken by remember { mutableIntStateOf(0) }
+    var snapshot by remember(kind, periodStartMs, periodEndMs) {
+        mutableStateOf(
+            NotebookPeriodActionSnapshot(
+                configured = AiProviderStore.isConfigured(context),
+                hasSource = false,
+                pendingTranscription = false,
+                queueState = null,
+                periodStarted = periodStartMs <= System.currentTimeMillis(),
+                periodFinished = periodEndMs <= System.currentTimeMillis()
+            )
+        )
+    }
+
+    LaunchedEffect(kind, periodStartMs, periodEndMs, refreshToken) {
+        while (true) {
+            snapshot = withContext(Dispatchers.IO) {
+                val records = SegmentHistoryRepository.load(context.applicationContext)
+                val queueState = AiQueueStore.load(context.applicationContext).firstOrNull {
+                    it.kind == kind && it.periodStartMs == periodStartMs && it.periodEndMs == periodEndMs
+                }?.state
+                val nowMs = System.currentTimeMillis()
+                NotebookPeriodActionSnapshot(
+                    configured = AiProviderStore.isConfigured(context.applicationContext),
+                    hasSource = notebookHasTranscriptSource(records, periodStartMs, periodEndMs),
+                    pendingTranscription = notebookHasPendingTranscription(records, periodStartMs, periodEndMs),
+                    queueState = queueState,
+                    periodStarted = periodStartMs <= nowMs,
+                    periodFinished = periodEndMs <= nowMs
+                )
+            }
+            delay(1_000L)
+        }
+    }
+
+    val isHourly = kind == AiAnalysisScheduler.KIND_HOURLY
+    val activeQueue = snapshot.queueState != null && snapshot.queueState != AiQueueStore.STATE_FAILED
+    val canRun = if (isHourly) {
+        snapshot.configured && snapshot.periodFinished && !activeQueue && snapshot.hasSource
+    } else {
+        snapshot.configured && snapshot.periodStarted && !activeQueue &&
+            !snapshot.pendingTranscription && snapshot.hasSource
+    }
+    val actionLabel = when {
+        activeQueue -> notebookQueueStateLabel(snapshot.queueState)
+        isHourly && !snapshot.periodFinished && snapshot.periodStarted -> "進行中"
+        isHourly && !snapshot.periodStarted -> "未到達"
+        snapshot.queueState == AiQueueStore.STATE_FAILED && snapshot.hasSource -> "再試行"
+        hasResult && snapshot.hasSource -> if (isHourly) "再実行" else "再分析"
+        hasResult -> if (isHourly) "再実行不可" else "再分析不可"
+        snapshot.hasSource -> if (isHourly) "実行" else "分析"
+        snapshot.pendingTranscription -> "待機"
+        else -> "実行不可"
+    }
+
+    Button(
+        onClick = {
+            val queued = AiAnalysisScheduler.enqueuePeriod(
+                context,
+                kind,
+                periodStartMs,
+                periodEndMs
+            )
+            val message = when {
+                !queued -> "AI要約を登録できませんでした"
+                isHourly -> "この時間帯をAI要約キューに追加しました"
+                else -> "この1日をAI要約キューに追加しました"
+            }
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            if (queued) refreshToken++
+        },
+        enabled = canRun,
+        modifier = modifier
+    ) {
+        Text(actionLabel)
+    }
+}
+
+private fun loadNotebookDayActionSnapshot(
+''', 'shared period action button')
+
+writeUtf8054(actionsFile054, actions054)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1054)
+            output.versionName.set('0.7.54-debug')
+        }
+    }
+}
+
+if (!screenFile054.text.contains('kind = AiAnalysisScheduler.KIND_DAILY')) {
+    throw new GradleException('0.7.54 daily reanalysis action missing')
+}
+if (!screenFile054.text.contains('kind = AiAnalysisScheduler.KIND_HOURLY')) {
+    throw new GradleException('0.7.54 hourly reanalysis action missing')
+}
+if (!actionsFile054.text.contains('hasResult && snapshot.hasSource -> if (isHourly) "再実行" else "再分析"')) {
+    throw new GradleException('0.7.54 existing regenerate labels/logic missing')
+}
+if (!screenFile054.text.contains('(0..23).forEach { hour ->')) {
+    throw new GradleException('0.7.54 24-hour list was changed')
+}
+if (!screenFile054.text.contains('HourlyMindMapCard(')) {
+    throw new GradleException('0.7.54 visual hour detail was changed')
+}

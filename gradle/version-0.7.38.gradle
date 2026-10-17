@@ -1,0 +1,8 @@
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1038)
+            output.versionName.set('0.7.38-debug')
+        }
+    }
+}

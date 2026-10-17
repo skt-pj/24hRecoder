@@ -1,0 +1,24 @@
+import java.nio.charset.StandardCharsets
+
+// The cumulative 0.7.58 scripts rewrite StreamingTranscriptionService before 0.7.59 is applied,
+// so the optional dedicated boost-log insertion does not have a stable source anchor. Keep the
+// rescue itself and its VAD diagnostics, and remove only that optional insertion from the patch
+// before evaluating it.
+def patchFile059p = rootProject.file('gradle/quiet-speech-rescue-corrected-0.7.59.gradle')
+def patch059p = new String(patchFile059p.bytes, StandardCharsets.UTF_8)
+int logStart059p = patch059p.indexOf('// Log the bounded >12 dB rescue gain without transcript text.')
+int androidStart059p = patch059p.indexOf('androidComponents {', logStart059p)
+if (logStart059p < 0 || androidStart059p < 0) {
+    throw new GradleException('0.7.59 prep: boost-log block not found')
+}
+patch059p = patch059p.substring(0, logStart059p) + patch059p.substring(androidStart059p)
+
+def boostAssertion059p = '''if (!streamFile059.text.contains('FULL_STREAMING_QUIET_SPEECH_BOOST')) {
+    throw new GradleException('0.7.59 quiet boost log missing')
+}
+'''
+if (!patch059p.contains(boostAssertion059p)) {
+    throw new GradleException('0.7.59 prep: boost-log assertion not found')
+}
+patch059p = patch059p.replace(boostAssertion059p, '')
+patchFile059p.setText(patch059p, 'UTF-8')

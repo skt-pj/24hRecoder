@@ -1,0 +1,109 @@
+import java.nio.charset.StandardCharsets
+
+// Later cumulative patches change the exact generated Java shape. Normalize only the anchors
+// used by 0.7.72 so the battery optimization applies without changing existing behavior.
+def patchFile072p = rootProject.file('gradle/battery-transcription-0.7.72.gradle')
+def patch072p = new String(patchFile072p.bytes, StandardCharsets.UTF_8)
+
+def oldBlock072p = '''vad072 = replaceOnce072(vad072,
+''' + "'''" + '''                        for (int i = 0; i < probabilities.length(); i++) {
+                            long frameStartUs = streamBasePtsUs + processedFrameCount * frameUs;
+                            detector.accept(probabilities.optDouble(i, 0.0), frameStartUs, frameStartUs + frameUs);
+                            processedFrameCount++;
+                        }
+''' + "'''" + ''',
+''' + "'''" + '''                        for (int i = 0; i < probabilities.length(); i++) {
+                            long frameStartUs = streamBasePtsUs + processedFrameCount * frameUs;
+                            double probability = probabilities.optDouble(i, 0.0);
+                            probabilitySum += probability;
+                            probabilityCount++;
+                            maxSpeechProbability = Math.max(maxSpeechProbability, probability);
+                            if (probability >= THRESHOLD) {
+                                speechProbabilitySum += probability;
+                                speechProbabilityCount++;
+                            }
+                            detector.accept(probability, frameStartUs, frameStartUs + frameUs);
+                            processedFrameCount++;
+                        }
+''' + "'''" + ''', 'online VAD evidence accumulation')'''
+
+def newBlock072p = '''vad072 = replaceOnce072(vad072,
+''' + "'''" + '''                            double probability = probabilities.optDouble(i, 0.0);
+                            boolean activeBefore = detector.activeStartUs() >= 0L;
+''' + "'''" + ''',
+''' + "'''" + '''                            double probability = probabilities.optDouble(i, 0.0);
+                            probabilitySum += probability;
+                            probabilityCount++;
+                            maxSpeechProbability = Math.max(maxSpeechProbability, probability);
+                            if (probability >= 0.5) {
+                                speechProbabilitySum += probability;
+                                speechProbabilityCount++;
+                            }
+                            boolean activeBefore = detector.activeStartUs() >= 0L;
+''' + "'''" + ''', 'online VAD evidence accumulation')'''
+
+if (!patch072p.contains(oldBlock072p)) {
+    throw new GradleException('0.7.72 prep: original VAD accumulation patch block missing')
+}
+patch072p = patch072p.replace(oldBlock072p, newBlock072p)
+
+def oldPcmBlock072p = '''stream072 = replaceOnce072(stream072,
+''' + "'''" + '''        long[] starts = data.getLongArray("closedStartsUs");
+        long[] ends = data.getLongArray("closedEndsUs");
+
+        // Finish elapsed fixed windows first.
+''' + "'''" + ''',
+''' + "'''" + '''        long[] starts = data.getLongArray("closedStartsUs");
+        long[] ends = data.getLongArray("closedEndsUs");
+        rememberClosedVadRanges(starts, ends);
+        accumulateProvisionalVadEvidence(data);
+
+        // Finish elapsed fixed windows first.
+''' + "'''" + ''', 'reuse VAD evidence in PCM path')'''
+
+def newPcmBlock072p = '''stream072 = replaceOnce072(stream072,
+''' + "'''" + '''        long[] starts = data.getLongArray("closedStartsUs");
+        long[] ends = data.getLongArray("closedEndsUs");
+''' + "'''" + ''',
+''' + "'''" + '''        long[] starts = data.getLongArray("closedStartsUs");
+        long[] ends = data.getLongArray("closedEndsUs");
+        rememberClosedVadRanges(starts, ends);
+        accumulateProvisionalVadEvidence(data);
+''' + "'''" + ''', 'reuse VAD evidence in PCM path')'''
+
+if (!patch072p.contains(oldPcmBlock072p)) {
+    throw new GradleException('0.7.72 prep: original PCM patch block missing')
+}
+patch072p = patch072p.replace(oldPcmBlock072p, newPcmBlock072p)
+
+def oldAiTargetBlock072p = '''ai072 = replaceOnce072(ai072,
+''' + "'''" + '''                .setConstraints(analysisConstraints(app))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag("ai-analysis")
+''' + "'''" + ''',
+''' + "'''" + '''                .setConstraints(AiQueueStore.REQUEST_MANUAL.equals(effectiveRequestType)
+                        ? analysisConstraints(app) : scheduledAnalysisConstraints(app))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag("ai-analysis")
+''' + "'''" + ''', 'target AI scheduled/manual constraint split')'''
+
+def newAiTargetBlock072p = '''ai072 = replaceOnce072(ai072,
+''' + "'''" + '''                .setConstraints(analysisConstraints(app))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag("ai-analysis")
+                .addTag("ai-analysis-target")
+                .addTag(kindTag);
+''' + "'''" + ''',
+''' + "'''" + '''                .setConstraints(AiQueueStore.REQUEST_MANUAL.equals(effectiveRequestType)
+                        ? analysisConstraints(app) : scheduledAnalysisConstraints(app))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag("ai-analysis")
+                .addTag("ai-analysis-target")
+                .addTag(kindTag);
+''' + "'''" + ''', 'target AI scheduled/manual constraint split')'''
+
+if (!patch072p.contains(oldAiTargetBlock072p)) {
+    throw new GradleException('0.7.72 prep: original AI target patch block missing')
+}
+patch072p = patch072p.replace(oldAiTargetBlock072p, newAiTargetBlock072p)
+patchFile072p.setText(patch072p, 'UTF-8')
