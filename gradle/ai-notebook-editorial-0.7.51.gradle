@@ -1,0 +1,438 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8051 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8051 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce051 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.51 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// AIノートの一覧は概要に限定し、日次の全構造と24時間別カードは詳細ページへ分離する。
+def screenFile051 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiAnalysisScreen.kt')
+def screen051 = readUtf8051(screenFile051)
+
+screen051 = replaceOnce051(screen051,
+'''import androidx.compose.foundation.clickable
+''',
+'''import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
+''', 'BackHandler import')
+
+screen051 = replaceOnce051(screen051,
+'''    var selectedYear by remember { mutableStateOf<Int?>(null) }
+
+    LaunchedEffect(refreshToken) {
+''',
+'''    var selectedYear by remember { mutableStateOf<Int?>(null) }
+    var dailyDetail by remember { mutableStateOf<AiAnalysisDocument?>(null) }
+    var hourlyDetailDate by remember { mutableStateOf<LocalDate?>(null) }
+
+    LaunchedEffect(refreshToken) {
+''', 'detail navigation state')
+
+screen051 = replaceOnce051(screen051,
+'''    val searchHits = remember(snapshot, searchQuery) {
+        searchNotebook(snapshot, searchQuery)
+    }
+
+    LazyColumn(
+''',
+'''    val searchHits = remember(snapshot, searchQuery) {
+        searchNotebook(snapshot, searchQuery)
+    }
+
+    dailyDetail?.let { doc ->
+        BackHandler { dailyDetail = null }
+        DailyNotebookDetailPage(
+            doc = doc,
+            onBack = { dailyDetail = null }
+        )
+        return
+    }
+
+    hourlyDetailDate?.let { date ->
+        val dayStartMs = date.atStartOfDay(zone).toInstant().toEpochMilli()
+        val dayEndMs = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val hourlySummaries = snapshot.hourly
+            .filter { it.periodStartMs >= dayStartMs && it.periodStartMs < dayEndMs }
+            .associate { it.periodStartMs to it.analysis.optString("summary", "") }
+        BackHandler { hourlyDetailDate = null }
+        HourlyNotebookDetailPage(
+            date = date,
+            hourlySummaries = hourlySummaries,
+            dailyHasResult = snapshot.daily.any { it.periodStartMs == dayStartMs },
+            onBack = { hourlyDetailDate = null }
+        )
+        return
+    }
+
+    LazyColumn(
+''', 'detail pages before notebook list')
+
+screen051 = replaceOnce051(screen051,
+'''                        onSelectDay = { doc ->
+                            selectedDayStartMs = doc.periodStartMs
+                            selectedMonth = YearMonth.from(localDate(doc.periodStartMs, zone))
+                            selectedYear = localDate(doc.periodStartMs, zone).year
+                        }
+                    )
+''',
+'''                        onSelectDay = { doc ->
+                            selectedDayStartMs = doc.periodStartMs
+                            selectedMonth = YearMonth.from(localDate(doc.periodStartMs, zone))
+                            selectedYear = localDate(doc.periodStartMs, zone).year
+                        },
+                        onOpenDailyDetail = { doc -> dailyDetail = doc },
+                        onOpenHourlyDetail = { date -> hourlyDetailDate = date }
+                    )
+''', 'day notebook detail callbacks')
+
+screen051 = replaceOnce051(screen051,
+'''private fun DayNotebook(
+    snapshot: AiAnalysisSnapshot,
+    month: YearMonth,
+    selectedDayStartMs: Long?,
+    onMonthChange: (YearMonth) -> Unit,
+    onSelectDay: (AiAnalysisDocument) -> Unit
+) {
+''',
+'''private fun DayNotebook(
+    snapshot: AiAnalysisSnapshot,
+    month: YearMonth,
+    selectedDayStartMs: Long?,
+    onMonthChange: (YearMonth) -> Unit,
+    onSelectDay: (AiAnalysisDocument) -> Unit,
+    onOpenDailyDetail: (AiAnalysisDocument) -> Unit,
+    onOpenHourlyDetail: (LocalDate) -> Unit
+) {
+''', 'day notebook signature')
+
+screen051 = replaceOnce051(screen051,
+'''        if (selectedDaily != null) {
+            DailyAnalysisCard(selectedDaily)
+        } else {
+            EmptyAnalysisCard(
+                title = if (selectedIsToday) {
+                    "今日の日次ノートはまだ確定していません"
+                } else {
+                    "この日の日次ノートはありません"
+                },
+                message = if (selectedIsToday) {
+                    "日次ノートは1日が完了した後に生成します。下の1日単位・1時間単位から処理状態を確認できます。"
+                } else {
+                    "保存済み日次ノートがなくても、元データが残っている時間は下から分析できます。"
+                }
+            )
+        }
+
+        val hourly = snapshot.hourly.filter {
+            it.periodStartMs >= selectedStartMs && it.periodStartMs < selectedEndMs
+        }
+        val hourlySummaries = hourly.associate { doc ->
+            doc.periodStartMs to doc.analysis.optString("summary", "")
+        }
+        AiNotebookDayAnalysisActions(
+            date = selectedDate,
+            hourlySummaries = hourlySummaries,
+            dailyHasResult = selectedDaily != null
+        )
+''',
+'''        if (selectedDaily != null) {
+            DailyOverviewCard(
+                doc = selectedDaily,
+                onOpenDetail = { onOpenDailyDetail(selectedDaily) }
+            )
+        } else {
+            EmptyAnalysisCard(
+                title = if (selectedIsToday) {
+                    "今日の日次ノートはまだ確定していません"
+                } else {
+                    "この日の日次ノートはありません"
+                },
+                message = if (selectedIsToday) {
+                    "日次ノートは1日が完了した後に生成します。時間別の生成状況や再分析は詳細ページで確認できます。"
+                } else {
+                    "保存済み日次ノートがなくても、元データが残っている時間は時間別詳細から分析できます。"
+                }
+            )
+        }
+
+        val hourly = snapshot.hourly.filter {
+            it.periodStartMs >= selectedStartMs && it.periodStartMs < selectedEndMs
+        }
+        HourlyOverviewCard(
+            date = selectedDate,
+            generatedCount = hourly.size,
+            onOpenDetail = { onOpenHourlyDetail(selectedDate) }
+        )
+''', 'replace inline day details with overview')
+
+screen051 = replaceOnce051(screen051,
+'''@Composable
+private fun WeekNotebook(
+''',
+'''@Composable
+private fun DailyOverviewCard(
+    doc: AiAnalysisDocument,
+    onOpenDetail: () -> Unit
+) {
+    val summary = doc.analysis.optString("summary", "").trim()
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(formatDay(doc.periodStartMs), style = MaterialTheme.typography.titleLarge)
+            Text("概要", style = MaterialTheme.typography.labelLarge)
+            Text(
+                if (summary.isNotEmpty()) summary else "この日の概要は生成されていません。",
+                style = MaterialTheme.typography.bodyLarge
+            )
+            OutlinedButton(onClick = onOpenDetail, modifier = Modifier.fillMaxWidth()) {
+                Text("日次ノートの詳細を見る")
+            }
+        }
+    }
+}
+
+@Composable
+private fun HourlyOverviewCard(
+    date: LocalDate,
+    generatedCount: Int,
+    onOpenDetail: () -> Unit
+) {
+    Card {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text("時間別の詳細", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "${date.year}年${date.monthValue}月${date.dayOfMonth}日 生成済み ${generatedCount}/24時間",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                "24時間分の要約・処理状態・分析／再分析は別ページにまとめています。",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedButton(onClick = onOpenDetail, modifier = Modifier.fillMaxWidth()) {
+                Text("時間別の詳細を見る")
+            }
+        }
+    }
+}
+
+@Composable
+private fun DailyNotebookDetailPage(
+    doc: AiAnalysisDocument,
+    onBack: () -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            OutlinedButton(onClick = onBack) {
+                Text("概要へ戻る")
+            }
+        }
+        item {
+            Text("日次ノート詳細", style = MaterialTheme.typography.headlineMedium)
+        }
+        item {
+            DailyAnalysisCard(doc)
+        }
+    }
+}
+
+@Composable
+private fun HourlyNotebookDetailPage(
+    date: LocalDate,
+    hourlySummaries: Map<Long, String>,
+    dailyHasResult: Boolean,
+    onBack: () -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            OutlinedButton(onClick = onBack) {
+                Text("概要へ戻る")
+            }
+        }
+        item {
+            Text(
+                "${date.year}年${date.monthValue}月${date.dayOfMonth}日 時間別詳細",
+                style = MaterialTheme.typography.headlineMedium
+            )
+        }
+        item {
+            AiNotebookDayAnalysisActions(
+                date = date,
+                hourlySummaries = hourlySummaries,
+                dailyHasResult = dailyHasResult
+            )
+        }
+    }
+}
+
+@Composable
+private fun WeekNotebook(
+''', 'overview and detail composables')
+
+screen051 = replaceOnce051(screen051,
+'''                if (aiConfigured) {
+                    "時間別・日次ノートを生成し、完了した日次ノートから週・月・年の振り返りを段階的に作ります。"
+''',
+'''                if (aiConfigured) {
+                    "録音内容から、その期間で本当に重要だったことを短くまとめます。詳細な時間別内容は必要なときだけ別ページで確認できます。"
+''', 'AI status summary wording')
+
+screen051 = replaceOnce051(screen051,
+'''                    "日表示で対象日を選ぶと、1日単位と24個の1時間単位から分析・再分析できます。",
+''',
+'''                    "日表示ではまず概要だけを表示します。日次の全項目と24時間別の内容は詳細ページへ分離しています。",
+''', 'AI status detail wording')
+
+writeUtf8051(screenFile051, screen051)
+
+// 0.7.48で「8-15文・全項目を網羅」に振った時間別プロンプトを、ライフログ向けの編集要約へ修正する。
+def lunaFile051 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/OpenAiLunaClient.java')
+def luna051 = readUtf8051(lunaFile051)
+
+luna051 = replaceOnce051(luna051,
+'''                .put("verbosity", "hourly_analysis".equals(schemaName) ? "medium" : "low")
+''',
+'''                .put("verbosity", "low")
+''', 'OpenAI output verbosity')
+
+luna051 = replaceOnce051(luna051,
+'''                "Do not compress a content-rich hour into a generic short summary. When the evidence supports it, " +
+                "make the summary detailed enough to reconstruct what mattered during the hour: preserve chronology, " +
+                "topic transitions, concrete claims, decisions and their reasons, tasks, ideas, unresolved points, and relevant context. " +
+                "For a content-rich hour, target roughly 8-15 sentences; for sparse input, stay proportional and do not add filler. " +
+                "Populate every structured field with all materially distinct items supported by the transcript, not only the top one or two. " +
+                "Make topic entries specific rather than generic, and preserve timestamps whenever they help connect evidence to events. " +
+                "For quotes, only copy wording that is actually present in the transcript.\\n\\n" +
+''',
+'''                "Treat this transcript as raw lifelog material, not text to exhaustively restate. " +
+                "Create an editorial overview that the user can understand in about 10-20 seconds. " +
+                "Prioritize decisions, commitments, deadlines, concrete outcomes or changes, meaningful problems, useful ideas, and clear next actions. " +
+                "Omit greetings, filler, repetitions, small talk, and low-value logistics unless they materially change an outcome. " +
+                "Group related remarks even when they are separated in time, and write concrete subject + point + outcome sentences instead of vague labels. " +
+                "For a content-rich hour, keep summary to 2-4 sentences. Normally keep at most 3 topics, 4 key events, 3 decisions, 5 TODOs, 3 ideas, and 3 unresolved items. " +
+                "People, places, and quotes should be empty unless they materially help explain what happened. If there is no meaningful content, say so plainly without inventing significance. " +
+                "For quotes, only copy wording that is actually present in the transcript.\\n\\n" +
+''', 'editorial hourly prompt')
+
+luna051 = replaceOnce051(luna051,
+'''                "Recurring topic counts must represent evidence occurrences in this supplied transcript only.\\n\\n" +
+''',
+'''                "Recurring topic counts must represent evidence occurrences in this supplied transcript only. " +
+                "The summary is the primary overview, not a table of contents or an hour-by-hour replay. " +
+                "Write 4-7 concise sentences that answer what mattered today, what changed or was decided, and what needs attention next. " +
+                "Group related discussion by meaning even when it happened at different times. Remove filler, repeated phrasing, greetings, and routine logistics unless consequential. " +
+                "Keep only high-signal items: normally at most 5 topics, 8 timeline turning points, 6 key events, 6 decisions, 8 TODOs, 5 ideas, and 5 unresolved items. " +
+                "Include people and places only when their identity or location materially changes the meaning of the day. Avoid generic statements such as 'a conversation occurred'.\\n\\n" +
+''', 'editorial daily prompt')
+
+luna051 = replaceOnce051(luna051,
+'''                "For trends, describe only changes or repeated patterns that can be supported by multiple source notes. " +
+                "For the mind map, create one root with empty parentId and connect all other nodes to it or its descendants.\\n\\n" +
+''',
+'''                "For trends, describe only changes or repeated patterns that can be supported by multiple source notes. " +
+                "The summary is an executive retrospective, not a concatenation of lower-level notes. Lead with the period's most consequential outcomes, changes, decisions, recurring themes, and next actions. " +
+                "Merge repeated information across source notes, suppress routine details, and keep highlights to the few items the user is most likely to want to remember later. " +
+                "Use concrete wording and avoid generic activity descriptions. For the mind map, create one root with empty parentId and connect all other nodes to it or its descendants.\\n\\n" +
+''', 'editorial rollup prompt')
+
+writeUtf8051(lunaFile051, luna051)
+
+// ローカルGemmaも同じ編集基準にそろえる。
+def gemmaFile051 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/Gemma4LocalClient.kt')
+def gemma051 = readUtf8051(gemmaFile051)
+
+gemma051 = replaceOnce051(gemma051,
+'''            "Recurring topic counts must represent evidence occurrences in this supplied transcript only.\\n\\n" +
+''',
+'''            "Recurring topic counts must represent evidence occurrences in this supplied transcript only. " +
+            "The summary is the primary overview, not a table of contents or an hour-by-hour replay. " +
+            "Write 4-7 concise sentences that answer what mattered today, what changed or was decided, and what needs attention next. " +
+            "Group related discussion by meaning even when it happened at different times. Remove filler, repetition, greetings, and routine logistics unless consequential. " +
+            "Keep only high-signal items and include people or places only when materially relevant. Use concrete wording and avoid generic activity descriptions.\\n\\n" +
+''', 'Gemma editorial daily prompt')
+
+gemma051 = replaceOnce051(gemma051,
+'''            "For trends, describe only changes or repeated patterns that can be supported by multiple source notes. " +
+            "For the mind map, create one root with empty parentId and connect all other nodes to it or its descendants.\\n\\n" +
+''',
+'''            "For trends, describe only changes or repeated patterns that can be supported by multiple source notes. " +
+            "The summary is an executive retrospective, not a concatenation of lower-level notes. Lead with consequential outcomes, changes, decisions, recurring themes, and next actions. " +
+            "Merge repeated information, suppress routine details, and use concrete wording. For the mind map, create one root with empty parentId and connect all other nodes to it or its descendants.\\n\\n" +
+''', 'Gemma editorial rollup prompt')
+
+writeUtf8051(gemmaFile051, gemma051)
+
+def gemmaHourlyFile051 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ai/GemmaHourlyConversationAnalyzer.kt')
+def gemmaHourly051 = readUtf8051(gemmaHourlyFile051)
+
+gemmaHourly051 = replaceOnce051(gemmaHourly051,
+'''            "Summarize this one-hour conversation log. Keep concrete details when the transcript contains them. " +
+            "Preserve useful timestamps, numbers, materials, names, decisions, TODOs, ideas, and exact quotes. " +
+            "Do not collapse concrete discussion into vague topic labels.\\n\\nTRANSCRIPT:\\n$transcript"
+''',
+'''            "Summarize this one-hour conversation log as an editorial lifelog overview, not an exhaustive replay. " +
+            "Prioritize decisions, commitments, deadlines, outcomes or changes, meaningful problems, useful ideas, and clear next actions. " +
+            "Omit greetings, filler, repetition, small talk, and routine logistics unless consequential. Group related remarks by meaning. " +
+            "Keep the summary to 2-4 sentences for a content-rich hour and keep structured lists selective. People, places, and quotes should be empty unless materially useful. " +
+            "Use concrete subject + point + outcome wording and never invent significance.\\n\\nTRANSCRIPT:\\n$transcript"
+''', 'Gemma direct hourly prompt')
+
+gemmaHourly051 = replaceOnce051(gemmaHourly051,
+'''            "Create the final one-hour conversation-log summary from the extracted evidence below. " +
+            "Evidence can contain duplicates from overlap; merge duplicates by timestamp and meaning. " +
+            "Keep concrete discussion concrete: retain useful numbers, materials, procedures, decisions, TODOs, ideas, people, places, and quotes. " +
+            "Do not invent context that was not preserved in the evidence.\\n\\nEXTRACTED EVIDENCE:\\n$evidence"
+''',
+'''            "Create the final one-hour lifelog overview from the extracted evidence below. " +
+            "Evidence can contain duplicates from overlap; merge them by timestamp and meaning, then select only information worth remembering. " +
+            "Prioritize decisions, commitments, outcomes or changes, meaningful problems, useful ideas, and next actions. Suppress filler and routine details. " +
+            "Keep the summary to 2-4 sentences for a content-rich hour and keep structured lists selective. People, places, and quotes should be empty unless materially useful. " +
+            "Do not invent context that was not preserved in the evidence.\\n\\nEXTRACTED EVIDENCE:\\n$evidence"
+''', 'Gemma final hourly prompt')
+
+writeUtf8051(gemmaHourlyFile051, gemmaHourly051)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1051)
+            output.versionName.set('0.7.51-debug')
+        }
+    }
+}
+
+if (!screenFile051.text.contains('日次ノートの詳細を見る')) {
+    throw new GradleException('0.7.51 daily overview/detail split missing')
+}
+if (!screenFile051.text.contains('生成済み ${generatedCount}/24時間')) {
+    throw new GradleException('0.7.51 hourly overview missing')
+}
+if (screenFile051.text.contains('target roughly 8-15 sentences')) {
+    throw new GradleException('0.7.51 old exhaustive hourly prompt still active')
+}
+if (!lunaFile051.text.contains('editorial overview that the user can understand in about 10-20 seconds')) {
+    throw new GradleException('0.7.51 OpenAI editorial prompt missing')
+}
+if (!gemmaHourlyFile051.text.contains('editorial lifelog overview')) {
+    throw new GradleException('0.7.51 Gemma editorial prompt missing')
+}

@@ -1,0 +1,144 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8069o = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8069o = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce069o = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.69 ownership ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+def file069o = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/FullStreamingStateStore.java')
+def text069o = readUtf8069o(file069o)
+text069o = replaceOnce069o(text069o,
+'''import android.os.Process;
+
+import org.json.JSONArray;
+''',
+'''import android.os.Process;
+
+import com.sktpj.recorder24h.util.AppLogger;
+
+import org.json.JSONArray;
+''', 'logger import')
+text069o = replaceOnce069o(text069o,
+'''        JSONObject row = readOwnership(context, segmentId);
+        try {
+            row.put("schemaVersion", 1);
+''',
+'''        JSONObject row = readOwnership(context, segmentId);
+        String previousState = row.optString("state", "");
+        String previousError = row.isNull("error") ? null : row.optString("error", null);
+        StackTraceElement writer = ownershipWriter();
+        try {
+            row.put("schemaVersion", 1);
+''', 'markOwned previous state')
+text069o = replaceOnce069o(text069o,
+'''            row.put("updatedAtMs", System.currentTimeMillis());
+            row.put("automaticFallback", false);
+            writeAtomic(ownershipFile(context, segmentId), row.toString());
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static void markFinal''',
+'''            long updatedAtMs = System.currentTimeMillis();
+            row.put("updatedAtMs", updatedAtMs);
+            row.put("automaticFallback", false);
+            row.put("stateWriterClass", writer == null ? JSONObject.NULL : writer.getClassName());
+            row.put("stateWriterMethod", writer == null ? JSONObject.NULL : writer.getMethodName());
+            row.put("stateWriterLine", writer == null ? -1 : writer.getLineNumber());
+            writeAtomic(ownershipFile(context, segmentId), row.toString());
+            JSONObject details = new JSONObject();
+            details.put("segmentId", segmentId);
+            details.put("operation", "markOwned");
+            details.put("previousState", previousState.isEmpty() ? JSONObject.NULL : previousState);
+            details.put("state", row.optString("state", "OWNED"));
+            details.put("previousError", previousError == null ? JSONObject.NULL : previousError);
+            details.put("error", row.isNull("error") ? JSONObject.NULL : row.optString("error", null));
+            details.put("modelId", modelId == null ? JSONObject.NULL : modelId);
+            details.put("updatedAtMs", updatedAtMs);
+            details.put("writerClass", writer == null ? JSONObject.NULL : writer.getClassName());
+            details.put("writerMethod", writer == null ? JSONObject.NULL : writer.getMethodName());
+            details.put("writerLine", writer == null ? -1 : writer.getLineNumber());
+            AppLogger.event(context, "FULL_STREAMING_OWNERSHIP_STATE_WRITTEN", details);
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static void markFinal''', 'markOwned trace')
+text069o = replaceOnce069o(text069o,
+'''        synchronized (LOCK) {
+            JSONObject row = readOwnership(context, segmentId);
+            try {
+                row.put("schemaVersion", 1);
+''',
+'''        synchronized (LOCK) {
+            JSONObject row = readOwnership(context, segmentId);
+            String previousState = row.optString("state", "");
+            String previousEngineId = row.isNull("engineId") ? null : row.optString("engineId", null);
+            String previousError = row.isNull("error") ? null : row.optString("error", null);
+            StackTraceElement writer = ownershipWriter();
+            try {
+                row.put("schemaVersion", 1);
+''', 'ownership update previous state')
+text069o = replaceOnce069o(text069o,
+'''                row.put("error", error == null ? JSONObject.NULL : error);
+                row.put("updatedAtMs", System.currentTimeMillis());
+                row.put("automaticFallback", false);
+                writeAtomic(ownershipFile(context, segmentId), row.toString());
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private static JSONObject readOwnership''',
+'''                row.put("error", error == null ? JSONObject.NULL : error);
+                long updatedAtMs = System.currentTimeMillis();
+                row.put("updatedAtMs", updatedAtMs);
+                row.put("automaticFallback", false);
+                row.put("stateWriterClass", writer == null ? JSONObject.NULL : writer.getClassName());
+                row.put("stateWriterMethod", writer == null ? JSONObject.NULL : writer.getMethodName());
+                row.put("stateWriterLine", writer == null ? -1 : writer.getLineNumber());
+                writeAtomic(ownershipFile(context, segmentId), row.toString());
+                JSONObject details = new JSONObject();
+                details.put("segmentId", segmentId);
+                details.put("operation", "updateOwnershipState");
+                details.put("previousState", previousState.isEmpty() ? JSONObject.NULL : previousState);
+                details.put("state", state);
+                details.put("previousEngineId", previousEngineId == null ? JSONObject.NULL : previousEngineId);
+                details.put("engineId", engineId == null ? JSONObject.NULL : engineId);
+                details.put("previousError", previousError == null ? JSONObject.NULL : previousError);
+                details.put("error", error == null ? JSONObject.NULL : error);
+                details.put("updatedAtMs", updatedAtMs);
+                details.put("writerClass", writer == null ? JSONObject.NULL : writer.getClassName());
+                details.put("writerMethod", writer == null ? JSONObject.NULL : writer.getMethodName());
+                details.put("writerLine", writer == null ? -1 : writer.getLineNumber());
+                AppLogger.event(context, "FULL_STREAMING_OWNERSHIP_STATE_WRITTEN", details);
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private static StackTraceElement ownershipWriter() {
+        StackTraceElement[] stack = Thread.currentThread().getStackTrace();
+        String self = FullStreamingStateStore.class.getName();
+        for (StackTraceElement frame : stack) {
+            String className = frame.getClassName();
+            if (self.equals(className) || Thread.class.getName().equals(className)) continue;
+            if (className.startsWith("java.lang.reflect.")
+                    || className.startsWith("jdk.internal.reflect.")) continue;
+            return frame;
+        }
+        return null;
+    }
+
+    private static JSONObject readOwnership''', 'ownership update trace')
+writeUtf8069o(file069o, text069o)
+
+if (!file069o.text.contains('FULL_STREAMING_OWNERSHIP_STATE_WRITTEN')) {
+    throw new GradleException('0.7.69 ownership tracing missing')
+}

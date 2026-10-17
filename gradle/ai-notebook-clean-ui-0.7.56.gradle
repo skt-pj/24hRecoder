@@ -1,0 +1,161 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8056 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8056 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce056 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.56 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+def replaceBlock056 = { String source, String startMarker, String endMarker, String replacement, String label ->
+    int start = source.indexOf(startMarker)
+    if (start < 0 || source.lastIndexOf(startMarker) != start) {
+        throw new GradleException("0.7.56 ${label}: start marker missing or ambiguous")
+    }
+    int end = source.indexOf(endMarker, start + startMarker.length())
+    if (end < 0) throw new GradleException("0.7.56 ${label}: end marker missing")
+    source.substring(0, start) + replacement + source.substring(end)
+}
+
+// AIノートはコンテンツと操作を優先し、常設の使い方説明・補足文を表示しない。
+// エラー、処理状態、データなし等の状態ラベルと、AIが生成した本文は残す。
+def screenFile056 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiAnalysisScreen.kt')
+def screen056 = readUtf8056(screenFile056)
+
+screen056 = replaceOnce056(
+        screen056,
+'''        item {
+            AiStatusCard(
+                aiConfigured = snapshot.aiConfigured,
+                onOpenSettings = onOpenSettings
+            )
+        }
+''',
+'''        if (!snapshot.aiConfigured) {
+            item {
+                AiStatusCard(
+                    aiConfigured = false,
+                    onOpenSettings = onOpenSettings
+                )
+            }
+        }
+''',
+        'hide configured AI intro')
+
+screen056 = replaceOnce056(
+        screen056,
+'''                label = { Text("AIノートを検索") },
+                supportingText = {
+                    Text("日・週・月・年の保存済みノートを横断検索します")
+                }
+''',
+'''                label = { Text("AIノートを検索") }
+''',
+        'search helper text')
+
+screen056 = replaceBlock056(
+        screen056,
+        '@Composable\nprivate fun AiStatusCard(',
+        '\n@Composable\nprivate fun PeriodSelector(',
+'''@Composable
+private fun AiStatusCard(
+    aiConfigured: Boolean,
+    onOpenSettings: () -> Unit
+) {
+    if (aiConfigured) return
+    Button(
+        onClick = onOpenSettings,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text("AI設定を開く")
+    }
+}
+''',
+        'compact AI setup state')
+
+screen056 = replaceBlock056(
+        screen056,
+        '@Composable\nprivate fun EmptyAnalysisCard(',
+        '\n@Composable\nprivate fun DailyAnalysisCard(',
+'''@Suppress("UNUSED_PARAMETER")
+@Composable
+private fun EmptyAnalysisCard(title: String, message: String) {
+    Card {
+        Text(
+            title,
+            modifier = Modifier.padding(16.dp),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+''',
+        'remove empty-state explanatory paragraphs')
+
+screen056 = replaceOnce056(
+        screen056,
+'''            Text(
+                if (summary.isNotEmpty()) summary else "この日の概要は生成されていません。",
+                style = MaterialTheme.typography.bodyLarge
+            )
+''',
+'''            if (summary.isNotEmpty()) {
+                Text(summary, style = MaterialTheme.typography.bodyLarge)
+            }
+''',
+        'remove daily summary placeholder')
+
+writeUtf8056(screenFile056, screen056)
+
+// マインドマップも、操作方法を毎回文章で説明せずUIコントロール自体で操作可能にする。
+def mindMapFile056 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MindElixirMindMap.kt')
+def mindMap056 = readUtf8056(mindMapFile056)
+mindMap056 = replaceOnce056(
+        mindMap056,
+'''            Text("マインドマップ", style = MaterialTheme.typography.titleLarge)
+            Text(
+                "ピンチで拡大・縮小、ドラッグで移動。枝は必要なところだけ開けます。ノードを選ぶと根拠を確認できます。",
+                style = MaterialTheme.typography.bodySmall,
+                color = colorScheme.onSurfaceVariant
+            )
+            Surface(
+''',
+'''            Text("マインドマップ", style = MaterialTheme.typography.titleLarge)
+            Surface(
+''',
+        'mind map tutorial text')
+writeUtf8056(mindMapFile056, mindMap056)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1056)
+            output.versionName.set('0.7.56-debug')
+        }
+    }
+}
+
+if (screenFile056.text.contains('録音内容から、その期間で本当に重要だったことを短くまとめます。')) {
+    throw new GradleException('0.7.56 configured intro text still visible')
+}
+if (screenFile056.text.contains('日・週・月・年の保存済みノートを横断検索します')) {
+    throw new GradleException('0.7.56 search helper text still visible')
+}
+if (mindMapFile056.text.contains('ピンチで拡大・縮小、ドラッグで移動')) {
+    throw new GradleException('0.7.56 mind map tutorial text still visible')
+}
+if (!screenFile056.text.contains('(0..23).forEach { hour ->')) {
+    throw new GradleException('0.7.56 24-hour list was changed')
+}
+if (!screenFile056.text.contains('kind = AiAnalysisScheduler.KIND_DAILY')) {
+    throw new GradleException('0.7.56 daily analysis action missing')
+}
+if (!screenFile056.text.contains('kind = AiAnalysisScheduler.KIND_HOURLY')) {
+    throw new GradleException('0.7.56 hourly analysis action missing')
+}
+if (!screenFile056.text.contains('AiMindMapCard(')) {
+    throw new GradleException('0.7.56 Mind Elixir integration missing')
+}

@@ -32,17 +32,10 @@ public final class AiRollupWorker extends Worker {
     @Override
     public Result doWork() {
         Context context = getApplicationContext();
-
-        String apiKey;
-        try {
-            apiKey = OpenAiKeyStore.load(context);
-        } catch (Exception error) {
-            log(context, "AI_ROLLUP_KEY_READ_FAILED", null, 0L, 0L, null, error);
-            return Result.failure();
-        }
-        if (apiKey == null || apiKey.trim().isEmpty()) {
+        if (!AiInferenceClient.isConfigured(context)) {
             return Result.success();
         }
+        String modelId = AiInferenceClient.modelId(context);
 
         int generated = 0;
         for (PeriodSpec spec : completedPeriods()) {
@@ -56,26 +49,43 @@ public final class AiRollupWorker extends Worker {
                                     spec.periodStartMs,
                                     spec.periodEndMs);
 
+            String queueId = AiAnalysisScheduler.targetQueueId(
+                    spec.kind, spec.periodStartMs, spec.periodEndMs);
+
             if (source.isEmpty()) {
+                AiQueueStore.remove(context, queueId);
                 log(context, "AI_ROLLUP_SKIPPED_NO_SOURCE", spec.kind,
                         spec.periodStartMs, spec.periodEndMs, source, null);
                 continue;
             }
 
             File target = AiRollupRepository.fileFor(context, spec.kind, spec.periodStartMs);
-            if (AiRollupRepository.isCurrent(target, source.sourceHash)) {
+            if (AiRollupRepository.isCurrent(target, source.sourceHash, modelId)) {
+                AiQueueStore.remove(context, queueId);
                 log(context, "AI_ROLLUP_SKIPPED_CURRENT", spec.kind,
                         spec.periodStartMs, spec.periodEndMs, source, null);
                 continue;
             }
 
+            AiQueueStore.upsert(
+                    context,
+                    queueId,
+                    spec.kind,
+                    spec.periodStartMs,
+                    spec.periodEndMs,
+                    AiQueueStore.REQUEST_SCHEDULED,
+                    AiQueueStore.STATE_RUNNING,
+                    getRunAttemptCount(),
+                    source.documents.size() + "件の下位ノートから集約");
+
             log(context, "AI_ROLLUP_STARTED", spec.kind,
                     spec.periodStartMs, spec.periodEndMs, source, null);
             try {
                 OpenAiLunaClient.Response response =
-                        OpenAiLunaClient.analyzeRollup(apiKey, spec.kind, source);
-                AiRollupRepository.save(target, spec.kind, source, response);
+                        AiInferenceClient.analyzeRollup(context, spec.kind, source);
+                AiRollupRepository.save(target, spec.kind, source, response, modelId);
                 generated++;
+                AiQueueStore.remove(context, queueId);
                 log(context, "AI_ROLLUP_SAVED", spec.kind,
                         spec.periodStartMs, spec.periodEndMs, source, null);
                 if (generated >= MAX_GENERATIONS_PER_RUN) {
@@ -86,12 +96,32 @@ public final class AiRollupWorker extends Worker {
                         spec.periodStartMs, spec.periodEndMs, source, error);
                 boolean canRetry =
                         error.retryable && getRunAttemptCount() + 1 < MAX_ATTEMPTS;
+                AiQueueStore.upsert(
+                        context,
+                        queueId,
+                        spec.kind,
+                        spec.periodStartMs,
+                        spec.periodEndMs,
+                        AiQueueStore.REQUEST_SCHEDULED,
+                        canRetry ? AiQueueStore.STATE_RETRY_WAIT : AiQueueStore.STATE_FAILED,
+                        getRunAttemptCount(),
+                        canRetry ? "集約APIエラーの再試行待ち" : "集約に失敗しました");
                 return canRetry ? Result.retry() : Result.failure();
             } catch (Exception error) {
                 log(context, "AI_ROLLUP_FAILED", spec.kind,
                         spec.periodStartMs, spec.periodEndMs, source, error);
-                return getRunAttemptCount() + 1 < MAX_ATTEMPTS
-                        ? Result.retry() : Result.failure();
+                boolean canRetry = getRunAttemptCount() + 1 < MAX_ATTEMPTS;
+                AiQueueStore.upsert(
+                        context,
+                        queueId,
+                        spec.kind,
+                        spec.periodStartMs,
+                        spec.periodEndMs,
+                        AiQueueStore.REQUEST_SCHEDULED,
+                        canRetry ? AiQueueStore.STATE_RETRY_WAIT : AiQueueStore.STATE_FAILED,
+                        getRunAttemptCount(),
+                        canRetry ? "集約処理の再試行待ち" : "集約に失敗しました");
+                return canRetry ? Result.retry() : Result.failure();
             }
         }
 
@@ -164,7 +194,8 @@ public final class AiRollupWorker extends Worker {
             if (kind != null) {
                 details.put("kind", kind);
             }
-            details.put("model", OpenAiLunaClient.MODEL);
+            details.put("model", AiInferenceClient.modelId(context));
+            details.put("provider", AiProviderStore.getProvider(context));
             if (periodStartMs > 0L) {
                 details.put("periodStartMs", periodStartMs);
             }

@@ -1,0 +1,140 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8045 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8045 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce045 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.45 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// -----------------------------------------------------------------------------
+// Nightly canonical: one hour => one composed speech input => one ASR invocation.
+// The five-minute M4As remain only source/recovery units and are never looped through Whisper.
+// -----------------------------------------------------------------------------
+def workerFile045 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionWorker.java')
+def worker045 = readUtf8045(workerFile045)
+def oldNightlyLoop045 = '''                int processed = 0;
+                for (SegmentRecord item : batch) {
+                    if (TranscriptionScheduler.isQueuePaused(context)) break;
+                    if (!NightlyHourlyTranscriptionScheduler.isCharging(context)) break;
+                    processOne(context, item);
+                    processed++;
+                }
+                try {
+                    AppLogger.event(context, "NIGHTLY_HOUR_BATCH_FINISHED", new JSONObject()
+                            .put("hour", hourKey)
+                            .put("plannedSegmentCount", batch.size())
+                            .put("processedSegmentCount", processed)
+                            .put("heldForCharging", !NightlyHourlyTranscriptionScheduler.isCharging(context))
+                            .put("queuePaused", TranscriptionScheduler.isQueuePaused(context)));
+                } catch (Exception ignored) {}
+'''
+def newNightlyOneShot045 = '''                boolean completed = HourlyCanonicalTranscriber.process(
+                        context, batch, "workmanager-hour-one-shot");
+                try {
+                    AppLogger.event(context, "NIGHTLY_HOUR_BATCH_FINISHED", new JSONObject()
+                            .put("hour", hourKey)
+                            .put("plannedSegmentCount", batch.size())
+                            .put("processedSegmentCount", completed ? batch.size() : 0)
+                            .put("hourAudioComposedBeforeAsr", true)
+                            .put("whisperCallPolicy", "one-call-per-hour")
+                            .put("silenceCompactionMapped", true)
+                            .put("heldForCharging", !NightlyHourlyTranscriptionScheduler.isCharging(context))
+                            .put("queuePaused", TranscriptionScheduler.isQueuePaused(context)));
+                } catch (Exception ignored) {}
+'''
+worker045 = replaceOnce045(worker045, oldNightlyLoop045, newNightlyOneShot045,
+        'replace per-segment nightly Whisper loop')
+writeUtf8045(workerFile045, worker045)
+
+// The direct foreground queue is for explicit/manual work. Never let its app-open backlog kick
+// consume NIGHTLY_HOURLY rows one five-minute file at a time; those rows stay on the hourly Worker.
+def serviceFile045 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionQueueService.java')
+def service045 = readUtf8045(serviceFile045)
+service045 = replaceOnce045(service045,
+'''                if (!charging && NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(record)) continue;
+                queued.add(record);
+''',
+'''                if (NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(record)) continue;
+                queued.add(record);
+''', 'keep nightly batches off direct per-segment service')
+writeUtf8045(serviceFile045, service045)
+
+// -----------------------------------------------------------------------------
+// 30-second provisional text: run Silero once over the completed preview window, remove non-speech
+// before ASR, then map Whisper timestamps from the compacted timebase back to the original window.
+// This changes preview filtering only; recording and the streaming VAD producer keep running.
+// -----------------------------------------------------------------------------
+def streamFile045 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/StreamingTranscriptionService.java')
+def stream045 = readUtf8045(streamFile045)
+stream045 = replaceOnce045(stream045,
+'''        AudioPreprocessor.Result front = AudioPreprocessor.process(copy);
+        float[] asrSamples = front.samples;
+        int durationMs = Math.max(1, (int) (asrSamples.length * 1000L / 16_000L));
+
+''',
+'''        AudioPreprocessor.Result front = AudioPreprocessor.process(copy);
+        float[] asrSamples = front.samples;
+        int sourceDurationMs = Math.max(1, (int) (asrSamples.length * 1000L / 16_000L));
+        SpeechTimeMap.MapResult provisionalTimeMap = null;
+        if (partial) {
+            StreamingVadStore.Snapshot previewVad = StreamingVadStore.analyzeOffline(this, asrSamples);
+            SpeechTimeMap.Compaction compacted = SpeechTimeMap.compactSingle(
+                    asrSamples, previewVad.ranges, sourceDurationMs);
+            log("FULL_STREAMING_PROVISIONAL_VAD_COMPACTED", new JSONObject()
+                    .put("sourceDurationMs", compacted.originalDurationMs)
+                    .put("speechInputMs", compacted.speechDurationMs)
+                    .put("removedSilenceMs", compacted.removedSilenceMs)
+                    .put("vadRangeCount", previewVad.ranges.size())
+                    .put("vadDetectMs", previewVad.detectMs)
+                    .put("whisperInvoked", compacted.samples.length > 0)
+                    .put("timestampMapRetained", true));
+            if (compacted.samples.length == 0) {
+                return new Recognition("", new JSONArray(),
+                        Math.max(0L, System.currentTimeMillis() - started), 0L);
+            }
+            asrSamples = compacted.samples;
+            provisionalTimeMap = compacted.map;
+        }
+        int durationMs = Math.max(1, (int) (asrSamples.length * 1000L / 16_000L));
+
+''', 'provisional VAD compaction before ASR')
+stream045 = replaceOnce045(stream045,
+'''        if (!partial && TranscriptionPipelineSettings.SPEAKER_SHERPA_CPU.equals(accumulator.config.speakerBackend)) {
+            segments = SpeakerIdentifier.annotatePcm(this, asrSamples, segments);
+        }
+''',
+'''        if (partial && provisionalTimeMap != null) {
+            segments = provisionalTimeMap.remapSegments(segments);
+        }
+        if (!partial && TranscriptionPipelineSettings.SPEAKER_SHERPA_CPU.equals(accumulator.config.speakerBackend)) {
+            segments = SpeakerIdentifier.annotatePcm(this, asrSamples, segments);
+        }
+''', 'restore provisional original timestamps after silence removal')
+writeUtf8045(streamFile045, stream045)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1045)
+            output.versionName.set('0.7.45-debug')
+        }
+    }
+}
+
+if (workerFile045.text.contains('for (SegmentRecord item : batch)')) {
+    throw new GradleException('0.7.45 per-segment nightly loop still present')
+}
+if (!workerFile045.text.contains('HourlyCanonicalTranscriber.process')) {
+    throw new GradleException('0.7.45 hourly one-shot runner missing')
+}
+if (!serviceFile045.text.contains('if (NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(record)) continue;')) {
+    throw new GradleException('0.7.45 direct service nightly exclusion missing')
+}
+if (!streamFile045.text.contains('FULL_STREAMING_PROVISIONAL_VAD_COMPACTED')) {
+    throw new GradleException('0.7.45 provisional VAD compaction missing')
+}

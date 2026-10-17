@@ -1,0 +1,20 @@
+import java.nio.charset.StandardCharsets
+
+def cardFix061 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/DiagnosticLoggingSettingsCard.kt')
+def textFix061 = new String(cardFix061.bytes, StandardCharsets.UTF_8)
+def oldFix061 = '''                    if (!started) {
+                        syncing = DriveLogSync.isDirectSyncRunning()
+                        syncStatus = if (syncing) "同期中" else driveSyncStatus(context)
+                    }
+'''
+def newFix061 = '''                    if (!started) {
+                        syncing = false
+                        syncStatus = if (DriveLogSync.isDirectSyncRunning()) "同期中" else driveSyncStatus(context)
+                    }
+'''
+int firstFix061 = textFix061.indexOf(oldFix061)
+if (firstFix061 < 0 || textFix061.lastIndexOf(oldFix061) != firstFix061) {
+    throw new GradleException('0.7.61 manual Drive sync UI fix: expected exactly one match')
+}
+textFix061 = textFix061.substring(0, firstFix061) + newFix061 + textFix061.substring(firstFix061 + oldFix061.length())
+cardFix061.setText(textFix061, 'UTF-8')

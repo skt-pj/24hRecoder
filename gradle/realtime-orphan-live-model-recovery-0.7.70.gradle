@@ -1,0 +1,114 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8070r = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8070r = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce070r = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.70 recovery ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// 0.7.68 correctly identified retained realtime-only M4A whose canonical live transcript was
+// missing, but its fallback used the globally selected normal Whisper model. On the Pixel 10a that
+// selected large-v3 Q5/Vulkan, reached ~2.93 GB RSS, and the postprocess process was killed before
+// the first orphan could finish. Recovery must instead use the model that actually owned the live
+// segment. Current affected device rows all carry liveModelId=small.
+def schedulerFile070r = rootProject.file(
+        'app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionScheduler.java')
+def scheduler070r = readUtf8070r(schedulerFile070r)
+
+scheduler070r = replaceOnce070r(scheduler070r,
+'''    private static boolean isRealtimeOnlyRecoveryQueueItem(
+            Context context, SegmentRecord record) {
+        if (record == null || record.getSegmentId() == null) return false;
+        if (!FullStreamingStateStore.isRealtimeOnlyOwned(context, record.getSegmentId())) return false;
+        String reason = record.getReason();
+        if (REALTIME_ONLY_RECOVERY_REASON.equals(reason)) return true;
+        // If the process dies after this fallback has started, the existing single-runner recovery
+        // rewrites the reason. Preserve the bypass only for realtime-only-owned retained audio.
+        return "RECOVERED_INTERRUPTED_TRANSCRIPTION".equals(reason)
+                || "RECOVERED_POSTPROCESS_PROCESS_RESTART_WORK_ENQUEUED".equals(reason);
+    }
+''',
+'''    static boolean isRealtimeOnlyRecoveryQueueItem(
+            Context context, SegmentRecord record) {
+        if (record == null || record.getSegmentId() == null) return false;
+        if (!FullStreamingStateStore.isRealtimeOnlyOwned(context, record.getSegmentId())) return false;
+        String reason = record.getReason();
+        if (REALTIME_ONLY_RECOVERY_REASON.equals(reason)) return true;
+        // Interrupted runners may rewrite the exact suffix across recovery versions. Keep this
+        // classification tied to realtime-only ownership, not to one brittle literal.
+        return reason != null
+                && (reason.startsWith("RECOVERED_INTERRUPTED_TRANSCRIPTION")
+                || reason.startsWith("RECOVERED_POSTPROCESS_PROCESS_RESTART"));
+    }
+''', 'recovery reason classification')
+writeUtf8070r(schedulerFile070r, scheduler070r)
+
+def workerFile070r = rootProject.file(
+        'app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionWorker.java')
+def worker070r = readUtf8070r(workerFile070r)
+
+worker070r = replaceOnce070r(worker070r,
+'''            String selectedModelId = WhisperModelManager.selectedModelId(context);
+''',
+'''            String normalSelectedModelId = WhisperModelManager.selectedModelId(context);
+            String selectedModelId = normalSelectedModelId;
+            if (TranscriptionScheduler.isRealtimeOnlyRecoveryQueueItem(context, record)) {
+                String liveModelId = record.getLiveModelId();
+                if (WhisperModelManager.modelSpec(liveModelId) != null) {
+                    selectedModelId = liveModelId;
+                }
+                try {
+                    JSONObject recoveryModel = new JSONObject();
+                    recoveryModel.put("segmentId", segmentId);
+                    recoveryModel.put("reason", record.getReason() == null
+                            ? JSONObject.NULL : record.getReason());
+                    recoveryModel.put("liveModelId", liveModelId == null
+                            ? JSONObject.NULL : liveModelId);
+                    recoveryModel.put("normalSelectedModelId", normalSelectedModelId);
+                    recoveryModel.put("selectedRecoveryModelId", selectedModelId);
+                    recoveryModel.put("audioBytes", audioFile == null ? 0L : audioFile.length());
+                    recoveryModel.put("modelReady",
+                            WhisperModelManager.isComparisonReady(context, selectedModelId));
+                    AppLogger.event(context,
+                            "REALTIME_ONLY_ORPHAN_RECOVERY_MODEL_SELECTED", recoveryModel);
+                } catch (Exception ignored) {
+                }
+                if (!WhisperModelManager.isComparisonReady(context, selectedModelId)) {
+                    WhisperModelManager.enqueueModelDownload(context, selectedModelId);
+                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                            audioFile.lastModified(), System.currentTimeMillis(), "FAILED",
+                            "FULL_STREAMING_ASR_FAILED:REALTIME_RECOVERY_MODEL_MISSING:"
+                                    + selectedModelId);
+                    log(context, "REALTIME_ONLY_ORPHAN_RECOVERY_MODEL_WAIT",
+                            segmentId, audioFile, selectedModelId,
+                            false, attempt, null);
+                    return;
+                }
+            }
+''', 'select original live model for orphan recovery')
+
+writeUtf8070r(workerFile070r, worker070r)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1070)
+            output.versionName.set('0.7.70-debug')
+        }
+    }
+}
+
+if (!schedulerFile070r.text.contains('reason.startsWith("RECOVERED_INTERRUPTED_TRANSCRIPTION")')) {
+    throw new GradleException('0.7.70 recovery reason prefix handling missing')
+}
+if (!workerFile070r.text.contains('REALTIME_ONLY_ORPHAN_RECOVERY_MODEL_SELECTED')) {
+    throw new GradleException('0.7.70 live recovery model selection missing')
+}
+if (!workerFile070r.text.contains('WhisperModelManager.isComparisonReady(context, selectedModelId)')) {
+    throw new GradleException('0.7.70 recovery model readiness guard missing')
+}

@@ -3,7 +3,12 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -16,11 +21,19 @@
         android:required="true" />
 
     <application
+        android:name=".RecorderApplication"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
+
+        <uses-native-library
+            android:name="libvndksupport.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libOpenCL.so"
+            android:required="false" />
 
         <activity
             android:name=".MainActivity"
@@ -31,11 +44,38 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".AiRerunActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".AiQueueTargetActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".DriveLogSetupActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".MemoketTestActivity"
+            android:exported="false" />
+
+        <service
+            android:name=".memoket.MemoketRemoteRecordingService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
         <service
             android:name=".service.RecorderService"
             android:exported="false"
             android:foregroundServiceType="microphone"
             android:process=":recorder" />
+
+        <!-- Bound from :recorder. It receives already-captured PCM and never opens a microphone. -->
+        <service
+            android:name=".transcription.StreamingTranscriptionService"
+            android:exported="false"
+            android:process=":streaming_asr" />
 
         <!-- User-triggered queue requests run directly here instead of waiting for JobScheduler. -->
         <service
