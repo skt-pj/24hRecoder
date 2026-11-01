@@ -58,7 +58,8 @@ public final class RecorderHealth {
             return neutral("STARTING", "録音を開始中", "マイクとエンコーダを準備しています。", true,
                     heartbeatAge, audioAge, segmentAge);
         }
-        if (requested && !"RECORDING".equals(rawState) && !"ROTATING".equals(rawState)) {
+        if (requested && !"RECORDING".equals(rawState) && !"ROTATING".equals(rawState)
+                && !(gemSource && ("MONITORING".equals(rawState) || "TRANSFERRING".equals(rawState)))) {
             return problem("STATE_MISMATCH", "録音状態を確認できません",
                     "録音継続が要求されていますが、録音サービスの状態が一致していません。", true,
                     heartbeatAge, audioAge, segmentAge);
@@ -69,26 +70,29 @@ public final class RecorderHealth {
                     heartbeatAge, audioAge, segmentAge);
         }
         if (gemSource) {
-            if ("ROTATING".equals(rawState)) {
-                if (stateAge > 180_000L)
-                    return problem("GEM_TRANSFER_STALE", "Gem音声の取得が停止しています",
-                            "Gem音声の取得・保存が3分以上完了していません。", true,
-                            heartbeatAge, audioAge, segmentAge);
-                return neutral("GEM_TRANSFER", "Gem音声を取得中",
-                        "録音データの確定・保存を処理しています。", true,
+            if ("TRANSFERRING".equals(rawState)) {
+                return neutral("GEM_FETCH", "Gem音声を取得中",
+                        "録音停止後の音声を端末へ取得・保存しています。", true,
                         heartbeatAge, audioAge, segmentAge);
             }
-            if (audioReadMs <= 0L || audioAge > AUDIO_READ_STALE_MS)
-                return problem("GEM_DATA_STALE", "Gemの音声通信を確認できません",
-                        "Gemからの音声データが15秒以上届いていません。", true,
+            if (audioReadMs <= 0L || audioAge > AUDIO_READ_STALE_MS) {
+                return problem("GEM_PHONE_MIC_STALE", "スマホマイク入力を確認できません",
+                        "スマホマイクから15秒以上音声を取得できていません。", true,
                         heartbeatAge, audioAge, segmentAge);
-            if (segmentStartedAtMs > 0L && segmentAge > SEGMENT_OVERDUE_MS)
-                return problem("GEM_SEGMENT_STALE", "Gemの録音切替が遅れています",
-                        "Gemの録音処理が6分30秒を超えています。", true,
-                        heartbeatAge, audioAge, segmentAge);
-            return new Snapshot("HEALTHY", "Gem録音中",
-                    "Gemからの音声DATAと接続状態を監視しています。",
-                    true, false, true, heartbeatAge, audioAge, segmentAge);
+            }
+            if ("MONITORING".equals(rawState)) {
+                return new Snapshot("HEALTHY", "音声を監視中",
+                        "スマホのマイクで音声を判定しています。",
+                        true, false, true, heartbeatAge, audioAge, segmentAge);
+            }
+            if ("RECORDING".equals(rawState)) {
+                return new Snapshot("HEALTHY", "Gem録音中",
+                        "スマホのマイクで録音の終了を判定しています。",
+                        true, false, true, heartbeatAge, audioAge, segmentAge);
+            }
+            return neutral("GEM_START", "Gem録音を開始中",
+                    "Gemへ録音開始を要求しています。", true,
+                    heartbeatAge, audioAge, segmentAge);
         }
         if (captureSilenced) {
             return problem("CAPTURE_SILENCED", "マイク入力が無音化されています",

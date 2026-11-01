@@ -82,8 +82,8 @@ public final class RecorderService extends Service {
         if (ACTION_STOP.equals(action)) {
             RecordingIntentStore.setRequested(this, false);
             if ("MEMOKET".equals(MemoketSettings.source(this))) {
-                startService(new Intent(this, MemoketRemoteRecordingService.class)
-                        .setAction(MemoketRemoteRecordingService.ACTION_STOP_CONTINUOUS));
+                startService(new Intent(this, com.sktpj.recorder24h.memoket.GemMicMonitorService.class)
+                        .setAction(com.sktpj.recorder24h.memoket.GemMicMonitorService.ACTION_STOP));
                 RecorderStateStore.write(this, "STOPPING", null, null);
                 stopSelf();
                 return START_NOT_STICKY;
@@ -110,8 +110,8 @@ public final class RecorderService extends Service {
                 return START_NOT_STICKY;
             }
             try {
-                startForegroundService(new Intent(this, MemoketRemoteRecordingService.class)
-                        .setAction(MemoketRemoteRecordingService.ACTION_START_CONTINUOUS));
+                startForegroundService(new Intent(this, com.sktpj.recorder24h.memoket.GemMicMonitorService.class)
+                        .setAction(com.sktpj.recorder24h.memoket.GemMicMonitorService.ACTION_START));
             } catch (RuntimeException error) {
                 failPermanently("Gemの録音サービスを起動できません: " + messageOrType(error), error);
             }
