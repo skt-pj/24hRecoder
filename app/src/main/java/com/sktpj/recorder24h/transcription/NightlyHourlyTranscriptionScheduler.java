@@ -46,26 +46,26 @@ public final class NightlyHourlyTranscriptionScheduler {
 
     private NightlyHourlyTranscriptionScheduler() {}
 
-    public static void onSegmentReady(Context context, String segmentId, File file) {
-        if (segmentId == null || segmentId.isEmpty() || file == null || !file.isFile()) return;
-        Context app = context.getApplicationContext();
-        long startedAtMs = file.lastModified();
-        long endedAtMs = System.currentTimeMillis();
-        for (SegmentRecord record : SegmentHistoryRepository.load(app)) {
+    private static long retainedTime(Context context, String segmentId, File file, boolean start) {
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
             if (segmentId.equals(record.getSegmentId())
                     && record.getStartedAtMs() > 0L
                     && record.getEndedAtMs() >= record.getStartedAtMs()) {
-                startedAtMs = record.getStartedAtMs();
-                endedAtMs = record.getEndedAtMs();
-                break;
+                return start ? record.getStartedAtMs() : record.getEndedAtMs();
             }
         }
+        return start ? file.lastModified() : System.currentTimeMillis();
+    }
+
+    public static void onSegmentReady(Context context, String segmentId, File file) {
+        if (segmentId == null || segmentId.isEmpty() || file == null || !file.isFile()) return;
+        Context app = context.getApplicationContext();
         SegmentRepository.appendWithoutNotify(
                 app,
                 segmentId,
                 file,
-                startedAtMs,
-                endedAtMs,
+                retainedTime(app, segmentId, file, true),
+                retainedTime(app, segmentId, file, false),
                 "READY",
                 PENDING_REASON);
         try {
