@@ -193,31 +193,30 @@ fun MemoketGemSettingsCard() {
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("$name ($deviceAddress)") }
                 }
-                Button(
-                    enabled = address.isNotEmpty()
-                        && remoteState != "接続中"
-                        && remoteState != "開始候補送信済み"
-                        && remoteState != "停止操作中",
-                    onClick = {
-                        context.startForegroundService(
-                            android.content.Intent(context, MemoketRemoteRecordingService::class.java)
-                                .setAction(MemoketRemoteRecordingService.ACTION_MANUAL_TEST_START)
-                        )
-                        remoteState = "接続中"
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("録音開始テスト") }
-                Button(
-                    enabled = address.isNotEmpty() && remoteState == "開始候補送信済み",
-                    onClick = {
-                        context.startForegroundService(
-                            android.content.Intent(context, MemoketRemoteRecordingService::class.java)
-                                .setAction(MemoketRemoteRecordingService.ACTION_MANUAL_TEST_STOP)
-                        )
-                        remoteState = "停止操作中"
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("録音停止テスト") }
+                val candidateBusy = remoteState == "接続中"
+                    || remoteState == "録音中"
+                    || remoteState == "開始候補送信済み"
+                    || remoteState == "停止操作中"
+                    || remoteState == "ファイル取得中"
+                val candidates = listOf(
+                    "候補1：通知OFF" to MemoketRemoteRecordingService.ACTION_CANDIDATE_OFF,
+                    "候補2：通知OFF→ON" to MemoketRemoteRecordingService.ACTION_CANDIDATE_TOGGLE,
+                    "候補3：状態照会00" to MemoketRemoteRecordingService.ACTION_CANDIDATE_STATUS,
+                    "候補4：通知切替→取得要求" to MemoketRemoteRecordingService.ACTION_CANDIDATE_TRANSFER
+                )
+                candidates.forEach { (label, action) ->
+                    Button(
+                        enabled = address.isNotEmpty() && !candidateBusy,
+                        onClick = {
+                            context.startForegroundService(
+                                android.content.Intent(context, MemoketRemoteRecordingService::class.java)
+                                    .setAction(action)
+                            )
+                            remoteState = "接続中"
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text(label) }
+                }
                 Text("状態: $remoteState")
                 Text("保存済み音声: ${fileCount}件")
                 if (remoteState == "エラー" && result.isNotBlank()) Text(result)
