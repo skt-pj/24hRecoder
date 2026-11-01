@@ -410,11 +410,11 @@ public final class MemoketRemoteRecordingService extends Service {
         deleteStatusStartedAtMs = 0;
         midTransferStatusStep = 0;
         earlyAudio.clear();
-        stopTransfer = new MemoketTransfer((name, payload, crc) -> {
-            new MemoketRecordingStore(this).persist(name, payload, crc);
+        stopTransfer = new MemoketTransfer((name, staged, crc) -> {
+            new MemoketRecordingStore(this).persist(name, staged, crc);
             stopSavedFiles++;
-            trace.filePersisted(name, payload.length, crc);
-        }, window::matches, 1, true, false);
+            trace.filePersisted(name, staged.length(), crc);
+        }, new MemoketRecordingStore(this).directory(), window::matches, 1, true, false, true);
         stopNotifyStep = 3;
         stopPending = true;
         recordingActive = true;
@@ -460,13 +460,13 @@ public final class MemoketRemoteRecordingService extends Service {
         MemoketTransfer.FileSelector latest = filename ->
                 window.matches(filename) && (activeName.isEmpty() || activeName.equals(filename));
         trace.phase("LATEST_RECORDING_IDENTIFIED");
-        stopTransfer = new MemoketTransfer((name, payload, crc) -> {
-            new MemoketRecordingStore(this).persist(name, payload, crc);
+        stopTransfer = new MemoketTransfer((name, staged, crc) -> {
+            new MemoketRecordingStore(this).persist(name, staged, crc);
             stopSavedFiles++;
             log("MEMOKET_FILE_DURABLY_SAVED_BEFORE_GEM_ACK",
                     new JSONObject().put("filename", name)
-                            .put("bytes", payload.length).put("crc32", Long.toHexString(crc)));
-        }, latest, 1, true, true);
+                            .put("bytes", staged.length()).put("crc32", Long.toHexString(crc)));
+        }, new MemoketRecordingStore(this).directory(), latest, 1, true, true, true);
         lastStopActivityAtMs = System.currentTimeMillis();
         lastStopDataAtMs = lastStopActivityAtMs;
         lastMetadataRequestAtMs = 0;
@@ -710,11 +710,11 @@ public final class MemoketRemoteRecordingService extends Service {
                         beginManualTestStop();
                     } else if (diagFileOnly) {
                         trace.phase("DIAG_FETCH_ONLY_NO_START_03_NO_GEM_DELETE", stateDetails());
-                        diagTransfer = new MemoketTransfer((name, bytes, crc) -> {
-                            new MemoketRecordingStore(this).persist(name, bytes, crc);
-                            trace.filePersisted(name, bytes.length, crc);
+                        diagTransfer = new MemoketTransfer((name, staged, crc) -> {
+                            new MemoketRecordingStore(this).persist(name, staged, crc);
+                            trace.filePersisted(name, staged.length(), crc);
                             trace.phase("DIAG_FILE_CRC_VALID_SAVED_NO_ACK", stateDetails());
-                        }, null, 1, true, true, false);
+                        }, new MemoketRecordingStore(this).directory(), null, 1, true, true, false);
                         diagLastDataAtMs = System.currentTimeMillis();
                         stopHandler.postDelayed(diagFetchDeadline, 120_000L);
                         updateState("ファイル取得のみ実行中");
@@ -1125,6 +1125,8 @@ public final class MemoketRemoteRecordingService extends Service {
     }
 
     private void closeGatt() {
+        if (stopTransfer != null) stopTransfer.close();
+        if (diagTransfer != null) diagTransfer.close();
         BluetoothGatt current = gatt;
         gatt = null;
         if (current != null) {

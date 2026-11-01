@@ -1,6 +1,12 @@
 package com.sktpj.recorder24h.memoket;
 
 import java.io.ByteArrayOutputStream;
+import java.io.BufferedInputStream;
+import java.io.DataInputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
@@ -36,6 +42,41 @@ public final class MemoketOgg {
             result.writeBytes(page(packets, serial, pageNumber++, (long) (first + count) * 960, flags));
         }
         return result.toByteArray();
+    }
+
+    public static void encode(File raw, File output, int serial) throws IOException {
+        long length = raw.length();
+        if (length == 0 || length % 80 != 0) {
+            throw new IllegalArgumentException("Unsupported OPUS frame size");
+        }
+        byte[] head = new byte[] {'O','p','u','s','H','e','a','d',1,1,0,0,(byte)0x80,0x3e,0,0,0,0,0};
+        byte[] vendor = "24hRecoder".getBytes(StandardCharsets.US_ASCII);
+        ByteArrayOutputStream tag = new ByteArrayOutputStream();
+        tag.writeBytes("OpusTags".getBytes(StandardCharsets.US_ASCII));
+        writeLE(tag, vendor.length, 4);
+        tag.writeBytes(vendor);
+        writeLE(tag, 0, 4);
+        try (DataInputStream in = new DataInputStream(new BufferedInputStream(new FileInputStream(raw)));
+                FileOutputStream out = new FileOutputStream(output)) {
+            out.write(page(new byte[][]{head}, serial, 0, 0, 2));
+            out.write(page(new byte[][]{tag.toByteArray()}, serial, 1, 0, 0));
+            long frames = length / 80;
+            int pageNumber = 2;
+            for (long first = 0; first < frames; first += 100) {
+                int count = (int) Math.min(100, frames - first);
+                byte[][] packets = new byte[count][80];
+                for (int i = 0; i < count; i++) {
+                    in.readFully(packets[i]);
+                    if ((packets[i][0] & 0xff) != 0xbc) {
+                        throw new IllegalArgumentException("Unknown Memoket OPUS layout");
+                    }
+                }
+                int flags = first + count == frames ? 4 : 0;
+                out.write(page(packets, serial, pageNumber++, (first + count) * 960L, flags));
+            }
+            out.flush();
+            out.getFD().sync();
+        }
     }
 
     private static byte[] page(byte[][] packets, int serial, int seq, long granule, int flags) {

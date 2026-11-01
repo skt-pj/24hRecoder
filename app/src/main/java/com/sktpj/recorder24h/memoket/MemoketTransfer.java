@@ -1,13 +1,15 @@
 package com.sktpj.recorder24h.memoket;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.regex.Pattern;
 import java.util.zip.CRC32;
 
-public final class MemoketTransfer {
+public final class MemoketTransfer implements AutoCloseable {
     private static final Pattern SAFE_NAME = Pattern.compile("[A-Za-z0-9._-]+\\.opus");
-    private static final int MAX_BYTES = 64 * 1024 * 1024;
 
     private enum State {
         WAIT_LIST,
@@ -20,6 +22,10 @@ public final class MemoketTransfer {
 
     public interface CompletedFile {
         void persist(String name, byte[] payload, long expectedCrc) throws Exception;
+    }
+
+    public interface CompletedFileOnDisk {
+        void persist(String name, File payload, long expectedCrc) throws Exception;
     }
 
     /** Applied as soon as the Gem announces a filename, before accepting any audio bytes. */
@@ -35,6 +41,8 @@ public final class MemoketTransfer {
     }
 
     private final CompletedFile save;
+    private final CompletedFileOnDisk saveFile;
+    private final File spoolDirectory;
     private final FileSelector selector;
     private final int maxFiles;
     private final boolean verifyDeviceRemoval;
@@ -53,6 +61,9 @@ public final class MemoketTransfer {
     private long expectedCrc = -1;
     private final CRC32 crc = new CRC32();
     private ByteArrayOutputStream buffer;
+    private File spoolFile;
+    private FileOutputStream spoolOut;
+    private long receivedBytes;
     private long nextSequence;
     private int completedCount;
     private boolean finalizeRequested;
@@ -89,6 +100,24 @@ public final class MemoketTransfer {
             boolean acknowledgeOnSave) {
         if (maxFiles < 1) throw new IllegalArgumentException("Invalid file limit");
         this.save = save;
+        this.saveFile = null;
+        this.spoolDirectory = null;
+        this.selector = selector;
+        this.maxFiles = maxFiles;
+        this.verifyDeviceRemoval = verifyDeviceRemoval;
+        this.metadataOnlyFinalization = metadataOnlyFinalization;
+        this.acknowledgeOnSave = acknowledgeOnSave;
+    }
+
+    public MemoketTransfer(CompletedFileOnDisk save, File spoolDirectory,
+            FileSelector selector, int maxFiles, boolean verifyDeviceRemoval,
+            boolean metadataOnlyFinalization, boolean acknowledgeOnSave) {
+        if (save == null || spoolDirectory == null || maxFiles < 1) {
+            throw new IllegalArgumentException("Invalid file transfer configuration");
+        }
+        this.save = null;
+        this.saveFile = save;
+        this.spoolDirectory = spoolDirectory;
         this.selector = selector;
         this.maxFiles = maxFiles;
         this.verifyDeviceRemoval = verifyDeviceRemoval;
@@ -136,7 +165,7 @@ public final class MemoketTransfer {
             name = incoming;
             expectedSize = -1;
             expectedCrc = -1;
-            buffer = new ByteArrayOutputStream();
+            beginBuffer();
             crc.reset();
             nextSequence = 0;
             finalizeRequested = false;
@@ -176,12 +205,12 @@ public final class MemoketTransfer {
                 }
                 expectedSize = u32(payload, valuesOffset);
                 expectedCrc = u32(payload, valuesOffset + 4);
-                if (expectedSize <= 0 || expectedSize > MAX_BYTES) {
+                if (expectedSize <= 0) {
                     throw new IllegalStateException("Memoket file size invalid size=" + expectedSize + " payload=" + hex(payload));
                 }
-                if (buffer == null) throw new IllegalStateException("Memoket data buffer missing");
-                if (buffer.size() > expectedSize) {
-                    throw new IllegalStateException("Memoket file length exceeded expected=" + expectedSize + " actual=" + buffer.size());
+                if (!hasBuffer()) throw new IllegalStateException("Memoket data buffer missing");
+                if (receivedBytes > expectedSize) {
+                    throw new IllegalStateException("Memoket file length exceeded expected=" + expectedSize + " actual=" + receivedBytes);
                 }
                 state = State.WAIT_FINALIZE;
                 if (metadataOnlyFinalization) {
@@ -249,7 +278,7 @@ public final class MemoketTransfer {
 
     public synchronized byte[] onData(byte[] payload) {
         if ((state != State.RECEIVING_DATA && state != State.WAIT_FINALIZE)
-                || buffer == null || payload == null || payload.length < 6) return null;
+                || !hasBuffer() || payload == null || payload.length < 6) return null;
         long sequence = ((long) (payload[0] & 0xff) << 32)
                 | ((long) (payload[1] & 0xff) << 24)
                 | ((long) (payload[2] & 0xff) << 16)
@@ -259,15 +288,17 @@ public final class MemoketTransfer {
             throw new IllegalStateException("Memoket block order mismatch expected=" + nextSequence + " actual=" + sequence);
         }
         int size = payload.length - 5;
-        if ((long) buffer.size() + size > MAX_BYTES) {
-            throw new IllegalStateException("Memoket file exceeded diagnostic memory limit "
-                    + MAX_BYTES + " bytes before verified metadata and CRC");
-        }
-        if (expectedSize > 0 && (long) buffer.size() + size > expectedSize) {
+        if (expectedSize > 0 && receivedBytes + size > expectedSize) {
             throw new IllegalStateException("Memoket file length exceeded expected=" + expectedSize
-                    + " actualAfterBlock=" + ((long) buffer.size() + size));
+                    + " actualAfterBlock=" + (receivedBytes + size));
         }
-        buffer.write(payload, 5, size);
+        try {
+            if (spoolOut != null) spoolOut.write(payload, 5, size);
+            else buffer.write(payload, 5, size);
+        } catch (IOException failure) {
+            throw new IllegalStateException("Gem受信データを保存できません", failure);
+        }
+        receivedBytes += size;
         crc.update(payload, 5, size);
         nextSequence++;
         if (state == State.WAIT_FINALIZE && !metadataOnlyFinalization) return finalizeIfComplete();
@@ -275,11 +306,11 @@ public final class MemoketTransfer {
     }
 
     public synchronized boolean shouldRequestMetadata() {
-        return state == State.RECEIVING_DATA && buffer != null && buffer.size() > 0;
+        return state == State.RECEIVING_DATA && hasBuffer() && receivedBytes > 0;
     }
 
-    public synchronized int bufferedBytes() {
-        return buffer == null ? 0 : buffer.size();
+    public synchronized long bufferedBytes() {
+        return receivedBytes;
     }
 
     public synchronized long dataBlockCount() {
@@ -302,9 +333,21 @@ public final class MemoketTransfer {
 
     private byte[] persistAndBuildAck() throws Exception {
         verifyComplete();
-        save.persist(name, buffer.toByteArray(), expectedCrc);
+        if (saveFile != null) {
+            try {
+                spoolOut.flush();
+                spoolOut.getFD().sync();
+                spoolOut.close();
+                spoolOut = null;
+                saveFile.persist(name, spoolFile, expectedCrc);
+            } finally {
+                discardSpool();
+            }
+        } else {
+            save.persist(name, buffer.toByteArray(), expectedCrc);
+            buffer = null;
+        }
         completedCount++;
-        buffer = null;
         if (!acknowledgeOnSave) {
             name = null;
             state = State.DONE;
@@ -320,7 +363,7 @@ public final class MemoketTransfer {
     }
 
     private byte[] finalizeIfComplete() {
-        if (expectedSize <= 0 || buffer == null || buffer.size() < expectedSize
+        if (expectedSize <= 0 || !hasBuffer() || receivedBytes < expectedSize
                 || finalizeRequested) return null;
         verifyComplete();
         finalizeRequested = true;
@@ -328,14 +371,55 @@ public final class MemoketTransfer {
     }
 
     private void verifyComplete() {
-        if (buffer == null || expectedSize <= 0 || expectedCrc < 0
-                || buffer.size() != expectedSize || crc.getValue() != expectedCrc) {
+        if (!hasBuffer() || expectedSize <= 0 || expectedCrc < 0
+                || receivedBytes != expectedSize || crc.getValue() != expectedCrc) {
             throw new IllegalStateException(
                     "Memoket transfer incomplete expectedSize=" + expectedSize
-                            + " actualSize=" + (buffer == null ? -1 : buffer.size())
+                            + " actualSize=" + (hasBuffer() ? receivedBytes : -1)
                             + " expectedCrc=" + Long.toHexString(expectedCrc)
                             + " actualCrc=" + Long.toHexString(crc.getValue()));
         }
+    }
+
+    private boolean hasBuffer() {
+        return buffer != null || spoolFile != null;
+    }
+
+    private void beginBuffer() {
+        discardSpool();
+        buffer = null;
+        receivedBytes = 0;
+        if (saveFile == null) {
+            buffer = new ByteArrayOutputStream();
+            return;
+        }
+        if (!spoolDirectory.isDirectory() && !spoolDirectory.mkdirs()) {
+            throw new IllegalStateException("Gem受信ファイルの保存先を作成できません");
+        }
+        try {
+            spoolFile = File.createTempFile("memoket-transfer-", ".part", spoolDirectory);
+            spoolOut = new FileOutputStream(spoolFile);
+        } catch (IOException failure) {
+            discardSpool();
+            throw new IllegalStateException("Gem受信ファイルを作成できません", failure);
+        }
+    }
+
+    private void discardSpool() {
+        if (spoolOut != null) {
+            try { spoolOut.close(); } catch (IOException ignored) { }
+            spoolOut = null;
+        }
+        if (spoolFile != null) {
+            spoolFile.delete();
+            spoolFile = null;
+        }
+    }
+
+    @Override
+    public synchronized void close() {
+        discardSpool();
+        buffer = null;
     }
 
     private static void requireName(String value) {
