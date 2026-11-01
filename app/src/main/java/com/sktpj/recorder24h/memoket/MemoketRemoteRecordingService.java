@@ -81,41 +81,6 @@ public final class MemoketRemoteRecordingService extends Service {
     private String continuousSegmentId;
     private long continuousLastDataAtMs;
     private int continuousRetries;
-    private final Runnable continuousHeartbeat = new Runnable() {
-        @Override public void run() {
-            if (!continuousMode || continuousStopRequested || stopCompleted) return;
-            long lastData = continuousLastDataAtMs > 0 ? continuousLastDataAtMs : continuousStartedAtMs;
-            RecorderStateStore.heartbeat(MemoketRemoteRecordingService.this,
-                    streamStopRequested ? "ROTATING" : "RECORDING",
-                    continuousSegmentId, continuousStartedAtMs, lastData);
-            stopHandler.postDelayed(this, 5_000L);
-        }
-    };
-    private final Runnable continuousRetry = () -> {
-        if (!continuousMode || continuousStopRequested
-                || !RecordingIntentStore.isRequested(this)
-                || !"MEMOKET".equals(MemoketSettings.source(this))) return;
-        recordingStartPending = false;
-        recordingActive = false;
-        stopPending = false;
-        stopCompleted = false;
-        manualStopPending = false;
-        commandBusy = false;
-        notifySetupStep = 0;
-        commands.clear();
-        data = null;
-        response = null;
-        control = null;
-        extraNotify5 = null;
-        extraNotify6 = null;
-        gatt = null;
-        trace.phase("CONTINUOUS_GEM_RETRY");
-        onStartCommand(new Intent(this, MemoketRemoteRecordingService.class)
-                .setAction(ACTION_START_CONTINUOUS), 0, 0);
-    };
-    private boolean streamCaptureTimerStarted;
-    private boolean streamStopRequested;
-    private boolean streamMetadataReceived;
     private volatile boolean manualTestMode;
     private volatile boolean manualStopPending;
     private int candidateId;
@@ -177,6 +142,41 @@ public final class MemoketRemoteRecordingService extends Service {
     private int midTransferStatusStep;
         private long lastDeleteStatusProbeAtMs;
     private long deleteStatusStartedAtMs;
+    private final Runnable continuousHeartbeat = new Runnable() {
+        @Override public void run() {
+            if (!continuousMode || continuousStopRequested || stopCompleted) return;
+            long lastData = continuousLastDataAtMs > 0 ? continuousLastDataAtMs : continuousStartedAtMs;
+            RecorderStateStore.heartbeat(MemoketRemoteRecordingService.this,
+                    streamStopRequested ? "ROTATING" : "RECORDING",
+                    continuousSegmentId, continuousStartedAtMs, lastData);
+            stopHandler.postDelayed(this, 5_000L);
+        }
+    };
+    private final Runnable continuousRetry = () -> {
+        if (!continuousMode || continuousStopRequested
+                || !RecordingIntentStore.isRequested(this)
+                || !"MEMOKET".equals(MemoketSettings.source(this))) return;
+        recordingStartPending = false;
+        recordingActive = false;
+        stopPending = false;
+        stopCompleted = false;
+        manualStopPending = false;
+        commandBusy = false;
+        notifySetupStep = 0;
+        commands.clear();
+        data = null;
+        response = null;
+        control = null;
+        extraNotify5 = null;
+        extraNotify6 = null;
+        gatt = null;
+        trace.phase("CONTINUOUS_GEM_RETRY");
+        onStartCommand(new Intent(this, MemoketRemoteRecordingService.class)
+                .setAction(ACTION_START_CONTINUOUS), 0, 0);
+    };
+    private boolean streamCaptureTimerStarted;
+    private boolean streamStopRequested;
+    private boolean streamMetadataReceived;
     private final Runnable streamStopAtFiveSeconds = () -> {
         if (!streamCaptureMode || stopCompleted || streamStopRequested || !stopPending) return;
         streamStopRequested = true;
@@ -996,6 +996,7 @@ public final class MemoketRemoteRecordingService extends Service {
                     System.currentTimeMillis(), Math.max(0L, System.currentTimeMillis() - continuousStartedAtMs));
             if (!continuousStopRequested && RecordingIntentStore.isRequested(this)
                     && "MEMOKET".equals(MemoketSettings.source(this))) {
+                stopCompleted = false;
                 beginStreamCapture();
                 return;
             }
