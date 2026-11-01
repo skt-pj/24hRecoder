@@ -168,8 +168,10 @@ class MainActivity : ComponentActivity() {
         val permissionsReady = if (gem) {
             if (Build.VERSION.SDK_INT >= 31) {
                 checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
-                    checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
-            } else checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
+                    checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+            } else checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
+                checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         } else checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         if (startAfterPermission && permissionsReady) {
             startAfterPermission = false
@@ -186,6 +188,9 @@ class MainActivity : ComponentActivity() {
                 listOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
             } else listOf(Manifest.permission.ACCESS_FINE_LOCATION)
             needed += required.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                needed += Manifest.permission.RECORD_AUDIO
+            }
         } else if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             needed += Manifest.permission.RECORD_AUDIO
         }
@@ -256,6 +261,7 @@ private data class DashboardSnapshot(
     val recordingRequested: Boolean,
     val currentSegmentStartedAtMs: Long,
     val lastAudioReadMs: Long,
+    val inputSource: String,
     val lastSegmentId: String,
     val lastSegmentFinalizedAtMs: Long,
     val lastSegmentDurationMs: Long,
@@ -611,8 +617,8 @@ private fun RecordingCard(
                 }
             )
             if (dashboard.heartbeatMs > 0L) InfoRow("最終heartbeat", formatAgo(dashboard.heartbeatMs))
-            if (dashboard.lastAudioReadMs > 0L) InfoRow("マイク入力", formatAgo(dashboard.lastAudioReadMs))
-            if (dashboard.currentSegmentStartedAtMs > 0L) {
+            if (dashboard.lastAudioReadMs > 0L) InfoRow(if (dashboard.inputSource == "MEMOKET") "スマホマイク入力" else "マイク入力", formatAgo(dashboard.lastAudioReadMs))
+            if (dashboard.inputSource != "MEMOKET" && dashboard.currentSegmentStartedAtMs > 0L) {
                 InfoRow("現在の5分音声", "${formatDuration(System.currentTimeMillis() - dashboard.currentSegmentStartedAtMs)} 経過")
             }
             if (dashboard.segmentId.isNotBlank() && dashboard.segmentId != "null") {
@@ -1515,6 +1521,7 @@ private fun readDashboard(context: Context): DashboardSnapshot {
         recordingRequested = recordingRequested,
         currentSegmentStartedAtMs = state.optLong("currentSegmentStartedAtMs", 0L),
         lastAudioReadMs = state.optLong("lastAudioReadMs", 0L),
+        inputSource = state.optString("inputSource", "LOCAL"),
         lastSegmentId = state.optString("lastSegmentId", ""),
         lastSegmentFinalizedAtMs = state.optLong("lastSegmentFinalizedAtMs", 0L),
         lastSegmentDurationMs = state.optLong("lastSegmentDurationMs", 0L),
