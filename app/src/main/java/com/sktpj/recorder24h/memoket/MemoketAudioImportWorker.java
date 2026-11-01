@@ -54,7 +54,6 @@ public final class MemoketAudioImportWorker extends Worker {
             return Result.failure();
         Context context = getApplicationContext();
         File source = new File(new MemoketRecordingStore(context).directory(), filename);
-        if (!source.isFile()) return Result.retry();
         try {
             long started = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
                     .parse(filename.substring(0, 15)).getTime();
@@ -62,13 +61,21 @@ public final class MemoketAudioImportWorker extends Worker {
             String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US)
                     .format(new Date(started));
             File target = new File(StoragePolicy.getAudioDir(context), timestamp + "_" + id + ".m4a");
+            if (!source.isFile() && !target.isFile()) return Result.retry();
             if (!target.isFile() || target.length() == 0) {
                 StoragePolicy.enforce(context);
                 long duration = MemoketAudioImporter.convert(source, target);
                 SegmentRepository.append(context, id, target, started,
                         started + duration, "READY", null);
             }
-            return Result.success();
+            File journal = new File(new File(context.getFilesDir(), "metadata"), "segments.jsonl");
+            if (journal.isFile() && new String(java.nio.file.Files.readAllBytes(journal.toPath()),
+                    StandardCharsets.UTF_8).contains("\\"segmentId\\":\\"" + id + "\\"")) {
+                source.delete();
+                new File(source.getParentFile(), filename + ".raw").delete();
+                return Result.success();
+            }
+            return Result.retry();
         } catch (Exception error) {
             try {
                 AppLogger.event(context, "MEMOKET_AUDIO_IMPORT_FAILED",
