@@ -204,15 +204,15 @@ fun MemoketGemSettingsCard() {
                     )
                     remoteState = "接続中"
                 }
-                Text("独立BLE試験（録音状態の確認は公式アプリで実施）",
+                Text("Gem録音・停止・取得の独立試験", 
                     style = MaterialTheme.typography.titleMedium)
-                Text("開始だけ：接続・認証 → CONTROL 03 → 03ffを記録 → 切断。5秒待機や停止コマンドは送りません。")
+                Text("開始候補だけ送信して切断します。録音状態は公式アプリで確認してください。")
                 Button(
                     enabled = address.isNotEmpty() && !candidateBusy,
                     onClick = { runDiagnostic(MemoketRemoteRecordingService.ACTION_DIAG_START_ONLY) },
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("録音開始候補だけ送信（03）") }
-                Text("停止だけ：公式アプリで録音を開始してから、以下の候補を1件ずつ実行。24hRecoderから03は送りません。")
+                Text("停止試験：公式アプリで録音を開始してから候補を1つ選択してください。")
                 val stopOnlyCandidates = listOf(
                     "停止だけ1：通知OFF" to MemoketRemoteRecordingService.ACTION_DIAG_STOP_OFF,
                     "停止だけ2：通知OFF→ON" to MemoketRemoteRecordingService.ACTION_DIAG_STOP_TOGGLE,
@@ -226,7 +226,7 @@ fun MemoketGemSettingsCard() {
                         modifier = Modifier.fillMaxWidth()
                     ) { Text(label) }
                 }
-                Text("取得だけ：接続・認証 → 010000 → データ受信・サイズ/CRC照合 → 端末に保存。03と05は送らず、Gem内の録音は削除しません。")
+                Text("音声を端末へ保存します。Gem側の削除確認は送りません。")
                 OutlinedButton(
                     enabled = address.isNotEmpty() && !candidateBusy,
                     onClick = { runDiagnostic(MemoketRemoteRecordingService.ACTION_DIAG_FETCH_ONLY) },
