@@ -131,6 +131,12 @@ public final class RecorderStateStore {
         writeJson(context, current);
     }
 
+    public static synchronized void setInputSource(Context context, String source) {
+        JSONObject current = read(context);
+        try { current.put("inputSource", source); } catch (Exception ignored) {}
+        writeJson(context, current);
+    }
+
     public static synchronized void setCaptureSilenced(Context context, boolean silenced) {
         JSONObject current = read(context);
         try {
