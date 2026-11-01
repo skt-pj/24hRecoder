@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.sktpj.recorder24h.memoket.MemoketRecordingStore
 import com.sktpj.recorder24h.memoket.MemoketRemoteRecordingService
+import com.sktpj.recorder24h.storage.RecordingIntentStore
 import com.sktpj.recorder24h.memoket.MemoketSettings
 import com.sktpj.recorder24h.memoket.MemoketSyncScheduler
 import kotlinx.coroutines.delay
@@ -48,31 +49,11 @@ import java.io.File
 fun MemoketGemSettingsCard() {
     val context = LocalContext.current
     val handler = remember { Handler(Looper.getMainLooper()) }
-    val scope = rememberCoroutineScope()
-    var exportFile by remember { mutableStateOf<File?>(null) }
-    val exportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("audio/ogg")
-    ) { uri ->
-        val file = exportFile
-        if (uri != null && file != null) {
-            scope.launch {
-                val saved = withContext(Dispatchers.IO) {
-                    try {
-                        context.contentResolver.openOutputStream(uri)?.use { out ->
-                            file.inputStream().use { it.copyTo(out) }
-                        } != null
-                    } catch (_: Exception) { false }
-                }
-                Toast.makeText(context, if (saved) "音声を書き出しました" else "書き出しに失敗しました", Toast.LENGTH_SHORT).show()
-            }
-        }
-        exportFile = null
-    }
     var source by remember { mutableStateOf(MemoketSettings.source(context)) }
     var address by remember { mutableStateOf(MemoketSettings.address(context)) }
     var automatic by remember { mutableStateOf(MemoketSettings.enabled(context)) }
+    var recordingActive by remember { mutableStateOf(RecordingIntentStore.isRequested(context)) }
     var result by remember { mutableStateOf(MemoketSettings.result(context)) }
-    var fileCount by remember { mutableStateOf(MemoketRecordingStore(context).count()) }
     var remoteState by remember { mutableStateOf(MemoketSettings.remoteRecordingState(context)) }
     var scanState by remember { mutableStateOf("") }
     var devices by remember { mutableStateOf(emptyList<Pair<String, String>>()) }
@@ -136,8 +117,8 @@ fun MemoketGemSettingsCard() {
             automatic = false
         }
         while (true) {
+            recordingActive = RecordingIntentStore.isRequested(context)
             result = MemoketSettings.result(context)
-            fileCount = MemoketRecordingStore(context).count()
             remoteState = MemoketSettings.remoteRecordingState(context)
             delay(2_000)
         }
@@ -149,6 +130,7 @@ fun MemoketGemSettingsCard() {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = source == "LOCAL",
+                    enabled = !recordingActive,
                     onClick = {
                         MemoketSettings.setSource(context, "LOCAL")
                         MemoketSyncScheduler.setPeriodic(context, false)
@@ -159,6 +141,7 @@ fun MemoketGemSettingsCard() {
                 )
                 FilterChip(
                     selected = source == "MEMOKET",
+                    enabled = !recordingActive,
                     onClick = {
                         MemoketSettings.setSource(context, "MEMOKET")
                         source = "MEMOKET"
@@ -166,10 +149,11 @@ fun MemoketGemSettingsCard() {
                     label = { Text("Memoket Gem") }
                 )
             }
+            if (recordingActive) Text("入力先の変更は録音停止後に行えます")
             if (source == "MEMOKET") {
                 Text("選択中のGem: ${if (address.isEmpty()) "未選択" else address}")
                 OutlinedButton(
-                    enabled = !scanning,
+                    enabled = !scanning && !recordingActive,
                     onClick = {
                         val required = if (Build.VERSION.SDK_INT >= 31) {
                             arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
@@ -185,6 +169,7 @@ fun MemoketGemSettingsCard() {
                 if (scanState.isNotEmpty()) Text(scanState)
                 devices.forEach { (deviceAddress, name) ->
                     OutlinedButton(
+                        enabled = !recordingActive,
                         onClick = {
                             MemoketSettings.selectDevice(context, deviceAddress)
                             address = deviceAddress
@@ -193,61 +178,10 @@ fun MemoketGemSettingsCard() {
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("$name ($deviceAddress)") }
                 }
-                val candidateBusy = remoteState == "接続中"
-                    || remoteState == "開始候補送信済み"
-                    || remoteState == "停止操作中"
-                    || remoteState == "ファイル取得のみ実行中"
-                val runDiagnostic: (String) -> Unit = { action ->
-                    context.startForegroundService(
-                        android.content.Intent(context, MemoketRemoteRecordingService::class.java)
-                            .setAction(action)
-                    )
-                    remoteState = "接続中"
-                }
-                Text("Gem録音・停止・取得の独立試験", 
-                    style = MaterialTheme.typography.titleMedium)
-                Text("開始候補だけ送信して切断します。録音状態は公式アプリで確認してください。")
-                Button(
-                    enabled = address.isNotEmpty() && !candidateBusy,
-                    onClick = { runDiagnostic(MemoketRemoteRecordingService.ACTION_DIAG_START_ONLY) },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("録音開始候補だけ送信（03）") }
-                Text("停止試験：公式アプリで録音を開始してから候補を1つ選択してください。")
-                val stopOnlyCandidates = listOf(
-                    "停止だけ1：通知OFF" to MemoketRemoteRecordingService.ACTION_DIAG_STOP_OFF,
-                    "停止だけ2：通知OFF→ON" to MemoketRemoteRecordingService.ACTION_DIAG_STOP_TOGGLE,
-                    "停止だけ3：状態照会00" to MemoketRemoteRecordingService.ACTION_DIAG_STOP_STATUS,
-                    "停止だけ4：通知切替→取得要求" to MemoketRemoteRecordingService.ACTION_DIAG_STOP_TRANSFER
-                )
-                stopOnlyCandidates.forEach { (label, action) ->
-                    Button(
-                        enabled = address.isNotEmpty() && !candidateBusy,
-                        onClick = { runDiagnostic(action) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text(label) }
-                }
-                Text("音声を端末へ保存します。Gem側の削除確認は送りません。")
-                OutlinedButton(
-                    enabled = address.isNotEmpty() && !candidateBusy,
-                    onClick = { runDiagnostic(MemoketRemoteRecordingService.ACTION_DIAG_FETCH_ONLY) },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("ファイル取得だけ（削除なし）") }
+                Text("Gemの録音はホームの「録音開始・停止」から操作します。")
                 Text("状態: $remoteState")
-                Text("保存済み音声: ${fileCount}件")
                 if (remoteState == "エラー" && result.isNotBlank()) Text(result)
-                OutlinedButton(
-                    enabled = fileCount > 0,
-                    onClick = {
-                        val last = MemoketRecordingStore(context).directory()
-                            .listFiles { _, fileName -> fileName.endsWith(".opus") }
-                            ?.maxByOrNull { it.lastModified() }
-                        if (last != null) {
-                            exportFile = last
-                            exportLauncher.launch(last.name)
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("最新の録音をファイルに保存") }
+                Text("録音済み音声と文字起こしは「記録」から確認できます。")
             }
         }
     }

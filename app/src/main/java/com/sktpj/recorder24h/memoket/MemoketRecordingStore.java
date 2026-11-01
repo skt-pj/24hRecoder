@@ -35,7 +35,10 @@ public final class MemoketRecordingStore {
             CRC32 existingCrc = new CRC32();
             byte[] existing = Files.readAllBytes(raw.toPath());
             existingCrc.update(existing);
-            if (existingCrc.getValue() == crc) return;
+            if (existingCrc.getValue() == crc) {
+                MemoketAudioImportWorker.enqueue(context, filename);
+                return;
+            }
         }
         byte[] ogg = MemoketOgg.encode(data, filename.hashCode());
         File rawPart = new File(folder, filename + ".raw.part");
@@ -45,6 +48,7 @@ public final class MemoketRecordingStore {
             writeDurably(oggPart, ogg);
             Files.move(rawPart.toPath(), raw.toPath(), StandardCopyOption.REPLACE_EXISTING);
             Files.move(oggPart.toPath(), playable.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            MemoketAudioImportWorker.enqueue(context, filename);
         } finally {
             rawPart.delete();
             oggPart.delete();
