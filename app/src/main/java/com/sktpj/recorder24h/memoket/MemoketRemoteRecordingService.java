@@ -519,7 +519,10 @@ public final class MemoketRemoteRecordingService extends Service {
             if (next != null && next.getDescriptor(CCCD) == null) next = null;
         }
         if (next == null) {
-            trace.phase("HANDSHAKE_STARTED");
+            session.allowActiveRecordingStatus(diagStopOnly || diagFileOnly);
+            trace.phase(diagStopOnly ? "HANDSHAKE_RECORDING_ACTIVE_ALLOWED_STOP_ONLY"
+                    : diagFileOnly ? "HANDSHAKE_RECORDING_ACTIVE_ALLOWED_FETCH_ONLY"
+                    : "HANDSHAKE_STARTED");
             queue(session.firstCommand());
         } else {
             setNotification(next, true);
