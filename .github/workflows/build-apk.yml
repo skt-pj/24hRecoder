@@ -103,19 +103,60 @@ jobs:
           grep -F "versionCode='1120'" app/build/outputs/apk/debug/badging.txt
           grep -F "versionName='0.7.120'" app/build/outputs/apk/debug/badging.txt
 
-      - name: Publish latest APK into repository
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Generate APK integrity and build metadata
         run: |
           set -euo pipefail
-          mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/24hRecoder-debug.apk
-          sha256sum dist/24hRecoder-debug.apk > dist/24hRecoder-debug.apk.sha256
+          mkdir -p release
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          cp "$APK" release/24hRecoder-0.7.120-debug.apk
+          cd release
+          sha256sum 24hRecoder-0.7.120-debug.apk > 24hRecoder-0.7.120-debug.apk.sha256
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs 24hRecoder-0.7.120-debug.apk > signing-certificate.txt
+          grep -F "Signer #1 certificate SHA-256 digest: e648320071b8ab0de038f76790064b99461b67d7dbe7ce7506d12a5f4fa884d8" signing-certificate.txt
+          {
+            printf 'repository=%s\n' "$GITHUB_REPOSITORY"
+            printf 'branch=%s\n' "$GITHUB_REF_NAME"
+            printf 'commit=%s\n' "$GITHUB_SHA"
+            printf 'versionName=0.7.120-debug\nversionCode=1120\n'
+            printf 'workflow_run=%s\n' "$GITHUB_RUN_ID"
+            printf 'build_and_test=passed\n'
+            printf 'signing=commonStable\n'
+          } > build-metadata.txt
+
+      - name: Upload signed debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: 24hRecoder-v0.7.120-debug
+          path: |
+            release/24hRecoder-0.7.120-debug.apk
+            release/24hRecoder-0.7.120-debug.apk.sha256
+            release/signing-certificate.txt
+            release/build-metadata.txt
+          if-no-files-found: error
+
+      - name: Publish signed APK to GitHub Releases
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="v0.7.120-debug"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A dist
-          if git diff --cached --quiet; then
-            exit 0
+          if git rev-parse --verify "refs/tags/$TAG" >/dev/null 2>&1; then
+            test "$(git rev-list -n 1 "$TAG")" = "$GITHUB_SHA" || {
+              echo "Existing version tag points to a different commit" >&2
+              exit 1
+            }
+          else
+            git tag -a "$TAG" -m "24hRecoder 0.7.120-debug"
+            git push origin "refs/tags/$TAG"
           fi
-          git commit -m "Update latest debug APK"
-          git pull --rebase origin main
-          git push origin HEAD:main
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release already published for $TAG"
+          else
+            gh release create "$TAG"               release/24hRecoder-0.7.120-debug.apk               release/24hRecoder-0.7.120-debug.apk.sha256               release/signing-certificate.txt               release/build-metadata.txt               --verify-tag --prerelease               --title "24hRecoder 0.7.120-debug"               --notes "Gem integration in the normal recording, audio-import, transcription and history flow. Physical Gem recording and stop behavior still require device verification."
+          fi
+          mkdir -p release-check
+          gh release download "$TAG" --pattern "24hRecoder-0.7.120-debug.apk" --dir release-check
+          test "$(sha256sum release-check/24hRecoder-0.7.120-debug.apk | cut -d' ' -f1)" =                "$(sha256sum release/24hRecoder-0.7.120-debug.apk | cut -d' ' -f1)"
