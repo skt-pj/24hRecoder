@@ -335,7 +335,7 @@ public final class MemoketRemoteRecordingService extends Service {
                 finishWithError(error.getMessage() == null ? "Gemへ接続できませんでした" : error.getMessage());
             }
         }, "memoket-connect").start();
-        return START_NOT_STICKY;
+        return continuousMode ? START_STICKY : START_NOT_STICKY;
     }
 
     private synchronized void beginManualTestStop() {
