@@ -88,6 +88,9 @@ public final class MemoketRemoteRecordingService extends Service {
             queue(MemoketTransfer.metadataCommand());
         }
     };
+    private final Runnable diagStartDeadline = () -> {
+        if (diagStartOnly && !stopCompleted) finishWithError("開始候補03の応答が20秒以内に届きません");
+    };
     private final Runnable diagFetchDeadline = () -> {
         if (diagFileOnly && !stopCompleted) finishWithError("診断取得が120秒を超えました。05は送っていません");
     };
@@ -168,7 +171,8 @@ public final class MemoketRemoteRecordingService extends Service {
                 && !fiveSecondRequest && !manualStartRequest && requestedCandidate == 0
                 && !diagnosticStart && diagnosticStop == 0 && !diagnosticFetch)
             return START_NOT_STICKY;
-        if (!stopRequest && (recordingStartPending || recordingActive || stopPending || manualStopPending))
+        if (!stopRequest && (recordingStartPending || recordingActive || stopPending || manualStopPending
+                || diagFileOnly || diagStartOnly))
             return START_NOT_STICKY;
         if (stopRequest) {
             // A duplicate user STOP must not abort an ongoing verified download.
@@ -348,6 +352,7 @@ public final class MemoketRemoteRecordingService extends Service {
         stopHandler.removeCallbacks(manualStopTimeout);
         stopHandler.removeCallbacks(diagMetadataProbe);
         stopHandler.removeCallbacks(diagFetchDeadline);
+        stopHandler.removeCallbacks(diagStartDeadline);
         closeGatt();
         super.onDestroy();
     }
@@ -563,6 +568,7 @@ public final class MemoketRemoteRecordingService extends Service {
                                 ? "DIAG_START_ONLY_CONTROL_03_REQUESTED"
                                 : "RECORD_START_COMMAND_REQUESTED");
                         queue(new byte[]{0x03});
+                        if (diagStartOnly) stopHandler.postDelayed(diagStartDeadline, 20_000L);
                         trace.phase("OFFICIAL_03_SENT_START_EFFECT_UNVERIFIED");
                     }
                 }
@@ -652,6 +658,7 @@ public final class MemoketRemoteRecordingService extends Service {
         if (stopCompleted) return;
         stopCompleted = true;
         stopHandler.removeCallbacks(diagFetchDeadline);
+        stopHandler.removeCallbacks(diagStartDeadline);
         stopHandler.removeCallbacks(diagMetadataProbe);
         trace.phase("DIAG_INDEPENDENT_FINISHED", stateDetails());
         trace.completed(stateDetails());
@@ -871,6 +878,7 @@ public final class MemoketRemoteRecordingService extends Service {
         stopHandler.removeCallbacks(manualStopTimeout);
         stopHandler.removeCallbacks(diagMetadataProbe);
         stopHandler.removeCallbacks(diagFetchDeadline);
+        stopHandler.removeCallbacks(diagStartDeadline);
         if (trace != null) {
             trace.failure(message, null);
         }
