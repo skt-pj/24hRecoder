@@ -9,6 +9,7 @@ public final class MemoketNov01HandshakeTest {
             "e80d01313938342f33363934333336");
 
     @Test public void observedGemIdentityCompletesHandshake() {
+        assertEquals(15, OBSERVED_E8.length);
         MemoketSessionProtocol session = new MemoketSessionProtocol();
         assertArrayEquals(bytes("00"), session.firstCommand());
         assertArrayEquals(bytes("2701"), session.onResponse(bytes("0000")));
