@@ -114,6 +114,8 @@ import com.sktpj.recorder24h.transcription.TranscriptionResetManager
 import com.sktpj.recorder24h.transcription.TranscriptionPipelineSettings
 import com.sktpj.recorder24h.transcription.TranscriptionScheduler
 import com.sktpj.recorder24h.transcription.WhisperModelManager
+import com.sktpj.recorder24h.memoket.MemoketSettings
+import com.sktpj.recorder24h.memoket.MemoketAudioImportWorker
 import com.sktpj.recorder24h.ui.SegmentHistoryRepository
 import com.sktpj.recorder24h.ui.SegmentRecord
 import com.sktpj.recorder24h.util.AppLogger
@@ -139,6 +141,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         AppLogger.event(this, "MAIN_ACTIVITY_CREATED")
         val resetApplied = TranscriptionResetManager.applyV049ResetIfNeeded(this)
+        MemoketAudioImportWorker.enqueuePending(this)
         if (TranscriptionPipelineSettings.isSelectedPipelineReady(this, WhisperModelManager.selectedModelId(this))) {
             if (resetApplied) TranscriptionScheduler.enqueueExistingAfterReset(this)
             else TranscriptionScheduler.enqueueExisting(this)
@@ -161,9 +164,14 @@ class MainActivity : ComponentActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQUEST_PERMISSIONS) return
-        if (startAfterPermission &&
-            checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-        ) {
+        val gem = MemoketSettings.source(this) == "MEMOKET"
+        val permissionsReady = if (gem) {
+            if (Build.VERSION.SDK_INT >= 31) {
+                checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
+                    checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+            } else checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        } else checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        if (startAfterPermission && permissionsReady) {
             startAfterPermission = false
             startRecording()
         } else {
@@ -173,7 +181,12 @@ class MainActivity : ComponentActivity() {
 
     private fun requestStart() {
         val needed = mutableListOf<String>()
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+        if (MemoketSettings.source(this) == "MEMOKET") {
+            val required = if (Build.VERSION.SDK_INT >= 31) {
+                listOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
+            } else listOf(Manifest.permission.ACCESS_FINE_LOCATION)
+            needed += required.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        } else if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             needed += Manifest.permission.RECORD_AUDIO
         }
         if (Build.VERSION.SDK_INT >= 33 &&
