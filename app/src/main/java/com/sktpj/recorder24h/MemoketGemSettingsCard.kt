@@ -196,10 +196,8 @@ fun MemoketGemSettingsCard() {
                 Button(
                     enabled = address.isNotEmpty()
                         && remoteState != "接続中"
-                        && remoteState != "録音中"
                         && remoteState != "開始候補送信済み"
-                        && remoteState != "停止操作中"
-                        && remoteState != "ファイル取得中",
+                        && remoteState != "停止操作中",
                     onClick = {
                         context.startForegroundService(
                             android.content.Intent(context, MemoketRemoteRecordingService::class.java)
