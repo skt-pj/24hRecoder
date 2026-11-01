@@ -49,32 +49,11 @@ import java.io.File
 fun MemoketGemSettingsCard() {
     val context = LocalContext.current
     val handler = remember { Handler(Looper.getMainLooper()) }
-    val scope = rememberCoroutineScope()
-    var exportFile by remember { mutableStateOf<File?>(null) }
-    val exportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("audio/ogg")
-    ) { uri ->
-        val file = exportFile
-        if (uri != null && file != null) {
-            scope.launch {
-                val saved = withContext(Dispatchers.IO) {
-                    try {
-                        context.contentResolver.openOutputStream(uri)?.use { out ->
-                            file.inputStream().use { it.copyTo(out) }
-                        } != null
-                    } catch (_: Exception) { false }
-                }
-                Toast.makeText(context, if (saved) "音声を書き出しました" else "書き出しに失敗しました", Toast.LENGTH_SHORT).show()
-            }
-        }
-        exportFile = null
-    }
     var source by remember { mutableStateOf(MemoketSettings.source(context)) }
     var address by remember { mutableStateOf(MemoketSettings.address(context)) }
     var automatic by remember { mutableStateOf(MemoketSettings.enabled(context)) }
     var recordingActive by remember { mutableStateOf(RecordingIntentStore.isRequested(context)) }
     var result by remember { mutableStateOf(MemoketSettings.result(context)) }
-    var fileCount by remember { mutableStateOf(MemoketRecordingStore(context).count()) }
     var remoteState by remember { mutableStateOf(MemoketSettings.remoteRecordingState(context)) }
     var scanState by remember { mutableStateOf("") }
     var devices by remember { mutableStateOf(emptyList<Pair<String, String>>()) }
@@ -140,7 +119,6 @@ fun MemoketGemSettingsCard() {
         while (true) {
             recordingActive = RecordingIntentStore.isRequested(context)
             result = MemoketSettings.result(context)
-            fileCount = MemoketRecordingStore(context).count()
             remoteState = MemoketSettings.remoteRecordingState(context)
             delay(2_000)
         }
@@ -202,21 +180,8 @@ fun MemoketGemSettingsCard() {
                 }
                 Text("Gemの録音はホームの「録音開始・停止」から操作します。")
                 Text("状態: $remoteState")
-                Text("保存済み音声: ${fileCount}件")
                 if (remoteState == "エラー" && result.isNotBlank()) Text(result)
-                OutlinedButton(
-                    enabled = fileCount > 0,
-                    onClick = {
-                        val last = MemoketRecordingStore(context).directory()
-                            .listFiles { _, fileName -> fileName.endsWith(".opus") }
-                            ?.maxByOrNull { it.lastModified() }
-                        if (last != null) {
-                            exportFile = last
-                            exportLauncher.launch(last.name)
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("最新の録音をファイルに保存") }
+                Text("録音済み音声と文字起こしは「記録」から確認できます。")
             }
         }
     }
