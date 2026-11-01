@@ -901,9 +901,7 @@ public final class MemoketRemoteRecordingService extends Service {
         stopHandler.removeCallbacks(stopWatchdog);
         trace.phase("FILE_SAVED_05_ACK_IDLE_STOP_UNVERIFIED", stateDetails());
         updateState("音声1件保存済み");
-        MemoketSettings.saveResult(this,
-                "対象1件をサイズ・CRC照合後に端末へ永続保存し、Gemの完了通知05 ACK(0501)"
-                + "と00待機応答を確認。Gem本体の録音停止と実ファイル削除は未検証");
+        MemoketSettings.saveResult(this, "音声ファイルを1件保存しました");
         log("MEMOKET_FILE_SAVED_05_ACK_IDLE_STOP_UNVERIFIED", stateDetails());
         updateNotification("音声1件を保存しました");
         stopForeground(STOP_FOREGROUND_REMOVE);
