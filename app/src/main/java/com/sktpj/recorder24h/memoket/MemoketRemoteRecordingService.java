@@ -511,7 +511,7 @@ public final class MemoketRemoteRecordingService extends Service {
                 MemoketSettings.recordingStarted(this, System.currentTimeMillis(),
                         java.time.ZoneId.systemDefault().getId());
                 trace.phase("OFFICIAL_03FF_RECEIVED_START_EFFECT_UNVERIFIED");
-                updateState(candidateId != 0 ? "録音中" : manualTestMode ? "開始候補送信済み" : "録音中");
+                updateState(manualTestMode ? "開始候補送信済み" : "録音中");
                 updateNotification(manualTestMode ? "Gem接続中" : "Memoket Gem 録音中");
                 log(manualTestMode ? "MEMOKET_MANUAL_START_CANDIDATE_SENT"
                         : "MEMOKET_REMOTE_RECORDING_STARTED", stateDetails());
