@@ -45,6 +45,7 @@ public final class GemMicMonitorService extends Service {
     private Thread captureThread;
     private long lastReadAtMs;
     private long lastHeartbeatAtMs;
+    private long nextStartAllowedAtMs;
     private String publishedState = "";
 
     @Override
@@ -67,6 +68,11 @@ public final class GemMicMonitorService extends Service {
             progress(System.currentTimeMillis());
             return START_NOT_STICKY;
         }
+        if (!listening && !RecordingIntentStore.isRequested(this)
+                && !gate.isStarting() && !gate.isRecording() && !gate.isFetching()) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         if (ACTION_GEM_STARTED.equals(action)) {
             gate.started();
             event("GEM_MIC_DEVICE_STARTED");
@@ -75,6 +81,7 @@ public final class GemMicMonitorService extends Service {
             event("GEM_MIC_DEVICE_STOP_FETCHING");
         } else if (ACTION_GEM_FINISHED.equals(action)) {
             gate.acquired();
+            nextStartAllowedAtMs = System.currentTimeMillis() + 1_000L;
             event("GEM_MIC_FILE_ACQUIRED");
         } else if (ACTION_GEM_FAILED.equals(action)) {
             String error = intent == null ? null : intent.getStringExtra(EXTRA_ERROR);
@@ -176,7 +183,7 @@ public final class GemMicMonitorService extends Service {
     }
 
     private void progress(long nowMs) {
-        if (gate.shouldStart(nowMs)) {
+        if (nowMs >= nextStartAllowedAtMs && gate.shouldStart(nowMs)) {
             gate.startSent();
             publishState("STARTING");
             Intent intent = new Intent(this, MemoketRemoteRecordingService.class)
