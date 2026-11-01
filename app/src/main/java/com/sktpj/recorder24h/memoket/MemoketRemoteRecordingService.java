@@ -410,11 +410,11 @@ public final class MemoketRemoteRecordingService extends Service {
         deleteStatusStartedAtMs = 0;
         midTransferStatusStep = 0;
         earlyAudio.clear();
-        stopTransfer = new MemoketTransfer((name, payload, crc) -> {
-            new MemoketRecordingStore(this).persist(name, payload, crc);
+        stopTransfer = new MemoketTransfer((name, staged, crc) -> {
+            new MemoketRecordingStore(this).persist(name, staged, crc);
             stopSavedFiles++;
-            trace.filePersisted(name, payload.length, crc);
-        }, window::matches, 1, true, false);
+            trace.filePersisted(name, staged.length(), crc);
+        }, new MemoketRecordingStore(this).directory(), window::matches, 1, true, false, true);
         stopNotifyStep = 3;
         stopPending = true;
         recordingActive = true;
