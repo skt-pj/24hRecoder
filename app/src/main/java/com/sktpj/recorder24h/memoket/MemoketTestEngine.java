@@ -602,13 +602,14 @@ public final class MemoketTestEngine {
             if (!responseEnabled) enableResponse(true);
             MemoketRecordingStore store = new MemoketRecordingStore(context);
             List<String> saved = new ArrayList<>();
-            MemoketTransfer transfer = new MemoketTransfer((name, payload, crc) -> {
-                store.persist(name, payload, crc);
-                debug.filePersisted(name, payload.length, crc);
+            MemoketTransfer transfer = new MemoketTransfer((name, staged, crc) -> {
+                store.persist(name, staged, crc);
+                debug.filePersisted(name, staged.length(), crc);
                 saved.add(name);
                 savedFileNames.add(name);
-            }, null, 1, true);
+            }, store.directory(), null, 1, true, false, true);
 
+            try {
             // If the Gem is already streaming from a previous connection,
             // the initial audio bytes have been lost. Never pretend a new
             // file-list cycle will recover an intact file.
@@ -759,6 +760,9 @@ public final class MemoketTestEngine {
                 if (transfer.isDone()) break;
             }
             return saved.size();
+            } finally {
+                transfer.close();
+            }
         }
 
         void addTrace(String kind, String value) {
