@@ -125,13 +125,18 @@ public final class AiAnalysisRepository {
     }
 
     public static boolean isCurrent(File file, String sourceHash) {
-        if (file == null || !file.isFile() || sourceHash == null || sourceHash.isEmpty()) {
+        return isCurrent(file, sourceHash, OpenAiLunaClient.MODEL);
+    }
+
+    public static boolean isCurrent(File file, String sourceHash, String modelId) {
+        if (file == null || !file.isFile() || sourceHash == null || sourceHash.isEmpty()
+                || modelId == null || modelId.isEmpty()) {
             return false;
         }
         try {
             JSONObject row = new JSONObject(readUtf8(file));
             return sourceHash.equals(row.optString("sourceHash", ""))
-                    && OpenAiLunaClient.MODEL.equals(row.optString("model", ""));
+                    && modelId.equals(row.optString("model", ""));
         } catch (Exception ignored) {
             return false;
         }
@@ -139,6 +144,11 @@ public final class AiAnalysisRepository {
 
     public static void save(File target, String kind, SourceWindow source,
                             OpenAiLunaClient.Response response) throws Exception {
+        save(target, kind, source, response, OpenAiLunaClient.MODEL);
+    }
+
+    public static void save(File target, String kind, SourceWindow source,
+                            OpenAiLunaClient.Response response, String modelId) throws Exception {
         synchronized (LOCK) {
             File parent = target.getParentFile();
             if (parent != null && !parent.exists() && !parent.mkdirs()) {
@@ -148,7 +158,7 @@ public final class AiAnalysisRepository {
             JSONObject row = new JSONObject();
             row.put("schemaVersion", 1);
             row.put("kind", kind);
-            row.put("model", OpenAiLunaClient.MODEL);
+            row.put("model", modelId);
             row.put("periodStartMs", source.periodStartMs);
             row.put("periodEndMs", source.periodEndMs);
             row.put("generatedAtMs", System.currentTimeMillis());

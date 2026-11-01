@@ -1,0 +1,24 @@
+import java.nio.charset.StandardCharsets
+
+def vadFile047JavaFix = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/StreamingVadStore.java')
+def vad047JavaFix = new String(vadFile047JavaFix.bytes, StandardCharsets.UTF_8)
+def old047JavaFix = 'long end = Math.max(activeStartUs, Math.min(currentEndUs, lastSpeechEndUs + SPEECH_PAD_US));'
+def new047JavaFix = 'long end = Math.max(activeStartUs, Math.min(currentEndUs, lastSpeechEndUs + config.speechPadMs * 1000L));'
+if (vad047JavaFix.count(old047JavaFix) != 1) {
+    throw new GradleException('0.7.47 Java fix: expected exactly one SPEECH_PAD_US snapshot reference')
+}
+vad047JavaFix = vad047JavaFix.replace(old047JavaFix, new047JavaFix)
+vadFile047JavaFix.setText(vad047JavaFix, 'UTF-8')
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1047)
+            output.versionName.set('0.7.47-debug')
+        }
+    }
+}
+
+if (vadFile047JavaFix.text.contains('SPEECH_PAD_US')) {
+    throw new GradleException('0.7.47 Java fix: stale SPEECH_PAD_US reference remains')
+}

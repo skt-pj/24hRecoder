@@ -1,0 +1,82 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8074 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8074 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce074 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.74 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// Log the installed APK version at process creation. RecorderApplication is instantiated in the
+// main, :recorder, and :streaming_asr processes, so this must happen before the main-process guard.
+// Keep this as a core AppLogger event so it is present even when detailed diagnostics are disabled.
+def appFile074 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/RecorderApplication.java')
+def app074 = readUtf8074(appFile074)
+
+String processLine074 = '        String processName = Application.getProcessName();\n'
+int processFirst074 = app074.indexOf(processLine074)
+int processLast074 = app074.lastIndexOf(processLine074)
+if (processFirst074 < 0 || processFirst074 != processLast074) {
+    throw new GradleException('0.7.74 process startup version call: expected one processName line')
+}
+int processInsert074 = processFirst074 + processLine074.length()
+app074 = app074.substring(0, processInsert074) + '        logStartupVersion(processName);\n' + app074.substring(processInsert074)
+
+app074 = replaceOnce074(app074,
+'''    @Override
+    public void onActivityResumed(Activity activity) {
+''',
+'''    private void logStartupVersion(String processName) {
+        try {
+            android.content.pm.PackageInfo packageInfo =
+                    getPackageManager().getPackageInfo(getPackageName(), 0);
+            JSONObject details = new JSONObject();
+            details.put("packageName", getPackageName());
+            details.put("processName", processName == null ? JSONObject.NULL : processName);
+            details.put("versionName",
+                    packageInfo.versionName == null ? JSONObject.NULL : packageInfo.versionName);
+            details.put("versionCode", packageInfo.getLongVersionCode());
+            details.put("lastUpdateTimeMs", packageInfo.lastUpdateTime);
+            AppLogger.event(this, "APP_PROCESS_STARTED", details);
+        } catch (Exception error) {
+            try {
+                JSONObject details = new JSONObject();
+                details.put("packageName", getPackageName());
+                details.put("processName", processName == null ? JSONObject.NULL : processName);
+                details.put("error", error.getClass().getName());
+                details.put("message",
+                        error.getMessage() == null ? JSONObject.NULL : error.getMessage());
+                AppLogger.event(this, "APP_PROCESS_VERSION_LOG_FAILED", details);
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    @Override
+    public void onActivityResumed(Activity activity) {
+''', 'startup version logger')
+
+writeUtf8074(appFile074, app074)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1074)
+            output.versionName.set('0.7.74-debug')
+        }
+    }
+}
+
+if (!appFile074.text.contains('logStartupVersion(processName);')) {
+    throw new GradleException('0.7.74 startup version call missing')
+}
+if (!appFile074.text.contains('AppLogger.event(this, "APP_PROCESS_STARTED", details);')) {
+    throw new GradleException('0.7.74 APP_PROCESS_STARTED log missing')
+}
+if (!appFile074.text.contains('details.put("versionCode", packageInfo.getLongVersionCode());')) {
+    throw new GradleException('0.7.74 startup versionCode missing')
+}

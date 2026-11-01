@@ -1,0 +1,19 @@
+import java.nio.charset.StandardCharsets
+
+def mainFile047Fix = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+def main047Fix = new String(mainFile047Fix.bytes, StandardCharsets.UTF_8)
+main047Fix = main047Fix.replace('24hRecoder $versionName', '')
+mainFile047Fix.setText(main047Fix, 'UTF-8')
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1047)
+            output.versionName.set('0.7.47-debug')
+        }
+    }
+}
+
+if (mainFile047Fix.text.contains('$versionName')) {
+    throw new GradleException('0.7.47 version label reference still present')
+}

@@ -22,7 +22,7 @@ public final class WhisperModelDownloadWorker extends Worker {
         Context context = getApplicationContext();
         String modelId = getInputData().getString(WhisperModelManager.EXTRA_MODEL_ID);
         if (modelId == null || modelId.isEmpty()) {
-            modelId = WhisperModelManager.MODEL_DEFAULT;
+            modelId = WhisperModelManager.selectedModelId(context);
         }
         WhisperModelManager.ModelSpec spec = WhisperModelManager.modelSpec(modelId);
         if (spec == null) {
@@ -30,7 +30,7 @@ public final class WhisperModelDownloadWorker extends Worker {
         }
 
         if (WhisperModelManager.isComparisonReady(context, modelId)) {
-            if (WhisperModelManager.MODEL_DEFAULT.equals(modelId)) {
+            if (modelId.equals(WhisperModelManager.selectedModelId(context))) {
                 TranscriptionScheduler.enqueueExisting(context);
             }
             return Result.success();
@@ -62,6 +62,8 @@ public final class WhisperModelDownloadWorker extends Worker {
             started.put("modelId", modelId);
             started.put("label", spec.label);
             started.put("expectedBytes", spec.expectedBytes);
+            started.put("selectedForNormalTranscription",
+                    modelId.equals(WhisperModelManager.selectedModelId(context)));
         } catch (Exception ignored) {
         }
         AppLogger.event(context, "WHISPER_MODEL_DOWNLOAD_STARTED", started);
@@ -81,8 +83,10 @@ public final class WhisperModelDownloadWorker extends Worker {
             details.put("vadModel", WhisperModelManager.VAD_MODEL_ID);
             details.put("vadBytes", WhisperModelManager.vadModelFile(context).length());
             details.put("vadSha256Verified", WhisperModelManager.verifyVadModel(context));
+            details.put("selectedForNormalTranscription",
+                    modelId.equals(WhisperModelManager.selectedModelId(context)));
             AppLogger.event(context, "WHISPER_MODEL_READY", details);
-            if (WhisperModelManager.MODEL_DEFAULT.equals(modelId)) {
+            if (modelId.equals(WhisperModelManager.selectedModelId(context))) {
                 TranscriptionScheduler.enqueueExisting(context);
             }
             return Result.success();

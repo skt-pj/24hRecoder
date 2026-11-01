@@ -1,0 +1,385 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8060 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8060 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce060 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.60 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+def replaceBlock060 = { String source, String startMarker, String endMarker, String replacement, String label ->
+    int start = source.indexOf(startMarker)
+    if (start < 0 || source.lastIndexOf(startMarker) != start) {
+        throw new GradleException("0.7.60 ${label}: start marker missing or ambiguous")
+    }
+    int end = source.indexOf(endMarker, start + startMarker.length())
+    if (end < 0) throw new GradleException("0.7.60 ${label}: end marker missing")
+    source.substring(0, start) + replacement + source.substring(end)
+}
+
+// Settings: high-volume diagnostics are opt-in. Core failure/state logs remain available.
+def mainFile060 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+def main060 = readUtf8060(mainFile060)
+main060 = replaceOnce060(
+        main060,
+        '        item { AiSettingsCard() }\n',
+        '        item { AiSettingsCard() }\n        item { DiagnosticLoggingSettingsCard() }\n',
+        'diagnostic logging settings card')
+writeUtf8060(mainFile060, main060)
+
+// Mind-map WebView diagnostics. Do not log map labels, transcript text, or full payloads.
+def mapFile060 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MindElixirMindMap.kt')
+def map060 = readUtf8060(mapFile060)
+map060 = replaceOnce060(map060,
+        'import android.annotation.SuppressLint\n',
+        '''import android.annotation.SuppressLint
+import android.content.Context
+import android.webkit.ConsoleMessage
+import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+''',
+        'mind-map diagnostic imports')
+map060 = replaceOnce060(map060,
+        'import org.json.JSONObject\n',
+        '''import org.json.JSONObject
+import com.sktpj.recorder24h.util.AppLogger
+''',
+        'mind-map logger import')
+
+def webViewBlock060 = '''@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun MindElixirWebView(
+    payload: String,
+    background: Color,
+    modifier: Modifier = Modifier
+) {
+    AndroidView(
+        modifier = modifier,
+        factory = { context ->
+            val appContext = context.applicationContext
+            val assetLoader = WebViewAssetLoader.Builder()
+                .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context))
+                .build()
+            WebView(context).apply {
+                setBackgroundColor(background.toArgb())
+                isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
+                overScrollMode = WebView.OVER_SCROLL_NEVER
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = false
+                settings.allowFileAccess = false
+                settings.allowContentAccess = false
+                settings.builtInZoomControls = false
+                settings.displayZoomControls = false
+                settings.setSupportZoom(false)
+                settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                addJavascriptInterface(MindMapDiagnosticsBridge(appContext), "AndroidMindMapDiagnostics")
+                webChromeClient = object : WebChromeClient() {
+                    override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+                        AppLogger.diagnostic(
+                            appContext,
+                            "MINDMAP_WEB_CONSOLE",
+                            JSONObject()
+                                .put("level", message.messageLevel().name)
+                                .put("line", message.lineNumber())
+                                .put("source", message.sourceId().substringAfterLast('/').take(80))
+                                .put("message", message.message().take(240))
+                        )
+                        return true
+                    }
+                }
+                webViewClient = object : WebViewClient() {
+                    override fun shouldInterceptRequest(
+                        view: WebView,
+                        request: WebResourceRequest
+                    ): WebResourceResponse? {
+                        AppLogger.diagnostic(
+                            appContext,
+                            "MINDMAP_WEB_ASSET_REQUEST",
+                            JSONObject().put("path", request.url.path ?: "")
+                        )
+                        return assetLoader.shouldInterceptRequest(request.url)
+                    }
+
+                    override fun shouldOverrideUrlLoading(
+                        view: WebView,
+                        request: WebResourceRequest
+                    ): Boolean = request.url.host != "appassets.androidplatform.net"
+
+                    override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                        super.onPageStarted(view, url, favicon)
+                        AppLogger.diagnostic(
+                            appContext,
+                            "MINDMAP_WEB_PAGE_STARTED",
+                            JSONObject().put("url", url.substringAfter("appassets.androidplatform.net"))
+                        )
+                    }
+
+                    override fun onPageFinished(view: WebView, url: String) {
+                        super.onPageFinished(view, url)
+                        AppLogger.diagnostic(
+                            appContext,
+                            "MINDMAP_WEB_PAGE_FINISHED",
+                            JSONObject().put("url", url.substringAfter("appassets.androidplatform.net"))
+                        )
+                        (view.tag as? String)?.let { renderMindMap(view, it) }
+                    }
+
+                    override fun onReceivedError(
+                        view: WebView,
+                        request: WebResourceRequest,
+                        error: WebResourceError
+                    ) {
+                        super.onReceivedError(view, request, error)
+                        AppLogger.event(
+                            appContext,
+                            "MINDMAP_WEB_RESOURCE_ERROR",
+                            JSONObject()
+                                .put("mainFrame", request.isForMainFrame)
+                                .put("code", error.errorCode)
+                                .put("path", request.url.path ?: "")
+                                .put("description", error.description?.toString()?.take(160) ?: "")
+                        )
+                    }
+                }
+                setOnTouchListener { view, event ->
+                    view.parent?.requestDisallowInterceptTouchEvent(event.pointerCount > 0)
+                    false
+                }
+                tag = payload
+                AppLogger.diagnostic(
+                    appContext,
+                    "MINDMAP_WEBVIEW_CREATED",
+                    JSONObject()
+                        .put("webViewVersion", WebView.getCurrentWebViewPackage()?.versionName ?: "unknown")
+                        .put("payloadChars", payload.length)
+                )
+                loadUrl(MIND_ELIXIR_ASSET_URL)
+            }
+        },
+        update = { webView ->
+            webView.tag = payload
+            webView.setBackgroundColor(background.toArgb())
+            renderMindMap(webView, payload)
+        },
+        onRelease = { webView ->
+            AppLogger.diagnostic(webView.context.applicationContext, "MINDMAP_WEBVIEW_RELEASED")
+            webView.removeJavascriptInterface("AndroidMindMapDiagnostics")
+            webView.stopLoading()
+            webView.destroy()
+        }
+    )
+}
+
+private class MindMapDiagnosticsBridge(private val context: Context) {
+    @JavascriptInterface
+    fun ready(version: String?) {
+        AppLogger.diagnostic(
+            context,
+            "MINDMAP_JS_READY",
+            JSONObject().put("mindElixirVersion", version ?: "unknown")
+        )
+    }
+
+    @JavascriptInterface
+    fun rendered(nodeCount: Int, width: Int, height: Int) {
+        AppLogger.diagnostic(
+            context,
+            "MINDMAP_RENDERED",
+            JSONObject()
+                .put("domNodeCount", nodeCount)
+                .put("width", width)
+                .put("height", height)
+        )
+    }
+
+    @JavascriptInterface
+    fun error(stage: String?, message: String?) {
+        AppLogger.event(
+            context,
+            "MINDMAP_JS_ERROR",
+            JSONObject()
+                .put("stage", stage?.take(80) ?: "unknown")
+                .put("message", message?.take(240) ?: "")
+        )
+    }
+}
+
+private fun renderMindMap(webView: WebView, payload: String) {
+    val appContext = webView.context.applicationContext
+    val quoted = JSONObject.quote(payload)
+    AppLogger.diagnostic(
+        appContext,
+        "MINDMAP_RENDER_REQUESTED",
+        JSONObject().put("payloadChars", payload.length)
+    )
+    webView.evaluateJavascript(
+        "(function(){try{if(typeof window.renderMindMap !== 'function')return 'NO_RENDER_FUNCTION';window.renderMindMap(JSON.parse($quoted));return 'CALLED';}catch(e){return 'ERROR:'+(e&&e.name?e.name:'unknown');}})();"
+    ) { result ->
+        AppLogger.diagnostic(
+            appContext,
+            "MINDMAP_RENDER_CALL_RESULT",
+            JSONObject().put("result", result?.take(120) ?: "null")
+        )
+    }
+}
+
+'''
+map060 = replaceBlock060(
+        map060,
+        '@SuppressLint("SetJavaScriptEnabled")\n@Composable\nprivate fun MindElixirWebView(',
+        'private fun buildMindElixirPayload(',
+        webViewBlock060,
+        'mind-map WebView diagnostics')
+writeUtf8060(mapFile060, map060)
+
+// JavaScript-side readiness/render/error handshake. Static-module import failures are still
+// visible from Android as PAGE_FINISHED + NO_RENDER_FUNCTION and asset/console diagnostics.
+def htmlFile060 = rootProject.file('app/src/main/assets/mindmap/index.html')
+def html060 = readUtf8060(htmlFile060)
+int scriptStart060 = html060.indexOf('  <script type="module">')
+int scriptEnd060 = html060.indexOf('  </script>', scriptStart060)
+if (scriptStart060 < 0 || scriptEnd060 < 0) {
+    throw new GradleException('0.7.60 mind-map script block not found')
+}
+def script060 = '''  <script type="module">
+    import MindElixir from './MindElixir.js'
+
+    let mind = null
+    const map = document.getElementById('map')
+    const detail = document.getElementById('detail')
+    const detailTitle = document.getElementById('detail-title')
+    const detailMeta = document.getElementById('detail-meta')
+    const detailBody = document.getElementById('detail-body')
+    const detailEvidence = document.getElementById('detail-evidence')
+    const bridge = window.AndroidMindMapDiagnostics
+
+    const reportError = (stage, error) => {
+      try {
+        const message = String(error?.message || error || 'unknown').slice(0, 240)
+        bridge?.error?.(String(stage || 'unknown').slice(0, 80), message)
+      } catch (_) {}
+    }
+
+    window.addEventListener('error', event => reportError('window-error', event.error || event.message))
+    window.addEventListener('unhandledrejection', event => reportError('unhandled-rejection', event.reason))
+
+    const typeLabel = type => ({
+      theme: '中心テーマ', topic: '話題', decision: '決定', action: '次にやる', todo: '次にやる',
+      question: '未解決', unresolved: '未解決', idea: 'アイデア', person: '人物', place: '場所', detail: '要点'
+    }[type] || '要点')
+
+    function applyUi(ui = {}) {
+      const root = document.documentElement.style
+      root.setProperty('--pcs-bg', ui.background || '#ffffff')
+      root.setProperty('--pcs-surface', ui.surface || '#ffffff')
+      root.setProperty('--pcs-text', ui.text || '#1a1a1a')
+      root.setProperty('--pcs-muted', ui.muted || '#666666')
+      root.setProperty('--pcs-primary', ui.primary || '#46618a')
+      root.setProperty('--pcs-outline', ui.outline || '#808080')
+    }
+
+    function showNode(node) {
+      if (!node) return
+      const metadata = node.metadata || {}
+      detailTitle.textContent = node.topic || ''
+      detailMeta.textContent = typeLabel(metadata.type) + (metadata.importance === 'high' ? '  •  重要' : '')
+      detailBody.textContent = metadata.detail || ''
+      detailBody.hidden = !metadata.detail
+      detailEvidence.textContent = metadata.evidence ? `根拠: ${metadata.evidence}` : ''
+      detailEvidence.hidden = !metadata.evidence
+      detail.hidden = false
+    }
+
+    function selectedNodeFromEvent(nodes) {
+      if (!Array.isArray(nodes) || nodes.length === 0) return null
+      const item = nodes[nodes.length - 1]
+      return item?.nodeObj || item || null
+    }
+
+    window.renderMindMap = payload => {
+      try {
+        if (!payload?.data?.nodeData) {
+          reportError('payload', 'missing nodeData')
+          return false
+        }
+        applyUi(payload.ui)
+        detail.hidden = true
+        if (mind) {
+          try { mind.destroy() } catch (_) {}
+          mind = null
+        }
+        mind = new MindElixir({
+          el: '#map',
+          direction: MindElixir.SIDE,
+          editable: false,
+          contextMenu: false,
+          toolBar: false,
+          keypress: false,
+          allowUndo: false,
+          compact: true,
+          alignment: 'nodes',
+          overflowHidden: false,
+          scaleSensitivity: 0.08,
+          scaleMin: 0.35,
+          scaleMax: 2.0,
+          theme: payload.data.theme
+        })
+        mind.init(payload.data)
+        mind.bus.addListener('selectNodes', nodes => showNode(selectedNodeFromEvent(nodes)))
+        mind.bus.addListener('selectNewNode', node => showNode(node))
+        window.setTimeout(() => {
+          try {
+            mind?.scaleFit()
+            bridge?.rendered?.(document.querySelectorAll('#map tpc').length, map.clientWidth, map.clientHeight)
+          } catch (error) {
+            reportError('post-render', error)
+          }
+        }, 100)
+        return true
+      } catch (error) {
+        reportError('render', error)
+        throw error
+      }
+    }
+
+    map.addEventListener('click', event => {
+      const topic = event.target?.closest?.('tpc')
+      if (topic?.nodeObj) showNode(topic.nodeObj)
+    })
+    document.getElementById('zoom-in').addEventListener('click', () => {
+      if (mind) mind.scale(Math.min(mind.scaleMax, mind.scaleVal + 0.12))
+    })
+    document.getElementById('zoom-out').addEventListener('click', () => {
+      if (mind) mind.scale(Math.max(mind.scaleMin, mind.scaleVal - 0.12))
+    })
+    document.getElementById('fit').addEventListener('click', () => mind?.scaleFit())
+    document.getElementById('detail-close').addEventListener('click', () => { detail.hidden = true })
+
+    try { bridge?.ready?.('5.14.0') } catch (_) {}
+  </script>'''
+html060 = html060.substring(0, scriptStart060) + script060 + html060.substring(scriptEnd060 + '  </script>'.length())
+writeUtf8060(htmlFile060, html060)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1060)
+            output.versionName.set('0.7.60-debug')
+        }
+    }
+}
+
+if (!rootProject.file('app/src/main/java/com/sktpj/recorder24h/util/AppLogger.java').text.contains('DiagnosticLogSettings.isDetailedEnabled')) {
+    throw new GradleException('0.7.60 AppLogger diagnostic gate missing')
+}
+if (!mainFile060.text.contains('DiagnosticLoggingSettingsCard()')) {
+    throw new GradleException('0.7.60 diagnostic settings UI missing')
+}
+if (!mapFile060.text.contains('MINDMAP_RENDER_CALL_RESULT') || !htmlFile060.text.contains('AndroidMindMapDiagnostics')) {
+    throw new GradleException('0.7.60 mind-map diagnostics missing')
+}

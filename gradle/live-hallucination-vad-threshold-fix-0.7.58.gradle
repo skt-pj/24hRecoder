@@ -1,0 +1,14 @@
+import java.nio.charset.StandardCharsets
+
+def file058vad = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/StreamingVadStore.java')
+def text058vad = new String(file058vad.bytes, StandardCharsets.UTF_8)
+def old058vad = '                            if (probability >= THRESHOLD) {\n'
+def new058vad = '                            if (probability >= 0.5) {\n'
+if (!text058vad.contains(old058vad)) {
+    throw new GradleException('0.7.58 VAD threshold fix target missing')
+}
+text058vad = text058vad.replace(old058vad, new058vad)
+file058vad.setText(text058vad, 'UTF-8')
+if (file058vad.text.contains('probability >= THRESHOLD')) {
+    throw new GradleException('0.7.58 unresolved VAD threshold reference')
+}

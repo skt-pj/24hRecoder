@@ -18,7 +18,39 @@ object SpeakerIdentifier {
     private const val SAMPLE_RATE = 16_000
 
     @JvmStatic
-    fun annotate(context: Context, audioFile: File, sourceSegments: JSONArray): JSONArray {
+    fun annotate(context: Context, audioFile: File, sourceSegments: JSONArray): JSONArray =
+        annotate(context, audioFile, sourceSegments, TranscriptionCancellation.snapshot())
+
+    @JvmStatic
+    fun annotate(context: Context, audioFile: File, sourceSegments: JSONArray, cancellationToken: Long): JSONArray {
+        TranscriptionCancellation.throwIfCancelled(cancellationToken)
+        return try {
+            val samples = M4aPcmDecoder.decode(audioFile)
+            TranscriptionCancellation.throwIfCancelled(cancellationToken)
+            annotatePcm(context, samples, sourceSegments, cancellationToken)
+        } catch (error: Exception) {
+            if (TranscriptionCancellation.isCancellation(error)) throw error
+            val segments = JSONArray(sourceSegments.toString())
+            markUnknown(segments)
+            AppLogger.event(
+                context,
+                "SPEAKER_IDENTIFICATION_FAILED",
+                JSONObject()
+                    .put("segmentId", audioFile.name)
+                    .put("error", error.javaClass.simpleName)
+            )
+            segments
+        }
+    }
+
+    /** Speaker annotation for an already captured live PCM utterance; no second audio decode. */
+    @JvmStatic
+    fun annotatePcm(context: Context, samples: FloatArray, sourceSegments: JSONArray): JSONArray =
+        annotatePcm(context, samples, sourceSegments, TranscriptionCancellation.snapshot())
+
+    @JvmStatic
+    fun annotatePcm(context: Context, samples: FloatArray, sourceSegments: JSONArray, cancellationToken: Long): JSONArray {
+        TranscriptionCancellation.throwIfCancelled(cancellationToken)
         val segments = JSONArray(sourceSegments.toString())
         val profile = SpeakerProfileStore.load(context)
         if (profile == null) {
@@ -33,9 +65,9 @@ object SpeakerIdentifier {
 
         var extractor: SpeakerEmbeddingExtractor? = null
         return try {
-            val samples = M4aPcmDecoder.decode(audioFile)
             extractor = createExtractor(context)
             for (index in 0 until segments.length()) {
+                TranscriptionCancellation.throwIfCancelled(cancellationToken)
                 val row = segments.optJSONObject(index) ?: continue
                 val startMs = row.optLong("startMs", -1L)
                 val endMs = row.optLong("endMs", -1L)
@@ -46,6 +78,7 @@ object SpeakerIdentifier {
                 }
                 val chunk = slice(samples, startMs, endMs)
                 val embedding = computeEmbedding(extractor, chunk)
+                TranscriptionCancellation.throwIfCancelled(cancellationToken)
                 if (embedding == null) {
                     row.put("autoSpeaker", UNKNOWN)
                     row.put("autoSpeakerScore", JSONObject.NULL)
@@ -60,14 +93,16 @@ object SpeakerIdentifier {
                     row.put("autoSpeakerScore", score)
                 }
             }
+            stampLiveSpeakerLabels(segments)
             segments
         } catch (error: Exception) {
+            if (TranscriptionCancellation.isCancellation(error)) throw error
             markUnknown(segments)
             AppLogger.event(
                 context,
                 "SPEAKER_IDENTIFICATION_FAILED",
                 JSONObject()
-                    .put("segmentId", audioFile.name)
+                    .put("segmentId", "live-pcm")
                     .put("error", error.javaClass.simpleName)
             )
             segments
@@ -131,11 +166,54 @@ object SpeakerIdentifier {
         return if (end > start) samples.copyOfRange(start, end) else FloatArray(0)
     }
 
+    /**
+     * Full-streaming recent history historically looked only at speaker/speakerId while automatic
+     * speaker identification stores autoSpeaker. Mirror the automatic result into a display label
+     * without changing the authoritative autoSpeaker fields used by normal transcript history.
+     * If one finalized utterance contains both SELF and OTHER ASR segments, expose that fact instead
+     * of incorrectly labeling the whole utterance as whichever segment happened to come first.
+     */
+    private fun stampLiveSpeakerLabels(segments: JSONArray) {
+        var hasSelf = false
+        var hasOther = false
+        var hasUnknown = false
+        var firstRow: JSONObject? = null
+        for (index in 0 until segments.length()) {
+            val row = segments.optJSONObject(index) ?: continue
+            if (firstRow == null) firstRow = row
+            val label = when (row.optString("autoSpeaker", UNKNOWN)) {
+                SELF -> {
+                    hasSelf = true
+                    "自分"
+                }
+                OTHER -> {
+                    hasOther = true
+                    "他人"
+                }
+                else -> {
+                    hasUnknown = true
+                    "判定不能"
+                }
+            }
+            row.put("speaker", label)
+        }
+        val aggregate = when {
+            hasSelf && hasOther -> "複数話者"
+            hasSelf && hasUnknown -> "自分 / 判定不能"
+            hasOther && hasUnknown -> "他人 / 判定不能"
+            hasSelf -> "自分"
+            hasOther -> "他人"
+            else -> "判定不能"
+        }
+        firstRow?.put("speaker", aggregate)
+    }
+
     private fun markUnknown(segments: JSONArray) {
         for (index in 0 until segments.length()) {
             val row = segments.optJSONObject(index) ?: continue
             if (!row.has("autoSpeaker")) row.put("autoSpeaker", UNKNOWN)
             if (!row.has("autoSpeakerScore")) row.put("autoSpeakerScore", JSONObject.NULL)
+            row.put("speaker", "判定不能")
         }
     }
 }

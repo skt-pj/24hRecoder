@@ -22,10 +22,8 @@ public final class BootReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         String action = intent == null ? null : intent.getAction();
 
-        // If the canonical ASR model is already present but the shared Silero VAD asset is
+        // If the selected ASR model is already present but the shared Silero VAD asset is
         // missing after an app update, restore the VAD asset and then re-enqueue retained audio.
-        // A missing 1+ GiB canonical ASR model is not silently downloaded solely because of package
-        // replacement; normal setup/transcription flow requests it explicitly.
         if (Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)
                 && WhisperModelManager.isAsrReady(context)
                 && !WhisperModelManager.isReady(context)) {
@@ -47,7 +45,7 @@ public final class BootReceiver extends BroadcastReceiver {
                 CHANNEL_ID,
                 "録音再開",
                 NotificationManager.IMPORTANCE_DEFAULT);
-        channel.setDescription("端末再起動後の録音再開通知");
+        channel.setDescription("端末再起動・アプリ更新後の録音再開通知");
         manager.createNotificationChannel(channel);
 
         Intent open = new Intent(context, MainActivity.class)
@@ -61,7 +59,7 @@ public final class BootReceiver extends BroadcastReceiver {
         Notification notification = new Notification.Builder(context, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("24hRecoder")
-                .setContentText("端末再起動後は録音が停止しています。アプリを開いて再開してください。")
+                .setContentText("録音が停止しています。アプリを開くと自動復旧を試みます。")
                 .setContentIntent(pending)
                 .setAutoCancel(true)
                 .build();

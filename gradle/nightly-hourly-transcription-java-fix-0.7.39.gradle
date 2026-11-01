@@ -1,0 +1,76 @@
+import java.nio.charset.StandardCharsets
+
+def file039Java = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/NightlyHourlyTranscriptionScheduler.java')
+def source039Java = new String(file039Java.bytes, StandardCharsets.UTF_8)
+def replace039Java = { String oldText, String newText, String label ->
+    int first = source039Java.indexOf(oldText)
+    int last = source039Java.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.39 java fix ${label}: expected exactly one match")
+    }
+    source039Java = source039Java.substring(0, first) + newText +
+            source039Java.substring(first + oldText.length())
+}
+
+// Do not cancel the whole drain tag during upgrade: persisted automatic rows have already been
+// restaged as READY, while a manual queue entry should remain free to continue/recover normally.
+replace039Java(
+        '        WorkManager.getInstance(app).cancelAllWorkByTag("transcription");\n',
+        '',
+        'preserve manual drain')
+source039Java = source039Java.replace(
+        '                    .put("persistedDrainCancelled", true)\n',
+        '                    .put("persistedDrainCancelled", false)\n')
+
+replace039Java(
+'''        eligible.sort(Comparator.comparingLong(SegmentRecord::getSortTimeMs));
+
+        Map<String, Integer> hourlyCounts = new LinkedHashMap<>();
+''',
+'''        eligible.sort(Comparator.comparingLong(SegmentRecord::getSortTimeMs));
+
+        TranscriptionPipelineSettings.Snapshot pipeline = TranscriptionPipelineSettings.snapshot(app);
+        String pipelineReason = TranscriptionPipelineSettings.unavailableReason(
+                app, pipeline, WhisperModelManager.selectedModelId(app));
+        if (pipelineReason != null) {
+            try {
+                AppLogger.event(app, "NIGHTLY_HOURLY_BATCH_DEFERRED", new JSONObject()
+                        .put("reason", pipelineReason)
+                        .put("eligibleCount", eligible.size()));
+            } catch (Exception ignored) {}
+            return 0;
+        }
+
+        Map<String, Integer> hourlyCounts = new LinkedHashMap<>();
+''',
+        'pipeline readiness gate')
+
+replace039Java(
+'''            if (TranscriptionScheduler.enqueue(context, record.getSegmentId(), audio)) {
+                // Overwrite the legacy LOCAL_* reason with the explicit nightly reason. The old
+                // five-minute-final toggle must not filter this new canonical policy out.
+                SegmentRepository.appendWithoutNotify(app, record.getSegmentId(), audio,
+                        record.getStartedAtMs(), System.currentTimeMillis(),
+                        "QUEUED", ENQUEUED_REASON);
+                enqueued++;
+                String hourKey = localHourKey(record.getSortTimeMs());
+                hourlyCounts.put(hourKey, hourlyCounts.getOrDefault(hourKey, 0) + 1);
+            }
+''',
+'''            TranscriptionScheduler.enqueue(context, record.getSegmentId(), audio);
+            // enqueue() is void, but readiness/file/transcript preconditions were resolved above.
+            // Rewrite the legacy LOCAL_* reason with the explicit nightly policy before the final
+            // drain scheduling pass.
+            SegmentRepository.appendWithoutNotify(app, record.getSegmentId(), audio,
+                    record.getStartedAtMs(), System.currentTimeMillis(),
+                    "QUEUED", ENQUEUED_REASON);
+            enqueued++;
+            String hourKey = localHourKey(record.getSortTimeMs());
+            hourlyCounts.put(hourKey, hourlyCounts.getOrDefault(hourKey, 0) + 1);
+''',
+        'void enqueue contract')
+
+file039Java.setText(source039Java, 'UTF-8')
+if (file039Java.text.contains('if (TranscriptionScheduler.enqueue(')) {
+    throw new GradleException('0.7.39 void enqueue compile bug remains')
+}

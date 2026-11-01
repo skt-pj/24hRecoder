@@ -1,0 +1,332 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8042c = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8042c = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce042c = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) throw new GradleException("0.7.42 charging ${label}: expected exactly one match")
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+def nightlyFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/NightlyHourlyTranscriptionScheduler.java')
+def nightly = readUtf8042c(nightlyFile)
+nightly = replaceOnce042c(nightly,
+        'import android.content.SharedPreferences;\n',
+        'import android.content.SharedPreferences;\nimport android.os.BatteryManager;\n',
+        'BatteryManager import')
+nightly = replaceOnce042c(nightly,
+'''        Constraints constraints = new Constraints.Builder()
+                .setRequiresBatteryNotLow(true)
+                .build();
+''',
+'''        Constraints constraints = new Constraints.Builder()
+                .setRequiresBatteryNotLow(true)
+                .setRequiresCharging(true)
+                .build();
+''', 'nightly scan constraints')
+nightly = replaceOnce042c(nightly,
+'''    public static boolean isNightlyPending(SegmentRecord record) {
+        if (record == null) return false;
+        String reason = record.getReason();
+        return PENDING_REASON.equals(reason) || ENQUEUED_REASON.equals(reason);
+    }
+
+''',
+'''    public static boolean isNightlyPending(SegmentRecord record) {
+        if (record == null) return false;
+        String reason = record.getReason();
+        return PENDING_REASON.equals(reason) || isNightlyQueueItem(record);
+    }
+
+    public static boolean isNightlyQueueItem(SegmentRecord record) {
+        if (record == null) return false;
+        String reason = record.getReason();
+        return reason != null && reason.startsWith("NIGHTLY_HOURLY_")
+                && !PENDING_REASON.equals(reason);
+    }
+
+    public static boolean isCharging(Context context) {
+        BatteryManager battery = context.getApplicationContext().getSystemService(BatteryManager.class);
+        return battery != null && battery.isCharging();
+    }
+
+''', 'nightly queue helpers')
+writeUtf8042c(nightlyFile, nightly)
+
+// The root 0.7.32 process-isolation patch has already converted these requests to remote work.
+def schedulerFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionScheduler.java')
+def scheduler = readUtf8042c(schedulerFile)
+scheduler = replaceOnce042c(scheduler,
+        '        OneTimeWorkRequest request = buildDrainRequest(app, true);\n',
+        '        OneTimeWorkRequest request = buildDrainRequest(app, true, shouldRequireChargingForNextWork(app));\n',
+        'initial drain request')
+scheduler = replaceOnce042c(scheduler,
+        '                buildDrainRequest(app, true));\n',
+        '                buildDrainRequest(app, true, shouldRequireChargingForNextWork(app)));\n',
+        'continuation drain request')
+scheduler = replaceOnce042c(scheduler,
+'''    private static OneTimeWorkRequest buildDrainRequest(Context context, boolean batteryNotLow) {
+        Constraints.Builder constraints = new Constraints.Builder();
+        if (batteryNotLow) {
+            constraints.setRequiresBatteryNotLow(true);
+        }
+        ComponentName remoteService = new ComponentName(
+''',
+'''    private static OneTimeWorkRequest buildDrainRequest(Context context, boolean batteryNotLow,
+                                                         boolean requiresCharging) {
+        Constraints.Builder constraints = new Constraints.Builder();
+        if (batteryNotLow) {
+            constraints.setRequiresBatteryNotLow(true);
+        }
+        if (requiresCharging) {
+            constraints.setRequiresCharging(true);
+        }
+        ComponentName remoteService = new ComponentName(
+''', 'remote drain constraints')
+scheduler = replaceOnce042c(scheduler,
+'''    private static boolean hasQueuedWork(Context context) {
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus()))
+                    && record.getAudioAvailable()
+                    && !isAutomaticLiveFinalDisabled(context, record)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+''',
+'''    private static boolean hasQueuedWork(Context context) {
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus()))
+                    && record.getAudioAvailable()
+                    && !isAutomaticLiveFinalDisabled(context, record)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean shouldRequireChargingForNextWork(Context context) {
+        boolean hasNightly = false;
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (!("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus()))
+                    || !record.getAudioAvailable()
+                    || isAutomaticLiveFinalDisabled(context, record)) continue;
+            if (NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(record)) {
+                hasNightly = true;
+            } else {
+                // Manual/non-nightly work remains runnable without a charger.
+                return false;
+            }
+        }
+        return hasNightly;
+    }
+
+''', 'queue charging classification')
+writeUtf8042c(schedulerFile, scheduler)
+
+// WorkManager lane: hold nightly items while unplugged, but let the current native call finish.
+def workerFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionWorker.java')
+def worker = readUtf8042c(workerFile)
+worker = replaceOnce042c(worker,
+'''        boolean forceRetranscribe = record.getReason() != null && record.getReason().startsWith("MANUAL_");
+        int generation = TranscriptionResetManager.currentGeneration(context);
+''',
+'''        boolean forceRetranscribe = record.getReason() != null && record.getReason().startsWith("MANUAL_");
+        boolean nightly = NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(record);
+        int generation = TranscriptionResetManager.currentGeneration(context);
+''', 'worker nightly lineage')
+worker = replaceOnce042c(worker,
+'''            if (isStopped()) {
+                log(context, "TRANSCRIPTION_DRAIN_STOPPED_BEFORE_START", segmentId, audioFile,
+                        null, forceRetranscribe, attempt, null);
+                return;
+            }
+''',
+'''            if (isStopped()) {
+                log(context, "TRANSCRIPTION_DRAIN_STOPPED_BEFORE_START", segmentId, audioFile,
+                        null, forceRetranscribe, attempt, null);
+                return;
+            }
+            if (nightly && !NightlyHourlyTranscriptionScheduler.isCharging(context)) {
+                SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                        audioFile == null ? 0L : audioFile.lastModified(), System.currentTimeMillis(),
+                        "QUEUED", NightlyHourlyTranscriptionScheduler.ENQUEUED_REASON);
+                log(context, "NIGHTLY_HOURLY_HELD_NOT_CHARGING", segmentId, audioFile,
+                        "CHARGER_REQUIRED", false, attempt, null);
+                return;
+            }
+''', 'worker off-charge hold')
+worker = replaceOnce042c(worker,
+'''            SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                    audioFile.lastModified(), System.currentTimeMillis(), "QUEUED",
+                    forceRetranscribe ? "MANUAL_SINGLE_RUNNER_SLOT_WAIT" : "LOCAL_SINGLE_RUNNER_SLOT_WAIT");
+''',
+'''            SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                    audioFile.lastModified(), System.currentTimeMillis(), "QUEUED",
+                    forceRetranscribe ? "MANUAL_SINGLE_RUNNER_SLOT_WAIT"
+                            : nightly ? "NIGHTLY_HOURLY_SINGLE_RUNNER_SLOT_WAIT"
+                            : "LOCAL_SINGLE_RUNNER_SLOT_WAIT");
+''', 'worker nightly slot reason')
+worker = replaceOnce042c(worker,
+'''                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                            audioFile.lastModified(), startedAt, "TRANSCRIBING",
+                            forceRetranscribe ? "MANUAL_SINGLE_RUNNER_TRANSCRIBING"
+                                    : replacingOldTranscript ? "LOCAL_SINGLE_RUNNER_RETRANSCRIBING"
+                                    : "LOCAL_SINGLE_RUNNER_TRANSCRIBING");
+''',
+'''                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                            audioFile.lastModified(), startedAt, "TRANSCRIBING",
+                            forceRetranscribe ? "MANUAL_SINGLE_RUNNER_TRANSCRIBING"
+                                    : nightly ? "NIGHTLY_HOURLY_SINGLE_RUNNER_TRANSCRIBING"
+                                    : replacingOldTranscript ? "LOCAL_SINGLE_RUNNER_RETRANSCRIBING"
+                                    : "LOCAL_SINGLE_RUNNER_TRANSCRIBING");
+''', 'worker nightly running reason')
+worker = replaceOnce042c(worker,
+'''                        SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                                audioFile.lastModified(), System.currentTimeMillis(), "QUEUED",
+                                "USER_PAUSED_RUNNING_TRANSCRIPTION");
+''',
+'''                        SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                                audioFile.lastModified(), System.currentTimeMillis(), "QUEUED",
+                                nightly ? NightlyHourlyTranscriptionScheduler.ENQUEUED_REASON
+                                        : "USER_PAUSED_RUNNING_TRANSCRIPTION");
+''', 'worker nightly pause reason')
+worker = replaceOnce042c(worker,
+'''                String reason = forceRetranscribe
+                        ? (retry ? "MANUAL_SINGLE_RUNNER_RETRY" : "MANUAL_SINGLE_RUNNER_FAILED")
+                        : (retry ? "LOCAL_SINGLE_RUNNER_RETRY" : "LOCAL_SINGLE_RUNNER_FAILED");
+''',
+'''                String reason = forceRetranscribe
+                        ? (retry ? "MANUAL_SINGLE_RUNNER_RETRY" : "MANUAL_SINGLE_RUNNER_FAILED")
+                        : nightly
+                            ? (retry ? "NIGHTLY_HOURLY_SINGLE_RUNNER_RETRY" : "NIGHTLY_HOURLY_SINGLE_RUNNER_FAILED")
+                            : (retry ? "LOCAL_SINGLE_RUNNER_RETRY" : "LOCAL_SINGLE_RUNNER_FAILED");
+''', 'worker nightly retry reason')
+worker = replaceOnce042c(worker,
+'''        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus()))
+                    && record.getAudioAvailable()) {
+                queued.add(record);
+            }
+        }
+''',
+'''        boolean charging = NightlyHourlyTranscriptionScheduler.isCharging(context);
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus()))
+                    && record.getAudioAvailable()) {
+                if (!charging && NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(record)) continue;
+                queued.add(record);
+            }
+        }
+''', 'worker dequeue gate')
+writeUtf8042c(workerFile, worker)
+
+// Foreground lane is kicked on app-open, so it needs the same gate to avoid bypassing WorkManager.
+def serviceFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionQueueService.java')
+def service = readUtf8042c(serviceFile)
+service = replaceOnce042c(service,
+'''        int generation = TranscriptionResetManager.currentGeneration(context);
+
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+''',
+'''        int generation = TranscriptionResetManager.currentGeneration(context);
+        boolean nightly = NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(findRecord(context, segmentId));
+
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+''', 'service nightly lineage')
+service = replaceOnce042c(service,
+'''        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            if (TranscriptionScheduler.isQueuePaused(context)) {
+''',
+'''        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            if (nightly && !NightlyHourlyTranscriptionScheduler.isCharging(context)) {
+                SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                        audioFile == null ? 0L : audioFile.lastModified(), System.currentTimeMillis(),
+                        "QUEUED", NightlyHourlyTranscriptionScheduler.ENQUEUED_REASON);
+                log(context, "NIGHTLY_HOURLY_DIRECT_HELD_NOT_CHARGING", segmentId, audioFile,
+                        "CHARGER_REQUIRED", false, attempt, null,
+                        WhisperModelManager.selectedModelId(context), LocalWhisperEngine.engineId(context));
+                return;
+            }
+            if (TranscriptionScheduler.isQueuePaused(context)) {
+''', 'service off-charge hold')
+service = replaceOnce042c(service,
+'''            String slotReason = forceRetranscribe
+                    ? "MANUAL_DIRECT_SLOT_WAIT" : "LOCAL_DIRECT_SLOT_WAIT";
+''',
+'''            String slotReason = forceRetranscribe
+                    ? "MANUAL_DIRECT_SLOT_WAIT"
+                    : nightly ? "NIGHTLY_HOURLY_DIRECT_SLOT_WAIT" : "LOCAL_DIRECT_SLOT_WAIT";
+''', 'service nightly slot reason')
+service = replaceOnce042c(service,
+'''                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                            audioFile.lastModified(), startedAt, "TRANSCRIBING",
+                            forceRetranscribe ? "MANUAL_DIRECT_TRANSCRIBING" : "LOCAL_DIRECT_TRANSCRIBING");
+''',
+'''                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                            audioFile.lastModified(), startedAt, "TRANSCRIBING",
+                            forceRetranscribe ? "MANUAL_DIRECT_TRANSCRIBING"
+                                    : nightly ? "NIGHTLY_HOURLY_DIRECT_TRANSCRIBING"
+                                    : "LOCAL_DIRECT_TRANSCRIBING");
+''', 'service nightly running reason')
+service = replaceOnce042c(service,
+'''                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                            audioFile.lastModified(), System.currentTimeMillis(), "QUEUED",
+                            "USER_PAUSED_RUNNING_TRANSCRIPTION");
+''',
+'''                    SegmentRepository.appendWithoutNotify(context, segmentId, audioFile,
+                            audioFile.lastModified(), System.currentTimeMillis(), "QUEUED",
+                            nightly ? NightlyHourlyTranscriptionScheduler.ENQUEUED_REASON
+                                    : "USER_PAUSED_RUNNING_TRANSCRIPTION");
+''', 'service nightly pause reason')
+service = replaceOnce042c(service,
+'''                String reason = forceRetranscribe
+                        ? (retry ? "MANUAL_DIRECT_RETRY" : "MANUAL_DIRECT_FAILED")
+                        : (retry ? "LOCAL_DIRECT_RETRY" : "LOCAL_DIRECT_FAILED");
+''',
+'''                String reason = forceRetranscribe
+                        ? (retry ? "MANUAL_DIRECT_RETRY" : "MANUAL_DIRECT_FAILED")
+                        : nightly
+                            ? (retry ? "NIGHTLY_HOURLY_DIRECT_RETRY" : "NIGHTLY_HOURLY_DIRECT_FAILED")
+                            : (retry ? "LOCAL_DIRECT_RETRY" : "LOCAL_DIRECT_FAILED");
+''', 'service nightly retry reason')
+service = replaceOnce042c(service,
+'''        List<SegmentRecord> records = SegmentHistoryRepository.load(context);
+        List<SegmentRecord> queued = new ArrayList<>();
+        for (SegmentRecord record : records) {
+            if (("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus()))
+                    && record.getAudioAvailable()) {
+                queued.add(record);
+            }
+        }
+''',
+'''        List<SegmentRecord> records = SegmentHistoryRepository.load(context);
+        List<SegmentRecord> queued = new ArrayList<>();
+        boolean charging = NightlyHourlyTranscriptionScheduler.isCharging(context);
+        for (SegmentRecord record : records) {
+            if (("QUEUED".equals(record.getStatus()) || "RETRY_WAIT".equals(record.getStatus()))
+                    && record.getAudioAvailable()) {
+                if (!charging && NightlyHourlyTranscriptionScheduler.isNightlyQueueItem(record)) continue;
+                queued.add(record);
+            }
+        }
+''', 'service dequeue gate')
+service = replaceOnce042c(service,
+        '    private boolean isStillQueued(Context context, String segmentId) {\n',
+'''    private SegmentRecord findRecord(Context context, String segmentId) {
+        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (segmentId.equals(record.getSegmentId())) return record;
+        }
+        return null;
+    }
+
+    private boolean isStillQueued(Context context, String segmentId) {
+''', 'service record lookup')
+writeUtf8042c(serviceFile, service)
+
+if (!schedulerFile.text.contains('buildDrainRequest(app, true, shouldRequireChargingForNextWork(app))')) throw new GradleException('0.7.42 charging remote drain not applied')
+if (!workerFile.text.contains('NIGHTLY_HOURLY_HELD_NOT_CHARGING')) throw new GradleException('0.7.42 charging worker gate not applied')
+if (!serviceFile.text.contains('NIGHTLY_HOURLY_DIRECT_HELD_NOT_CHARGING')) throw new GradleException('0.7.42 charging direct gate not applied')

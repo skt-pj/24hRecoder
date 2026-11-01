@@ -17,6 +17,10 @@ public final class SegmentReadyReceiver extends BroadcastReceiver {
         if (segmentId == null || filePath == null) {
             return;
         }
-        TranscriptionScheduler.enqueue(context, segmentId, new File(filePath));
+        // 0.7.39: the durable five-minute file remains the storage/recovery unit, but automatic
+        // canonical Whisper no longer starts on every five-minute boundary. Stage it for the
+        // previous-day night batch; explicit user retranscription still uses the immediate path.
+        NightlyHourlyTranscriptionScheduler.onSegmentReady(
+                context, segmentId, new File(filePath));
     }
 }

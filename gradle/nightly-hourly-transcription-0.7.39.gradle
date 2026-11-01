@@ -1,0 +1,584 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8039 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8039 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce039 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.39 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+def replaceBetween039 = { String source, String startMarker, String endMarker, String replacement, String label ->
+    int start = source.indexOf(startMarker)
+    if (start < 0) throw new GradleException("0.7.39 ${label}: start marker missing")
+    int end = source.indexOf(endMarker, start)
+    if (end < 0) throw new GradleException("0.7.39 ${label}: end marker missing")
+    source.substring(0, start) + replacement + source.substring(end)
+}
+
+// -----------------------------------------------------------------------------
+// Live preview: one fixed 30-second Whisper window instead of per-utterance calls.
+// VAD remains a cheap speech gate, but no VAD-final utterance launches Whisper on its own.
+// -----------------------------------------------------------------------------
+def streamFile039 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/StreamingTranscriptionService.java')
+def stream039 = readUtf8039(streamFile039)
+
+stream039 = replaceOnce039(stream039,
+'''    private long latestActiveSpeechStartUs = -1L;
+    private long lastPartialRequestedEndUs;
+    private long lastScheduledFinalEndUs;
+    private final Object finalBatchLock = new Object();
+''',
+'''    private long latestActiveSpeechStartUs = -1L;
+    private long lastPartialRequestedEndUs;
+    private long lastScheduledFinalEndUs;
+    private boolean provisionalWindowHasSpeech;
+    private final Object finalBatchLock = new Object();
+''', '30-second window state')
+
+stream039 = replaceOnce039(stream039,
+'''    private static final int LIVE_SAMPLE_RATE_HZ = 16_000;
+    private static final long MAX_FINAL_COALESCE_GAP_US = 15_000_000L;
+''',
+'''    private static final int LIVE_SAMPLE_RATE_HZ = 16_000;
+    private static final long PROVISIONAL_WINDOW_US = 30_000_000L;
+    private static final long MAX_FINAL_COALESCE_GAP_US = 15_000_000L;
+''', '30-second window constant')
+
+stream039 = replaceOnce039(stream039,
+'''        lastPartialRequestedEndUs = basePtsUs;
+        lastScheduledFinalEndUs = basePtsUs;
+        enqueueConfigure(current);
+''',
+'''        lastPartialRequestedEndUs = basePtsUs;
+        lastScheduledFinalEndUs = basePtsUs;
+        provisionalWindowHasSpeech = false;
+        enqueueConfigure(current);
+''', 'reset provisional window')
+
+def newHandlePcm039 = '''    private void handlePcm(Bundle data) {
+        if (current == null || !current.config.isLive()) return;
+        byte[] pcm = data.getByteArray("pcm");
+        if (pcm == null || pcm.length == 0) return;
+        long startPtsUs = data.getLong("startPtsUs", -1L);
+        long currentEndUs = data.getLong("currentEndUs", startPtsUs);
+        pcmBuffer.append(startPtsUs, pcm);
+        latestActiveSpeechStartUs = data.getLong("activeSpeechStartUs", -1L);
+
+        long[] starts = data.getLongArray("closedStartsUs");
+        long[] ends = data.getLongArray("closedEndsUs");
+
+        // Finish elapsed fixed windows first. provisionalWindowHasSpeech carries VAD activity
+        // observed on earlier 100-ms PCM messages in the same window. The overlap checks below
+        // also cover a speech boundary delivered on the message that crosses 30 seconds.
+        while (currentEndUs - lastPartialRequestedEndUs >= PROVISIONAL_WINDOW_US) {
+            long windowStartUs = lastPartialRequestedEndUs;
+            long windowEndUs = windowStartUs + PROVISIONAL_WINDOW_US;
+            boolean windowHasSpeech = provisionalWindowHasSpeech;
+            if (latestActiveSpeechStartUs >= 0L
+                    && latestActiveSpeechStartUs < windowEndUs
+                    && currentEndUs > windowStartUs) {
+                windowHasSpeech = true;
+            }
+            if (starts != null && ends != null) {
+                int count = Math.min(starts.length, ends.length);
+                for (int i = 0; i < count; i++) {
+                    if (ends[i] > windowStartUs && starts[i] < windowEndUs) {
+                        windowHasSpeech = true;
+                        break;
+                    }
+                }
+            }
+            if (windowHasSpeech) {
+                scheduleProvisionalWindow(windowStartUs, windowEndUs, current);
+            }
+            lastPartialRequestedEndUs = windowEndUs;
+            provisionalWindowHasSpeech = false;
+        }
+
+        // Remember speech belonging to the currently open 30-second window. This avoids running
+        // Whisper for all-silence windows while keeping the inference cadence independent of VAD
+        // utterance boundaries.
+        if (latestActiveSpeechStartUs >= 0L && currentEndUs > lastPartialRequestedEndUs) {
+            provisionalWindowHasSpeech = true;
+        }
+        if (starts != null && ends != null) {
+            int count = Math.min(starts.length, ends.length);
+            for (int i = 0; i < count; i++) {
+                if (ends[i] > lastPartialRequestedEndUs) {
+                    provisionalWindowHasSpeech = true;
+                    break;
+                }
+            }
+        }
+    }
+
+'''
+stream039 = replaceBetween039(stream039,
+        '    private void handlePcm(Bundle data) {',
+        '    private void handleBoundary(Bundle data) {',
+        newHandlePcm039,
+        'replace live PCM cadence')
+
+def newHandleBoundary039 = '''    private void handleBoundary(Bundle data) {
+        SegmentAccumulator old = current;
+        long endPtsUs = data.getLong("segmentEndPtsUs", old == null ? 0L : old.basePtsUs());
+        long actualBasePtsUs = data.getLong("segmentBasePtsUs", old == null ? 0L : old.basePtsUs());
+        PipelineConfig nextConfig = PipelineConfig.fromBundle(data, "next");
+
+        if (old != null && old.config.isLive()) {
+            // Five-minute M4A remains only a durable recording/recovery boundary. Live Whisper
+            // output is provisional and is never promoted to canonical here. Canonical Whisper is
+            // staged by SegmentReadyReceiver and processed in the previous-day night batch.
+            old.correctBase(actualBasePtsUs);
+            old.segmentId = data.getString("segmentId");
+            old.startedAtMs = data.getLong("startedAtMs", 0L);
+            old.endedAtMs = data.getLong("endedAtMs", 0L);
+            old.endPtsUs = endPtsUs;
+            log("FULL_STREAMING_SEGMENT_STAGED_FOR_NIGHTLY_CANONICAL", details(
+                    "segmentId", old.segmentId,
+                    "liveModelId", old.config.modelId,
+                    "provisionalWindowMs", PROVISIONAL_WINDOW_US / 1000L,
+                    "canonicalDisplayUnitMinutes", 60,
+                    "automaticFiveMinuteWhisper", false,
+                    "liveOutputCanonical", false));
+        }
+
+        pcmBuffer.trimBefore(endPtsUs);
+        lastScheduledFinalEndUs = endPtsUs;
+        lastPartialRequestedEndUs = endPtsUs;
+        provisionalWindowHasSpeech = false;
+
+        if (nextConfig.isLive()) {
+            current = new SegmentAccumulator(endPtsUs, nextConfig);
+            enqueueConfigure(current);
+            writeState("WAITING", "", old == null ? "" : old.latestFinalText, current, null);
+        } else {
+            current = null;
+            submit("live-session-close", LiveWhisperSession::close);
+            FullStreamingStateStore.writeLiveState(this, "OFF", nextConfig.asrBackend,
+                    "", old == null ? "" : old.latestFinalText,
+                    "", null, pendingInference.get(), null);
+        }
+        log("FULL_STREAMING_SERVICE_BOUNDARY", details(
+                "segmentId", data.getString("segmentId"),
+                "actualSegmentBasePtsUs", actualBasePtsUs,
+                "segmentEndPtsUs", endPtsUs,
+                "nextPipeline", nextConfig.toJson(),
+                "automaticFiveMinuteWhisper", false));
+    }
+
+'''
+stream039 = replaceBetween039(stream039,
+        '    private void handleBoundary(Bundle data) {',
+        '    private void enqueueConfigure(SegmentAccumulator accumulator) {',
+        newHandleBoundary039,
+        'replace five-minute live finalization')
+
+def provisionalMethod039 = '''    private void scheduleProvisionalWindow(long windowStartUs, long windowEndUs,
+                                             SegmentAccumulator accumulator) {
+        if (windowEndUs <= windowStartUs || accumulator == null || accumulator.failed) return;
+        float[] samples = pcmBuffer.sliceFloat(windowStartUs, windowEndUs);
+        if (samples.length == 0) return;
+        final long queuedAtMs = System.currentTimeMillis();
+        submit("provisional-30s", () -> {
+            try {
+                Recognition result = recognize(samples, accumulator, true);
+                long windowDurationMs = Math.max(0L, (windowEndUs - windowStartUs) / 1000L);
+                long endAtMs = queuedAtMs;
+                long startAtMs = Math.max(0L, endAtMs - windowDurationMs);
+                FullStreamingStateStore.appendRecentFinal(
+                        this, startAtMs, endAtMs, windowStartUs, windowEndUs,
+                        result.text, accumulator.config.asrBackend, result.segments);
+                accumulator.latestFinalText = result.text;
+                writeState("FINAL", "", accumulator.latestFinalText, accumulator, null);
+                log("FULL_STREAMING_PROVISIONAL_30S", new JSONObject()
+                        .put("startPtsUs", windowStartUs)
+                        .put("endPtsUs", windowEndUs)
+                        .put("windowDurationMs", windowDurationMs)
+                        .put("sampleCount", samples.length)
+                        .put("textChars", result.text.length())
+                        .put("inferenceMs", result.inferenceMs)
+                        .put("whisperFullMs", result.whisperFullMs)
+                        .put("liveWhisperRoute", accumulator.config.liveWhisperRoute)
+                        .put("queueDepth", pendingInference.get())
+                        .put("canonical", false));
+            } catch (Throwable error) {
+                // Preview failure must not poison the retained audio or nightly canonical pass.
+                writeState("WAITING", "", accumulator.latestFinalText, accumulator, null);
+                log("FULL_STREAMING_PROVISIONAL_30S_FAILED", details(
+                        "startPtsUs", windowStartUs,
+                        "endPtsUs", windowEndUs,
+                        "error", error.getClass().getSimpleName(),
+                        "message", safeMessage(error),
+                        "nightlyCanonicalStillRequired", true,
+                        "automaticFallback", false));
+            }
+        });
+    }
+
+'''
+stream039 = replaceOnce039(stream039,
+        '    private void schedulePartial(long globalStartUs, long globalEndUs, SegmentAccumulator accumulator) {\n',
+        provisionalMethod039 + '    private void schedulePartial(long globalStartUs, long globalEndUs, SegmentAccumulator accumulator) {\n',
+        'insert provisional window runner')
+
+writeUtf8039(streamFile039, stream039)
+
+// -----------------------------------------------------------------------------
+// Nightly queue rows are a new canonical policy, independent of the legacy five-minute toggle.
+// Also keep live-owned daytime audio out of stale-orphan failure reconciliation while staged.
+// -----------------------------------------------------------------------------
+def schedulerFile039 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionScheduler.java')
+def scheduler039 = readUtf8039(schedulerFile039)
+scheduler039 = replaceOnce039(scheduler039,
+'''        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (!record.getLiveOwned() || !record.getAudioAvailable() || record.getHasTranscript()) continue;
+''',
+'''        for (SegmentRecord record : SegmentHistoryRepository.load(context)) {
+            if (NightlyHourlyTranscriptionScheduler.isNightlyPending(record)) continue;
+            if (!record.getLiveOwned() || !record.getAudioAvailable() || record.getHasTranscript()) continue;
+''', 'nightly stale-orphan exclusion')
+scheduler039 = replaceOnce039(scheduler039,
+'''        String reason = record.getReason();
+        if (reason != null && reason.startsWith("MANUAL_")) return false;
+        if (!FullStreamingStateStore.isOwned(context, record.getSegmentId())) return false;
+''',
+'''        String reason = record.getReason();
+        if (NightlyHourlyTranscriptionScheduler.ENQUEUED_REASON.equals(reason)) return false;
+        if (reason != null && reason.startsWith("MANUAL_")) return false;
+        if (!FullStreamingStateStore.isOwned(context, record.getSegmentId())) return false;
+''', 'nightly legacy-toggle bypass')
+writeUtf8039(schedulerFile039, scheduler039)
+
+// -----------------------------------------------------------------------------
+// Daytime staged audio is expected state, not an attention/error state.
+// -----------------------------------------------------------------------------
+def historyRepoFile039 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/ui/SegmentHistoryRepository.kt')
+def historyRepo039 = readUtf8039(historyRepoFile039)
+historyRepo039 = replaceOnce039(historyRepo039,
+        'import com.sktpj.recorder24h.transcription.LiveSegmentPolicyStore\n',
+        'import com.sktpj.recorder24h.transcription.LiveSegmentPolicyStore\nimport com.sktpj.recorder24h.transcription.NightlyHourlyTranscriptionScheduler\n',
+        'history nightly import')
+historyRepo039 = replaceOnce039(historyRepo039,
+'''            hasTranscript && audioAvailable -> "AUDIO_AND_TRANSCRIPT"
+            hasTranscript -> "TRANSCRIPT_ONLY"
+            audioAvailable && queueState != "NONE" -> "AUDIO_PROCESSING"
+''',
+'''            hasTranscript && audioAvailable -> "AUDIO_AND_TRANSCRIPT"
+            hasTranscript -> "TRANSCRIPT_ONLY"
+            audioAvailable && !hasTranscript &&
+                reason == NightlyHourlyTranscriptionScheduler.PENDING_REASON -> "NIGHTLY_PENDING"
+            audioAvailable && queueState != "NONE" -> "AUDIO_PROCESSING"
+''', 'history nightly data state')
+historyRepo039 = replaceOnce039(historyRepo039,
+'''        get() = status == "FAILED" || status == "CORRUPT" || status == "RETRY_WAIT" ||
+            (audioAvailable && !hasTranscript && queueState == "NONE")
+''',
+'''        get() = status == "FAILED" || status == "CORRUPT" || status == "RETRY_WAIT" ||
+            (audioAvailable && !hasTranscript && queueState == "NONE" &&
+                reason != NightlyHourlyTranscriptionScheduler.PENDING_REASON)
+''', 'history nightly attention state')
+writeUtf8039(historyRepoFile039, historyRepo039)
+
+// 30-second rows can reach 2,880 entries/day. Keep enough provisional history until the next
+// night's previous-day canonical processing has completed.
+def stateFile039 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/FullStreamingStateStore.java')
+def state039 = readUtf8039(stateFile039)
+state039 = replaceOnce039(state039,
+        '    private static final long RECENT_RETENTION_MS = 24L * 60L * 60L * 1000L;\n    private static final int RECENT_MAX_ENTRIES = 1000;\n',
+        '    private static final long RECENT_RETENTION_MS = 48L * 60L * 60L * 1000L;\n    private static final int RECENT_MAX_ENTRIES = 6000;\n',
+        'provisional retention')
+writeUtf8039(stateFile039, state039)
+
+// -----------------------------------------------------------------------------
+// App-open must not resurrect every retained five-minute file into daytime Whisper work.
+// The 0.7.30 history patch has already run when this script executes, so replace its generated
+// history list with hour groups and update all user-facing live/final wording here.
+// -----------------------------------------------------------------------------
+def mainFile039 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+def main039 = readUtf8039(mainFile039)
+main039 = replaceOnce039(main039,
+        'import com.sktpj.recorder24h.transcription.LocalWhisperEngine\n',
+        'import com.sktpj.recorder24h.transcription.LocalWhisperEngine\nimport com.sktpj.recorder24h.transcription.NightlyHourlyTranscriptionScheduler\n',
+        'main nightly import')
+main039 = replaceOnce039(main039,
+'''        val resetApplied = TranscriptionResetManager.applyV049ResetIfNeeded(this)
+        if (TranscriptionPipelineSettings.isSelectedPipelineReady(this, WhisperModelManager.selectedModelId(this))) {
+            if (resetApplied) TranscriptionScheduler.enqueueExistingAfterReset(this)
+            else TranscriptionScheduler.enqueueExisting(this)
+        }
+''',
+'''        val resetApplied = TranscriptionResetManager.applyV049ResetIfNeeded(this)
+        if (resetApplied) {
+            NightlyHourlyTranscriptionScheduler.stageRetainedUntranscribed(this)
+        }
+        NightlyHourlyTranscriptionScheduler.ensureScheduled(this)
+''', 'disable app-open daytime backlog')
+
+def hourlyHistory039 = '''@Composable
+private fun HistoryScreen(
+    records: List<SegmentRecord>,
+    listState: LazyListState,
+    query: String,
+    filter: HistoryFilter,
+    liveState: FullStreamingStateStore.LiveState?,
+    liveFinals: List<FullStreamingStateStore.RecentFinal>,
+    onQueryChange: (String) -> Unit,
+    onFilterChange: (HistoryFilter) -> Unit,
+    onSelect: (SegmentRecord) -> Unit
+) {
+    val nowMs = System.currentTimeMillis()
+    val latestKnownEndMs = remember(records) { records.maxOfOrNull { it.endedAtMs } ?: 0L }
+    val currentLiveFinals = remember(liveFinals, latestKnownEndMs) {
+        liveFinals.filter { item -> latestKnownEndMs <= 0L || item.endAtMs > latestKnownEndMs + 2_500L }
+    }
+    val currentFinalText = remember(currentLiveFinals) { liveConversationText(currentLiveFinals) }
+    val currentPartial = liveState?.partialText.orEmpty().trim()
+    val currentSearchText = remember(currentFinalText, currentPartial) {
+        listOf(currentFinalText, currentPartial).filter { it.isNotBlank() }.joinToString("\\n")
+    }
+    val showCurrentLive = filter == HistoryFilter.ALL && currentSearchText.isNotBlank() &&
+        (query.isBlank() || currentSearchText.contains(query, true))
+
+    val groups = remember(records, liveFinals, nowMs) {
+        records
+            .groupBy { hourStartMs(it.sortTimeMs) }
+            .map { (hourStart, hourRecords) ->
+                val ordered = hourRecords.sortedBy { it.sortTimeMs }
+                val hourEnd = hourStart + 60L * 60L * 1000L
+                val canonicalReady = hourEnd <= nowMs && ordered.isNotEmpty() &&
+                    ordered.all { it.hasTranscript || it.status == "CORRUPT" }
+                val provisional = liveFinals.filter { item ->
+                    item.endAtMs > hourStart && item.startAtMs < hourEnd
+                }
+                val provisionalText = liveConversationText(provisional)
+                val canonicalText = if (canonicalReady) canonicalHourText(ordered) else ""
+                val visibleText = if (canonicalReady) canonicalText else provisionalText
+                HourHistoryGroup(
+                    hourStartMs = hourStart,
+                    hourEndMs = hourEnd,
+                    records = ordered,
+                    representative = ordered.maxByOrNull { it.sortTimeMs }!!,
+                    canonical = canonicalReady,
+                    provisional = !canonicalReady && provisionalText.isNotBlank(),
+                    text = visibleText
+                )
+            }
+            .sortedByDescending { it.hourStartMs }
+    }
+    val filtered = remember(groups, query, filter) {
+        groups.filter { group ->
+            val statusOk = when (filter) {
+                HistoryFilter.ALL -> true
+                HistoryFilter.TRANSCRIBED -> group.canonical
+                HistoryFilter.AUDIO -> group.records.any { it.audioAvailable }
+                HistoryFilter.ATTENTION -> group.records.any { it.needsAttention }
+            }
+            val queryOk = query.isBlank() || group.text.contains(query, true) ||
+                group.records.any { record ->
+                    record.segmentId.contains(query, true) ||
+                        record.fileName?.contains(query, true) == true ||
+                        record.transcriptText?.contains(query, true) == true
+                }
+            statusOk && queryOk
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Column(
+            Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                singleLine = true,
+                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                placeholder = { Text("会話内容を検索") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                itemsIndexed(HistoryFilter.entries) { _, item ->
+                    FilterChip(
+                        selected = filter == item,
+                        onClick = { onFilterChange(item) },
+                        label = { Text(item.label) }
+                    )
+                }
+            }
+        }
+
+        if (filtered.isEmpty() && !showCurrentLive) {
+            EmptyHistory(query, filter)
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (showCurrentLive) {
+                    item(key = "history-current-live") {
+                        CurrentConversationCard(currentFinalText, currentPartial)
+                    }
+                }
+                itemsIndexed(filtered, key = { _, item -> "hour-${item.hourStartMs}" }) { index, group ->
+                    val day = formatDay(group.hourStartMs)
+                    val previous = if (index == 0) null else formatDay(filtered[index - 1].hourStartMs)
+                    if (day != previous) {
+                        Text(
+                            day,
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(top = if (index == 0) 0.dp else 10.dp)
+                        )
+                    }
+                    HourHistoryCard(group) { onSelect(group.representative) }
+                }
+            }
+        }
+    }
+}
+
+private data class HourHistoryGroup(
+    val hourStartMs: Long,
+    val hourEndMs: Long,
+    val records: List<SegmentRecord>,
+    val representative: SegmentRecord,
+    val canonical: Boolean,
+    val provisional: Boolean,
+    val text: String
+)
+
+@Composable
+private fun HourHistoryCard(group: HourHistoryGroup, onClick: () -> Unit) {
+    val label = when {
+        group.canonical -> "確定"
+        group.provisional -> "暫定"
+        group.records.any { it.status == "QUEUED" || it.status == "RETRY_WAIT" || it.status == "TRANSCRIBING" } -> "夜間処理中"
+        else -> "夜間確定待ち"
+    }
+    val conversation = when {
+        group.text.isNotBlank() -> group.text
+        group.records.any { it.status == "CORRUPT" } -> "一部の録音データを確認できません"
+        else -> "確定文字起こしは夜間にまとめて実行します"
+    }
+    Card(
+        onClick = onClick,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    formatHourRange(group.hourStartMs),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Surface(
+                    color = if (group.canonical) MaterialTheme.colorScheme.primaryContainer
+                        else MaterialTheme.colorScheme.tertiaryContainer,
+                    shape = CircleShape
+                ) {
+                    Text(label, style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+                }
+            }
+            Text(
+                conversation,
+                maxLines = 8,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyLarge
+            )
+        }
+    }
+}
+
+private fun hourStartMs(value: Long): Long {
+    if (value <= 0L) return 0L
+    val calendar = java.util.Calendar.getInstance()
+    calendar.timeInMillis = value
+    calendar.set(java.util.Calendar.MINUTE, 0)
+    calendar.set(java.util.Calendar.SECOND, 0)
+    calendar.set(java.util.Calendar.MILLISECOND, 0)
+    return calendar.timeInMillis
+}
+
+private fun formatHourRange(hourStartMs: Long): String {
+    if (hourStartMs <= 0L) return "時刻不明"
+    val start = SimpleDateFormat("HH:mm", Locale.JAPAN).format(Date(hourStartMs))
+    val end = SimpleDateFormat("HH:mm", Locale.JAPAN).format(Date(hourStartMs + 60L * 60L * 1000L - 1L))
+    return "$start–$end"
+}
+
+private fun canonicalHourText(records: List<SegmentRecord>): String = records
+    .sortedBy { it.sortTimeMs }
+    .flatMap { record ->
+        if (record.transcriptChunks.isNotEmpty()) {
+            record.transcriptChunks.map { chunk ->
+                val time = if (record.startedAtMs > 0L) {
+                    SimpleDateFormat("HH:mm:ss", Locale.JAPAN).format(Date(record.startedAtMs + chunk.startMs))
+                } else "--:--:--"
+                val speaker = chunk.speaker.takeIf { it.isNotBlank() && it != "判定不能" }
+                if (speaker == null) "$time  ${chunk.text}" else "$time  $speaker: ${chunk.text}"
+            }
+        } else {
+            record.transcriptText?.takeIf { it.isNotBlank() }?.let { text ->
+                val time = if (record.startedAtMs > 0L) {
+                    SimpleDateFormat("HH:mm:ss", Locale.JAPAN).format(Date(record.startedAtMs))
+                } else "--:--:--"
+                listOf("$time  $text")
+            } ?: emptyList()
+        }
+    }
+    .joinToString("\\n")
+    .trim()
+
+'''
+main039 = replaceBetween039(main039,
+        '@Composable\nprivate fun HistoryScreen(',
+        '@Composable\nprivate fun EmptyHistory(',
+        hourlyHistory039,
+        'hourly history UI')
+
+main039 = main039.replace(
+        '"現在の会話"',
+        '"現在の1時間（暫定・30秒更新）"')
+main039 = main039.replace(
+        '"5分確定後はVADを通した確定結果に置き換わります。"',
+        '"暫定は30秒単位で更新します。確定版は前日分を夜間に処理し、履歴では1時間単位にまとめます。"')
+main039 = main039.replace(
+        '"ライブ文字起こし"',
+        '"30秒暫定文字起こし"')
+main039 = main039.replace(
+        '"完全ストリーミング"',
+        '"30秒暫定 + 夜間確定"')
+main039 = main039.replace(
+        '"まだ確定したライブ会話はありません"',
+        '"まだ30秒暫定文字起こしはありません"')
+main039 = main039.replace(
+        '"FINAL" -> "確定"',
+        '"FINAL" -> "暫定更新"')
+writeUtf8039(mainFile039, main039)
+
+// Effective debug build version. Every delivered APK gets a new versionCode/versionName.
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1039)
+            output.versionName.set('0.7.39-debug')
+        }
+    }
+}
+
+if (!streamFile039.text.contains('FULL_STREAMING_PROVISIONAL_30S')) {
+    throw new GradleException('0.7.39 30-second provisional patch was not applied')
+}
+if (!mainFile039.text.contains('夜間確定待ち')) {
+    throw new GradleException('0.7.39 hourly history patch was not applied')
+}
+if (!schedulerFile039.text.contains('NightlyHourlyTranscriptionScheduler.ENQUEUED_REASON')) {
+    throw new GradleException('0.7.39 nightly queue bypass patch was not applied')
+}

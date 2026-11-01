@@ -1,0 +1,62 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8043 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8043 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce043 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.43 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// Add the fixed 30-second per-model benchmark to the existing diagnostics area in Settings.
+def mainFile043 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+def main043 = readUtf8043(mainFile043)
+if (!main043.contains('Model30sBenchmarkCard()')) {
+    main043 = replaceOnce043(
+            main043,
+            '''        item { VulkanDiagnosticCard() }
+''',
+            '''        item { VulkanDiagnosticCard() }
+        item { Model30sBenchmarkCard() }
+''',
+            'settings benchmark card')
+    writeUtf8043(mainFile043, main043)
+}
+
+// Both diagnostics share :vulkan_probe and VulkanProbeStore, so they must not overlap.
+def autoProbeFile043 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/VulkanAutoProbeController.java')
+def autoProbe043 = readUtf8043(autoProbeFile043)
+if (!autoProbe043.contains('Model30sBenchmarkController.isRunning()')) {
+    autoProbe043 = replaceOnce043(
+            autoProbe043,
+            '''    public static boolean start(Context context) {
+        Context app = context.getApplicationContext();
+        if (!RUNNING.compareAndSet(false, true)) return false;
+''',
+            '''    public static boolean start(Context context) {
+        Context app = context.getApplicationContext();
+        if (Model30sBenchmarkController.isRunning()) return false;
+        if (!RUNNING.compareAndSet(false, true)) return false;
+''',
+            'shared probe exclusion')
+    writeUtf8043(autoProbeFile043, autoProbe043)
+}
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1043)
+            output.versionName.set('0.7.43-debug')
+        }
+    }
+}
+
+if (!mainFile043.text.contains('Model30sBenchmarkCard()')) {
+    throw new GradleException('0.7.43 model benchmark card missing')
+}
+if (!autoProbeFile043.text.contains('Model30sBenchmarkController.isRunning()')) {
+    throw new GradleException('0.7.43 shared probe exclusion missing')
+}

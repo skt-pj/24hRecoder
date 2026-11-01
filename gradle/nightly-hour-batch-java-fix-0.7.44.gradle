@@ -1,0 +1,22 @@
+import java.nio.charset.StandardCharsets
+
+def file044Java = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/NightlyHourlyTranscriptionScheduler.java')
+def source044Java = new String(file044Java.bytes, StandardCharsets.UTF_8)
+def old044Java = '''            hourSummary.put(new JSONObject()
+                    .put("hour", hourKey)
+                    .put("segmentCount", queuedInHour));
+'''
+def new044Java = '''            try {
+                hourSummary.put(new JSONObject()
+                        .put("hour", hourKey)
+                        .put("segmentCount", queuedInHour));
+            } catch (Exception ignored) {}
+'''
+int first044Java = source044Java.indexOf(old044Java)
+int last044Java = source044Java.lastIndexOf(old044Java)
+if (first044Java < 0 || first044Java != last044Java) {
+    throw new GradleException('0.7.44 hourly batch JSON fix: expected exactly one match')
+}
+source044Java = source044Java.substring(0, first044Java) + new044Java +
+        source044Java.substring(first044Java + old044Java.length())
+file044Java.setText(source044Java, 'UTF-8')

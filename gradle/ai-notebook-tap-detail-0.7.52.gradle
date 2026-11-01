@@ -1,0 +1,377 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8052 = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8052 = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce052 = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.52 ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+// 0.7.51で追加した専用詳細ボタンと24時間一括詳細を撤回する。
+// 日表示は「日全体の概要 + 各時間の短い概要」だけにし、カード自体のタップで詳細へ遷移する。
+def screenFile052 = rootProject.file('app/src/main/java/com/sktpj/recorder24h/AiAnalysisScreen.kt')
+def screen052 = readUtf8052(screenFile052)
+
+screen052 = replaceOnce052(screen052,
+'''    var dailyDetail by remember { mutableStateOf<AiAnalysisDocument?>(null) }
+    var hourlyDetailDate by remember { mutableStateOf<LocalDate?>(null) }
+''',
+'''    var dailyDetail by remember { mutableStateOf<AiAnalysisDocument?>(null) }
+    var hourlyDetail by remember { mutableStateOf<AiAnalysisDocument?>(null) }
+''', 'hour detail state')
+
+screen052 = replaceOnce052(screen052,
+'''    dailyDetail?.let { doc ->
+        BackHandler { dailyDetail = null }
+        DailyNotebookDetailPage(
+            doc = doc,
+            onBack = { dailyDetail = null }
+        )
+        return
+    }
+
+    hourlyDetailDate?.let { date ->
+        val dayStartMs = date.atStartOfDay(zone).toInstant().toEpochMilli()
+        val dayEndMs = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val hourlySummaries = snapshot.hourly
+            .filter { it.periodStartMs >= dayStartMs && it.periodStartMs < dayEndMs }
+            .associate { it.periodStartMs to it.analysis.optString("summary", "") }
+        BackHandler { hourlyDetailDate = null }
+        HourlyNotebookDetailPage(
+            date = date,
+            hourlySummaries = hourlySummaries,
+            dailyHasResult = snapshot.daily.any { it.periodStartMs == dayStartMs },
+            onBack = { hourlyDetailDate = null }
+        )
+        return
+    }
+''',
+'''    dailyDetail?.let { doc ->
+        BackHandler { dailyDetail = null }
+        DailyNotebookDetailPage(doc = doc)
+        return
+    }
+
+    hourlyDetail?.let { doc ->
+        BackHandler { hourlyDetail = null }
+        HourlyNotebookDetailPage(doc = doc)
+        return
+    }
+''', 'single detail navigation')
+
+screen052 = replaceOnce052(screen052,
+'''                        onOpenDailyDetail = { doc -> dailyDetail = doc },
+                        onOpenHourlyDetail = { date -> hourlyDetailDate = date }
+''',
+'''                        onOpenDailyDetail = { doc -> dailyDetail = doc },
+                        onOpenHourlyDetail = { doc -> hourlyDetail = doc }
+''', 'hour callback')
+
+screen052 = replaceOnce052(screen052,
+'''    onSelectDay: (AiAnalysisDocument) -> Unit,
+    onOpenDailyDetail: (AiAnalysisDocument) -> Unit,
+    onOpenHourlyDetail: (LocalDate) -> Unit
+''',
+'''    onSelectDay: (AiAnalysisDocument) -> Unit,
+    onOpenDailyDetail: (AiAnalysisDocument) -> Unit,
+    onOpenHourlyDetail: (AiAnalysisDocument) -> Unit
+''', 'day notebook callback type')
+
+screen052 = replaceOnce052(screen052,
+'''        val hourly = snapshot.hourly.filter {
+            it.periodStartMs >= selectedStartMs && it.periodStartMs < selectedEndMs
+        }
+        HourlyOverviewCard(
+            date = selectedDate,
+            generatedCount = hourly.size,
+            onOpenDetail = { onOpenHourlyDetail(selectedDate) }
+        )
+''',
+'''        val hourly = snapshot.hourly
+            .filter {
+                it.periodStartMs >= selectedStartMs && it.periodStartMs < selectedEndMs
+            }
+            .sortedBy { it.periodStartMs }
+        Text("時間別", style = MaterialTheme.typography.titleLarge)
+        if (hourly.isEmpty()) {
+            Text(
+                "この日の時間別概要はまだありません。",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            hourly.forEach { doc ->
+                HourlyOverviewRow(
+                    doc = doc,
+                    onOpenDetail = { onOpenHourlyDetail(doc) }
+                )
+            }
+        }
+''', 'hourly overview rows')
+
+screen052 = replaceOnce052(screen052,
+'''    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+    ) {
+''',
+'''    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenDetail),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+    ) {
+''', 'daily card tap navigation')
+
+screen052 = replaceOnce052(screen052,
+'''            Text(
+                if (summary.isNotEmpty()) summary else "この日の概要は生成されていません。",
+                style = MaterialTheme.typography.bodyLarge
+            )
+            OutlinedButton(onClick = onOpenDetail, modifier = Modifier.fillMaxWidth()) {
+                Text("日次ノートの詳細を見る")
+            }
+''',
+'''            Text(
+                if (summary.isNotEmpty()) summary else "この日の概要は生成されていません。",
+                style = MaterialTheme.typography.bodyLarge
+            )
+''', 'remove daily detail button')
+
+screen052 = replaceOnce052(screen052,
+'''@Composable
+private fun HourlyOverviewCard(
+    date: LocalDate,
+    generatedCount: Int,
+    onOpenDetail: () -> Unit
+) {
+    Card {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text("時間別の詳細", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "${date.year}年${date.monthValue}月${date.dayOfMonth}日 生成済み ${generatedCount}/24時間",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                "24時間分の要約・処理状態・分析／再分析は別ページにまとめています。",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedButton(onClick = onOpenDetail, modifier = Modifier.fillMaxWidth()) {
+                Text("時間別の詳細を見る")
+            }
+        }
+    }
+}
+''',
+'''@Composable
+private fun HourlyOverviewRow(
+    doc: AiAnalysisDocument,
+    onOpenDetail: () -> Unit
+) {
+    val summary = doc.analysis.optString("summary", "")
+        .replace("\\n", " ")
+        .trim()
+    val compactSummary = when {
+        summary.length > 90 -> summary.take(90).trimEnd() + "…"
+        else -> summary
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenDetail)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Text(
+                formatHourRange(doc.periodStartMs, doc.periodEndMs),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            if (compactSummary.isNotEmpty()) {
+                Text(
+                    compactSummary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+''', 'hourly row navigation')
+
+screen052 = replaceOnce052(screen052,
+'''private fun DailyNotebookDetailPage(
+    doc: AiAnalysisDocument,
+    onBack: () -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            OutlinedButton(onClick = onBack) {
+                Text("概要へ戻る")
+            }
+        }
+        item {
+            Text("日次ノート詳細", style = MaterialTheme.typography.headlineMedium)
+        }
+        item {
+            DailyAnalysisCard(doc)
+        }
+    }
+}
+
+@Composable
+private fun HourlyNotebookDetailPage(
+    date: LocalDate,
+    hourlySummaries: Map<Long, String>,
+    dailyHasResult: Boolean,
+    onBack: () -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            OutlinedButton(onClick = onBack) {
+                Text("概要へ戻る")
+            }
+        }
+        item {
+            Text(
+                "${date.year}年${date.monthValue}月${date.dayOfMonth}日 時間別詳細",
+                style = MaterialTheme.typography.headlineMedium
+            )
+        }
+        item {
+            AiNotebookDayAnalysisActions(
+                date = date,
+                hourlySummaries = hourlySummaries,
+                dailyHasResult = dailyHasResult
+            )
+        }
+    }
+}
+''',
+'''private fun DailyNotebookDetailPage(
+    doc: AiAnalysisDocument
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Text("日次ノート詳細", style = MaterialTheme.typography.headlineMedium)
+        }
+        item {
+            DailyAnalysisCard(doc)
+        }
+    }
+}
+
+@Composable
+private fun HourlyNotebookDetailPage(
+    doc: AiAnalysisDocument
+) {
+    val analysis = doc.analysis
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item {
+            Text(
+                formatHourRange(doc.periodStartMs, doc.periodEndMs),
+                style = MaterialTheme.typography.headlineMedium
+            )
+        }
+        item {
+            val summary = analysis.optString("summary", "").trim()
+            if (summary.isNotEmpty()) {
+                AnalysisSectionCard("概要") {
+                    Text(summary, style = MaterialTheme.typography.bodyLarge)
+                }
+            }
+        }
+        item {
+            ObjectListCard("重要な出来事", analysis.optJSONArray("keyEvents")) { row ->
+                val time = row.optString("time", "").trim()
+                val event = row.optString("event", "").trim()
+                listOf(time, event).filter(String::isNotEmpty).joinToString("  ")
+            }
+        }
+        item {
+            StringListCard("意思決定", analysis.optJSONArray("decisions"))
+        }
+        item {
+            ObjectListCard("TODO・約束", analysis.optJSONArray("todos")) { row ->
+                val task = row.optString("task", "").trim()
+                val evidence = row.optString("evidence", "").trim()
+                if (evidence.isEmpty()) task else "$task\\n根拠: $evidence"
+            }
+        }
+        item {
+            StringListCard("アイデア", analysis.optJSONArray("ideas"))
+        }
+        item {
+            StringListCard("未解決", analysis.optJSONArray("unresolved"))
+        }
+        item {
+            StringListCard("トピック", analysis.optJSONArray("topics"))
+        }
+        item {
+            StringListCard("人物", analysis.optJSONArray("people"))
+        }
+        item {
+            StringListCard("場所", analysis.optJSONArray("places"))
+        }
+        item {
+            ObjectListCard("印象的な発言", analysis.optJSONArray("notableQuotes")) { row ->
+                val time = row.optString("time", "").trim()
+                val text = row.optString("text", "").trim()
+                listOf(time, text).filter(String::isNotEmpty).joinToString("  ")
+            }
+        }
+    }
+}
+''', 'single-hour detail page')
+
+screen052 = replaceOnce052(screen052,
+'''                    "日表示ではまず概要だけを表示します。日次の全項目と24時間別の内容は詳細ページへ分離しています。",
+''',
+'''                    "日表示では日全体の概要と時間別の短い概要だけを表示します。各時間帯をタップすると、その1時間の詳細を確認できます。",
+''', 'status wording')
+
+writeUtf8052(screenFile052, screen052)
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1052)
+            output.versionName.set('0.7.52-debug')
+        }
+    }
+}
+
+if (screenFile052.text.contains('時間別の詳細を見る')) {
+    throw new GradleException('0.7.52 obsolete hourly detail button still present')
+}
+if (screenFile052.text.contains('日次ノートの詳細を見る')) {
+    throw new GradleException('0.7.52 obsolete daily detail button still present')
+}
+if (screenFile052.text.contains('Text("概要へ戻る")')) {
+    throw new GradleException('0.7.52 redundant detail back button still present')
+}
+if (!screenFile052.text.contains('private fun HourlyOverviewRow(')) {
+    throw new GradleException('0.7.52 tappable hourly overview row missing')
+}
+if (!screenFile052.text.contains('HourlyNotebookDetailPage(doc = doc)')) {
+    throw new GradleException('0.7.52 single-hour detail navigation missing')
+}

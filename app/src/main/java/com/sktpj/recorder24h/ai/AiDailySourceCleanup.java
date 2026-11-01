@@ -6,6 +6,7 @@ import androidx.work.WorkManager;
 
 import com.sktpj.recorder24h.storage.SegmentRepository;
 import com.sktpj.recorder24h.transcription.LocalWhisperEngine;
+import com.sktpj.recorder24h.transcription.TranscriptEditRepository;
 import com.sktpj.recorder24h.transcription.TranscriptionRepository;
 import com.sktpj.recorder24h.ui.SegmentHistoryRepository;
 import com.sktpj.recorder24h.ui.SegmentRecord;
@@ -27,9 +28,10 @@ import java.util.List;
  * Finalizes a completed daily Luna note by removing the raw per-segment source for that day.
  *
  * The daily analysis JSON is always durable before cleanup begins. The append-only segment
- * journal is retained as small lifecycle metadata; source audio and transcript JSON are removed.
- * A segment crossing midnight is retained until every local calendar day touched by that segment
- * has its own daily analysis, which prevents deleting the next day's source prematurely.
+ * journal is retained as small lifecycle metadata; source audio, transcript JSON, and manual
+ * transcript-edit JSON are removed. A segment crossing midnight is retained until every local
+ * calendar day touched by that segment has its own daily analysis, which prevents deleting the
+ * next day's source prematurely.
  */
 public final class AiDailySourceCleanup {
     public static final String STATUS_PENDING = "PENDING";
@@ -90,8 +92,10 @@ public final class AiDailySourceCleanup {
             if (!overlaps(record, periodStartMs, periodEndMs)) {
                 continue;
             }
-            boolean transcriptExists = TranscriptionRepository.exists(context, record.getSegmentId());
-            if (!record.getAudioAvailable() && !transcriptExists) {
+            String segmentId = record.getSegmentId();
+            boolean transcriptExists = TranscriptionRepository.exists(context, segmentId);
+            boolean transcriptEditExists = TranscriptEditRepository.exists(context, segmentId);
+            if (!record.getAudioAvailable() && !transcriptExists && !transcriptEditExists) {
                 continue;
             }
 
@@ -148,6 +152,20 @@ public final class AiDailySourceCleanup {
             if (transcriptTemp.exists()) {
                 //noinspection ResultOfMethodCallIgnored
                 transcriptTemp.delete();
+            }
+
+            if (TranscriptEditRepository.exists(context, segmentId)) {
+                try {
+                    long transcriptEditBytes = TranscriptEditRepository.deleteAll(context, segmentId);
+                    if (transcriptEditBytes > 0L) {
+                        result.deletedTranscriptEditCount++;
+                        result.deletedTranscriptEditBytes += transcriptEditBytes;
+                    }
+                } catch (RuntimeException error) {
+                    result.failedCount++;
+                    logFailure(context, segmentId, "TRANSCRIPT_EDIT_DELETE_FAILED", null);
+                    return;
+                }
             }
 
             SegmentRepository.appendWithoutNotify(
@@ -228,6 +246,8 @@ public final class AiDailySourceCleanup {
             cleanup.put("deletedAudioBytes", result.deletedAudioBytes);
             cleanup.put("deletedTranscriptCount", result.deletedTranscriptCount);
             cleanup.put("deletedTranscriptBytes", result.deletedTranscriptBytes);
+            cleanup.put("deletedTranscriptEditCount", result.deletedTranscriptEditCount);
+            cleanup.put("deletedTranscriptEditBytes", result.deletedTranscriptEditBytes);
             cleanup.put("retainedBoundaryCount", result.retainedBoundaryCount);
             cleanup.put("failedCount", result.failedCount);
             root.put("sourceCleanup", cleanup);
@@ -302,6 +322,8 @@ public final class AiDailySourceCleanup {
         public long deletedAudioBytes;
         public int deletedTranscriptCount;
         public long deletedTranscriptBytes;
+        public int deletedTranscriptEditCount;
+        public long deletedTranscriptEditBytes;
         public int retainedBoundaryCount;
         public int failedCount;
 
@@ -313,6 +335,8 @@ public final class AiDailySourceCleanup {
             row.put("deletedAudioBytes", deletedAudioBytes);
             row.put("deletedTranscriptCount", deletedTranscriptCount);
             row.put("deletedTranscriptBytes", deletedTranscriptBytes);
+            row.put("deletedTranscriptEditCount", deletedTranscriptEditCount);
+            row.put("deletedTranscriptEditBytes", deletedTranscriptEditBytes);
             row.put("retainedBoundaryCount", retainedBoundaryCount);
             row.put("failedCount", failedCount);
             return row;

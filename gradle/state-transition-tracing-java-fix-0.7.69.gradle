@@ -1,0 +1,101 @@
+import java.nio.charset.StandardCharsets
+
+def readUtf8069j = { File file -> new String(file.bytes, StandardCharsets.UTF_8) }
+def writeUtf8069j = { File file, String text -> file.setText(text, 'UTF-8') }
+def replaceOnce069j = { String source, String oldText, String newText, String label ->
+    int first = source.indexOf(oldText)
+    int last = source.lastIndexOf(oldText)
+    if (first < 0 || first != last) {
+        throw new GradleException("0.7.69 java fix ${label}: expected exactly one match")
+    }
+    source.substring(0, first) + newText + source.substring(first + oldText.length())
+}
+
+def workerFile069j = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionWorker.java')
+def worker069j = readUtf8069j(workerFile069j)
+worker069j = replaceOnce069j(worker069j,
+'''            long queueScanStartedAtMs = System.currentTimeMillis();
+            AppLogger.event(context, "TRANSCRIPTION_QUEUE_SCAN_STARTED", new JSONObject()
+                    .put("runner", "workmanager-single-drain"));
+            SegmentRecord next = nextQueuedRecord(context);
+            JSONObject queueScan = new JSONObject()
+                    .put("runner", "workmanager-single-drain")
+                    .put("scanMs", Math.max(0L, System.currentTimeMillis() - queueScanStartedAtMs));
+            if (next != null) {
+                queueScan.put("segmentId", next.getSegmentId())
+                        .put("status", next.getStatus())
+                        .put("reason", next.getReason() == null ? JSONObject.NULL : next.getReason())
+                        .put("queueEnqueuedAtMs", next.getQueueEnqueuedAtMs());
+            }
+            AppLogger.event(context, "TRANSCRIPTION_QUEUE_SCAN_FINISHED", queueScan);
+''',
+'''            long queueScanStartedAtMs = System.currentTimeMillis();
+            try {
+                AppLogger.event(context, "TRANSCRIPTION_QUEUE_SCAN_STARTED", new JSONObject()
+                        .put("runner", "workmanager-single-drain"));
+            } catch (Exception ignored) {
+            }
+            SegmentRecord next = nextQueuedRecord(context);
+            try {
+                JSONObject queueScan = new JSONObject()
+                        .put("runner", "workmanager-single-drain")
+                        .put("scanMs", Math.max(0L, System.currentTimeMillis() - queueScanStartedAtMs));
+                if (next != null) {
+                    queueScan.put("segmentId", next.getSegmentId())
+                            .put("status", next.getStatus())
+                            .put("reason", next.getReason() == null ? JSONObject.NULL : next.getReason())
+                            .put("queueEnqueuedAtMs", next.getQueueEnqueuedAtMs());
+                }
+                AppLogger.event(context, "TRANSCRIPTION_QUEUE_SCAN_FINISHED", queueScan);
+            } catch (Exception ignored) {
+            }
+''', 'worker queue scan checked JSON')
+writeUtf8069j(workerFile069j, worker069j)
+
+def serviceFile069j = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionQueueService.java')
+def service069j = readUtf8069j(serviceFile069j)
+service069j = replaceOnce069j(service069j,
+'''                long queueScanStartedAtMs = System.currentTimeMillis();
+                AppLogger.event(context, "TRANSCRIPTION_QUEUE_SCAN_STARTED", new JSONObject()
+                        .put("runner", "foreground-single-drain"));
+                SegmentRecord next = nextQueuedRecord(context);
+                JSONObject queueScan = new JSONObject()
+                        .put("runner", "foreground-single-drain")
+                        .put("scanMs", Math.max(0L, System.currentTimeMillis() - queueScanStartedAtMs));
+                if (next != null) {
+                    queueScan.put("segmentId", next.getSegmentId())
+                            .put("status", next.getStatus())
+                            .put("reason", next.getReason() == null ? JSONObject.NULL : next.getReason())
+                            .put("queueEnqueuedAtMs", next.getQueueEnqueuedAtMs());
+                }
+                AppLogger.event(context, "TRANSCRIPTION_QUEUE_SCAN_FINISHED", queueScan);
+''',
+'''                long queueScanStartedAtMs = System.currentTimeMillis();
+                try {
+                    AppLogger.event(context, "TRANSCRIPTION_QUEUE_SCAN_STARTED", new JSONObject()
+                            .put("runner", "foreground-single-drain"));
+                } catch (Exception ignored) {
+                }
+                SegmentRecord next = nextQueuedRecord(context);
+                try {
+                    JSONObject queueScan = new JSONObject()
+                            .put("runner", "foreground-single-drain")
+                            .put("scanMs", Math.max(0L, System.currentTimeMillis() - queueScanStartedAtMs));
+                    if (next != null) {
+                        queueScan.put("segmentId", next.getSegmentId())
+                                .put("status", next.getStatus())
+                                .put("reason", next.getReason() == null ? JSONObject.NULL : next.getReason())
+                                .put("queueEnqueuedAtMs", next.getQueueEnqueuedAtMs());
+                    }
+                    AppLogger.event(context, "TRANSCRIPTION_QUEUE_SCAN_FINISHED", queueScan);
+                } catch (Exception ignored) {
+                }
+''', 'service queue scan checked JSON')
+writeUtf8069j(serviceFile069j, service069j)
+
+if (!workerFile069j.text.contains('catch (Exception ignored)')) {
+    throw new GradleException('0.7.69 worker JSON exception guard missing')
+}
+if (!serviceFile069j.text.contains('foreground-single-drain')) {
+    throw new GradleException('0.7.69 service queue tracing missing after Java fix')
+}
