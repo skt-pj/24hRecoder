@@ -70,7 +70,7 @@ public final class MemoketAudioImportWorker extends Worker {
             }
             File journal = new File(new File(context.getFilesDir(), "metadata"), "segments.jsonl");
             if (journal.isFile() && new String(java.nio.file.Files.readAllBytes(journal.toPath()),
-                    StandardCharsets.UTF_8).contains("\\"segmentId\\":\\"" + id + "\\"")) {
+                    StandardCharsets.UTF_8).contains(id)) {
                 source.delete();
                 new File(source.getParentFile(), filename + ".raw").delete();
                 return Result.success();
