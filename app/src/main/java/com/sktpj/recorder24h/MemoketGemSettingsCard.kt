@@ -193,45 +193,21 @@ fun MemoketGemSettingsCard() {
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("$name ($deviceAddress)") }
                 }
-                val candidateBusy = remoteState == "接続中"
-                    || remoteState == "開始候補送信済み"
-                    || remoteState == "停止操作中"
-                    || remoteState == "ファイル取得のみ実行中"
-                val runDiagnostic: (String) -> Unit = { action ->
-                    context.startForegroundService(
-                        android.content.Intent(context, MemoketRemoteRecordingService::class.java)
-                            .setAction(action)
-                    )
-                    remoteState = "接続中"
-                }
-                Text("Gem録音・停止・取得の独立試験", 
-                    style = MaterialTheme.typography.titleMedium)
-                Text("開始候補だけ送信して切断します。録音状態は公式アプリで確認してください。")
+                val busy = remoteState == "接続中"
+                    || remoteState == "録音中"
+                    || remoteState == "録音確定中"
+                    || remoteState == "ファイル取得中"
                 Button(
-                    enabled = address.isNotEmpty() && !candidateBusy,
-                    onClick = { runDiagnostic(MemoketRemoteRecordingService.ACTION_DIAG_START_ONLY) },
+                    enabled = address.isNotEmpty() && !busy,
+                    onClick = {
+                        context.startForegroundService(
+                            android.content.Intent(context, MemoketRemoteRecordingService::class.java)
+                                .setAction(MemoketRemoteRecordingService.ACTION_RECORD_FIVE_SECONDS)
+                        )
+                        remoteState = "接続中"
+                    },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text("録音開始候補だけ送信（03）") }
-                Text("停止試験：公式アプリで録音を開始してから候補を1つ選択してください。")
-                val stopOnlyCandidates = listOf(
-                    "停止だけ1：通知OFF" to MemoketRemoteRecordingService.ACTION_DIAG_STOP_OFF,
-                    "停止だけ2：通知OFF→ON" to MemoketRemoteRecordingService.ACTION_DIAG_STOP_TOGGLE,
-                    "停止だけ3：状態照会00" to MemoketRemoteRecordingService.ACTION_DIAG_STOP_STATUS,
-                    "停止だけ4：通知切替→取得要求" to MemoketRemoteRecordingService.ACTION_DIAG_STOP_TRANSFER
-                )
-                stopOnlyCandidates.forEach { (label, action) ->
-                    Button(
-                        enabled = address.isNotEmpty() && !candidateBusy,
-                        onClick = { runDiagnostic(action) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text(label) }
-                }
-                Text("音声を端末へ保存します。Gem側の削除確認は送りません。")
-                OutlinedButton(
-                    enabled = address.isNotEmpty() && !candidateBusy,
-                    onClick = { runDiagnostic(MemoketRemoteRecordingService.ACTION_DIAG_FETCH_ONLY) },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("ファイル取得だけ（削除なし）") }
+                ) { Text("5秒録音して取得") }
                 Text("状態: $remoteState")
                 Text("保存済み音声: ${fileCount}件")
                 if (remoteState == "エラー" && result.isNotBlank()) Text(result)
