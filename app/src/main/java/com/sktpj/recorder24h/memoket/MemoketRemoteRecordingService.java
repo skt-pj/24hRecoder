@@ -736,9 +736,9 @@ public final class MemoketRemoteRecordingService extends Service {
                     return;
                 }
                 recordingActive = true;
-                signalMonitor(GemMicMonitorService.ACTION_GEM_STARTED);
                 MemoketSettings.recordingStarted(this, System.currentTimeMillis(),
                         java.time.ZoneId.systemDefault().getId());
+                signalMonitor(GemMicMonitorService.ACTION_GEM_STARTED);
                 trace.phase("OFFICIAL_03FF_RECEIVED_START_EFFECT_UNVERIFIED");
                 updateState(manualTestMode ? "開始候補送信済み" : "録音中");
                 updateNotification(manualTestMode ? "Gem接続中" : "Memoket Gem 録音中");
