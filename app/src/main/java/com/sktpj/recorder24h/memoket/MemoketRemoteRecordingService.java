@@ -219,7 +219,7 @@ public final class MemoketRemoteRecordingService extends Service {
         deleteStatusStartedAtMs = 0;
         inFlightMetadata = false;
         midTransferStatusStep = 0;
-        updateState("Gem停止通信→今回1件の取得（停止成立は未検証）");
+        updateState("ファイル取得中");
         MemoketSettings.recordingStopRequested(this, stopRequestedAtMs);
         // PCS Wiki 04 §34: v0.7.107 removed a second CONTROL 03 because the
         // official HCI stop operation has no such frame. Do not re-introduce it.
@@ -574,12 +574,12 @@ public final class MemoketRemoteRecordingService extends Service {
         recordingActive = false;
         stopHandler.removeCallbacks(stopWatchdog);
         trace.phase("FILE_SAVED_05_ACK_IDLE_STOP_UNVERIFIED", stateDetails());
-        updateState("録音候補1件保存・Gemの05 ACK受信（本体停止未確認）");
+        updateState("音声1件保存済み");
         MemoketSettings.saveResult(this,
                 "対象1件をサイズ・CRC照合後に端末へ永続保存し、Gemの完了通知05 ACK(0501)"
                 + "と00待機応答を確認。Gem本体の録音停止と実ファイル削除は未検証");
         log("MEMOKET_FILE_SAVED_05_ACK_IDLE_STOP_UNVERIFIED", stateDetails());
-        updateNotification("今回1件保存・Gem 05 ACK受信");
+        updateNotification("音声1件を保存しました");
         stopForeground(STOP_FOREGROUND_REMOVE);
         closeGatt();
         stopSelf();
