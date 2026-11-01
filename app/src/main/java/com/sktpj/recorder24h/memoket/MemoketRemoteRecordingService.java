@@ -80,6 +80,7 @@ public final class MemoketRemoteRecordingService extends Service {
     private long diagLastDataAtMs;
     private MemoketTransfer diagTransfer;
     private final Deque<byte[]> diagEarlyAudio = new ArrayDeque<>();
+    private volatile boolean stopCompleted;
     private final Runnable diagMetadataProbe = () -> {
         if (!diagFileOnly || stopCompleted || diagTransfer == null || diagMetadataInFlight) return;
         if (diagTransfer.shouldRequestMetadata()) {
@@ -101,7 +102,6 @@ public final class MemoketRemoteRecordingService extends Service {
     private volatile boolean recordingActive;
     private boolean stopPending;
     private long stopRequestedAtMs;
-    private volatile boolean stopCompleted;
     private byte[] lastCommand;
     private MemoketTransfer stopTransfer;
     private MemoketOfficialStopSequence stopSequence;
