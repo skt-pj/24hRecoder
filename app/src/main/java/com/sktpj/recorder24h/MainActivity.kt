@@ -141,11 +141,11 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         AppLogger.event(this, "MAIN_ACTIVITY_CREATED")
         val resetApplied = TranscriptionResetManager.applyV049ResetIfNeeded(this)
-        MemoketAudioImportWorker.enqueuePending(this)
         if (TranscriptionPipelineSettings.isSelectedPipelineReady(this, WhisperModelManager.selectedModelId(this))) {
             if (resetApplied) TranscriptionScheduler.enqueueExistingAfterReset(this)
             else TranscriptionScheduler.enqueueExisting(this)
         }
+        MemoketAudioImportWorker.enqueuePending(this)
         setContent {
             RecorderTheme {
                 RecorderApp(
