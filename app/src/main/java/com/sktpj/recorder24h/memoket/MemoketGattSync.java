@@ -62,11 +62,11 @@ public final class MemoketGattSync {
         MemoketRecordingStore store = new MemoketRecordingStore(this.context);
         this.stopTransferGuard = onlyCurrentRecording == null ? null
                 : new MemoketStopTransferGuard(onlyCurrentRecording.startMs(), onlyCurrentRecording.stopMs());
-        this.protocol = new MemoketTransfer((name, payload, crc) -> {
-            store.persist(name, payload, crc);
-            trace.filePersisted(name, payload.length, crc);
-        }, onlyCurrentRecording == null ? null : onlyCurrentRecording::matches,
-                onlyCurrentRecording == null ? 50 : 1);
+        this.protocol = new MemoketTransfer((name, staged, crc) -> {
+            store.persist(name, staged, crc);
+            trace.filePersisted(name, staged.length(), crc);
+        }, store.directory(), onlyCurrentRecording == null ? null : onlyCurrentRecording::matches,
+                onlyCurrentRecording == null ? 50 : 1, false, false, true);
         this.metadataProbe = () -> {
             if (protocol.shouldRequestMetadata()) queue(MemoketTransfer.metadataCommand());
         };
@@ -105,6 +105,7 @@ public final class MemoketGattSync {
             trace.completed(new org.json.JSONObject().put("completedCount", count));
             return count;
         } finally {
+            protocol.close();
             handler.removeCallbacks(metadataProbe);
             if (gatt != null) {
                 try { gatt.disconnect(); } catch (Exception ignored) { }
