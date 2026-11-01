@@ -93,10 +93,7 @@ public final class MemoketSessionProtocol {
                 return new byte[]{(byte) 0xe8};
             case 8:
                 if (opcode != 0xe8) return null;
-                // Official 2026-10-31: e8 0e 02 + variable data;
-                // earlier captures: e8 0c 00/02. Do not reject the observed 0e route.
-                if (value.length < 3 || (value[1] != 0x0c && value[1] != 0x0e)
-                        || (value[2] != 0 && value[2] != 2)) {
+                if (!isSupportedE8Response(value)) {
                     throw new IllegalStateException("Unexpected e8 response: " + hex(value));
                 }
                 step = 9;
@@ -123,6 +120,21 @@ public final class MemoketSessionProtocol {
             case 8: return "WAIT_E8";
             default: return "READY";
         }
+    }
+
+    static boolean isSupportedE8Response(byte[] value) {
+        if (value == null || value.length < 3 || (value[0] & 0xff) != 0xe8) return false;
+        int format = value[1] & 0xff;
+        int status = value[2] & 0xff;
+        if ((format == 0x0c || format == 0x0e) && (status == 0 || status == 2)) {
+            return true;
+        }
+        if (format != 0x0d || status != 1 || value.length != 16) return false;
+        for (int i = 3; i < value.length; i++) {
+            int c = value[i] & 0xff;
+            if (!((c >= '0' && c <= '9') || c == '/')) return false;
+        }
+        return true;
     }
 
     private static void requirePrefix(byte[] actual, byte[] expected, String label) {
