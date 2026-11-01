@@ -76,6 +76,7 @@ public final class MemoketRemoteRecordingService extends Service {
     private boolean fiveSecondRecording;
     private boolean streamCaptureMode;
     private boolean continuousMode;
+    private boolean monitorDriven;
     private boolean continuousStopRequested;
     private long continuousStartedAtMs;
     private String continuousSegmentId;
@@ -272,6 +273,9 @@ public final class MemoketRemoteRecordingService extends Service {
             if (!recordingActive) stopSelf(startId);
             return START_NOT_STICKY;
         }
+        if (ACTION_START_RECORDING.equals(action)) {
+            monitorDriven = intent != null && intent.getBooleanExtra(GemMicMonitorService.EXTRA_MIC_GATED, false);
+        }
         if (continuousRequest) {
             continuousMode = true;
             continuousStopRequested = false;
@@ -464,6 +468,7 @@ public final class MemoketRemoteRecordingService extends Service {
         inFlightMetadata = false;
         midTransferStatusStep = 0;
         updateState("ファイル取得中");
+        signalMonitor(GemMicMonitorService.ACTION_GEM_FETCHING);
         MemoketSettings.recordingStopRequested(this, stopRequestedAtMs);
         // PCS Wiki 04 §34: v0.7.107 removed a second CONTROL 03 because the
         // official HCI stop operation has no such frame. Do not re-introduce it.
@@ -731,6 +736,7 @@ public final class MemoketRemoteRecordingService extends Service {
                     return;
                 }
                 recordingActive = true;
+                signalMonitor(GemMicMonitorService.ACTION_GEM_STARTED);
                 MemoketSettings.recordingStarted(this, System.currentTimeMillis(),
                         java.time.ZoneId.systemDefault().getId());
                 trace.phase("OFFICIAL_03FF_RECEIVED_START_EFFECT_UNVERIFIED");
@@ -987,6 +993,8 @@ public final class MemoketRemoteRecordingService extends Service {
         trace.phase("FILE_SAVED_05_ACK_IDLE_STOP_UNVERIFIED", stateDetails());
         updateState("音声1件保存済み");
         MemoketSettings.saveResult(this, "音声ファイルを1件保存しました");
+        signalMonitor(GemMicMonitorService.ACTION_GEM_FINISHED);
+        monitorDriven = false;
         log("MEMOKET_FILE_SAVED_05_ACK_IDLE_STOP_UNVERIFIED", stateDetails());
         updateNotification("音声1件を保存しました");
         if (continuousMode) {
@@ -1049,11 +1057,22 @@ public final class MemoketRemoteRecordingService extends Service {
         }
     }
 
+    private void signalMonitor(String action) {
+        if (monitorDriven)
+            startService(new Intent(this, GemMicMonitorService.class).setAction(action));
+    }
+
     private void updateState(String state) {
         MemoketSettings.setRemoteRecordingState(this, state);
     }
 
     private void finishWithError(String message) {
+        if (monitorDriven) {
+            startService(new Intent(this, GemMicMonitorService.class)
+                    .setAction(GemMicMonitorService.ACTION_GEM_FAILED)
+                    .putExtra(GemMicMonitorService.EXTRA_ERROR, message));
+            monitorDriven = false;
+        }
         if (continuousMode && !continuousStopRequested
                 && RecordingIntentStore.isRequested(this)) {
             stopHandler.removeCallbacks(streamStopAtFiveSeconds);
