@@ -115,8 +115,7 @@ public final class MemoketRemoteRecordingService extends Service {
             if (!manualTestMode || !recordingActive || gatt == null || !session.isReady()
                     || manualStopPending || stopPending || stopCompleted) {
                 trace.phase("MANUAL_STOP_REJECTED", stateDetails());
-                MemoketSettings.saveResult(this, "録音開始テストの接続がありません");
-                updateState("エラー");
+                finishWithError("録音開始テストの接続がありません");
             } else {
                 beginManualTestStop();
             }
