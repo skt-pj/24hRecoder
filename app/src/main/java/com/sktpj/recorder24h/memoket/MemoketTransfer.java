@@ -38,6 +38,7 @@ public final class MemoketTransfer {
     private final FileSelector selector;
     private final int maxFiles;
     private final boolean verifyDeviceRemoval;
+    private final boolean metadataOnlyFinalization;
     private String lastDeletionAckFile;
     // 05 01 confirms the named acknowledgement; 00 00 confirms idle.
     // Neither response independently proves flash deletion.
@@ -72,10 +73,18 @@ public final class MemoketTransfer {
     public MemoketTransfer(CompletedFile save, FileSelector selector, int maxFiles,
             boolean verifyDeviceRemoval) {
         if (maxFiles < 1) throw new IllegalArgumentException("Invalid file limit");
+        this(save, selector, maxFiles, verifyDeviceRemoval, false);
+    }
+
+    /** The Oct-31 official HCI sent 05 after matching 02 metadata without a preceding 03. */
+    public MemoketTransfer(CompletedFile save, FileSelector selector, int maxFiles,
+            boolean verifyDeviceRemoval, boolean metadataOnlyFinalization) {
+        if (maxFiles < 1) throw new IllegalArgumentException("Invalid file limit");
         this.save = save;
         this.selector = selector;
         this.maxFiles = maxFiles;
         this.verifyDeviceRemoval = verifyDeviceRemoval;
+        this.metadataOnlyFinalization = metadataOnlyFinalization;
     }
 
     public static byte[] initialCommand() {
@@ -166,6 +175,12 @@ public final class MemoketTransfer {
                     throw new IllegalStateException("Memoket file length exceeded expected=" + expectedSize + " actual=" + buffer.size());
                 }
                 state = State.WAIT_FINALIZE;
+                if (metadataOnlyFinalization) {
+                    // Never acknowledge a partial stream: full length and CRC must match
+                    // the selected current-session recording BEFORE the named 05 ACK.
+                    verifyComplete();
+                    return persistAndBuildAck();
+                }
                 return finalizeIfComplete();
             }
 
@@ -183,18 +198,7 @@ public final class MemoketTransfer {
                 if (verifyDeviceRemoval && !finalizeInfoVerified) {
                     throw new IllegalStateException("公式03 01のファイル名・サイズ応答が確認できません");
                 }
-                verifyComplete();
-                byte[] data = buffer.toByteArray();
-                save.persist(name, data, expectedCrc);
-                completedCount++;
-                buffer = null;
-                byte[] n = name.getBytes(StandardCharsets.US_ASCII);
-                byte[] ack = new byte[n.length + 2];
-                ack[0] = 5;
-                ack[1] = (byte) n.length;
-                System.arraycopy(n, 0, ack, 2, n.length);
-                state = State.WAIT_ACK;
-                return ack;
+                return persistAndBuildAck();
             }
             return null;
         }
@@ -257,7 +261,7 @@ public final class MemoketTransfer {
         buffer.write(payload, 5, size);
         crc.update(payload, 5, size);
         nextSequence++;
-        if (state == State.WAIT_FINALIZE) return finalizeIfComplete();
+        if (state == State.WAIT_FINALIZE && !metadataOnlyFinalization) return finalizeIfComplete();
         return null;
     }
 
@@ -285,6 +289,20 @@ public final class MemoketTransfer {
     public synchronized long debugExpectedSize() { return expectedSize; }
     public synchronized String debugExpectedCrcHex() {
         return expectedCrc < 0 ? "" : Long.toHexString(expectedCrc);
+    }
+
+    private byte[] persistAndBuildAck() throws Exception {
+        verifyComplete();
+        save.persist(name, buffer.toByteArray(), expectedCrc);
+        completedCount++;
+        buffer = null;
+        byte[] n = name.getBytes(StandardCharsets.US_ASCII);
+        byte[] ack = new byte[n.length + 2];
+        ack[0] = 5;
+        ack[1] = (byte) n.length;
+        System.arraycopy(n, 0, ack, 2, n.length);
+        state = State.WAIT_ACK;
+        return ack;
     }
 
     private byte[] finalizeIfComplete() {
