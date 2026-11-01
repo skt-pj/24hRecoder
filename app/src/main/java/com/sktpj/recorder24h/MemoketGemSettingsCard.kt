@@ -197,17 +197,29 @@ fun MemoketGemSettingsCard() {
                     enabled = address.isNotEmpty()
                         && remoteState != "接続中"
                         && remoteState != "録音中"
-                        && remoteState != "停止操作中（実機確認待ち）"
+                        && remoteState != "開始候補送信済み"
+                        && remoteState != "停止操作中"
                         && remoteState != "ファイル取得中",
                     onClick = {
                         context.startForegroundService(
                             android.content.Intent(context, MemoketRemoteRecordingService::class.java)
-                                .setAction(MemoketRemoteRecordingService.ACTION_RECORD_FIVE_SECONDS)
+                                .setAction(MemoketRemoteRecordingService.ACTION_MANUAL_TEST_START)
                         )
                         remoteState = "接続中"
                     },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text("5秒録音して取得") }
+                ) { Text("録音開始テスト") }
+                Button(
+                    enabled = address.isNotEmpty() && remoteState == "開始候補送信済み",
+                    onClick = {
+                        context.startForegroundService(
+                            android.content.Intent(context, MemoketRemoteRecordingService::class.java)
+                                .setAction(MemoketRemoteRecordingService.ACTION_MANUAL_TEST_STOP)
+                        )
+                        remoteState = "停止操作中"
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("録音停止テスト") }
                 Text("状態: $remoteState")
                 Text("保存済み音声: ${fileCount}件")
                 if (remoteState == "エラー" && result.isNotBlank()) Text(result)
