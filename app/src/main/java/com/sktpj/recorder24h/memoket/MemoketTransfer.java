@@ -39,6 +39,8 @@ public final class MemoketTransfer {
     private final int maxFiles;
     private final boolean verifyDeviceRemoval;
     private final boolean metadataOnlyFinalization;
+    // Diagnostic reads must save without issuing 05, which can acknowledge/delete a Gem file.
+    private final boolean acknowledgeOnSave;
     private String lastDeletionAckFile;
     // 05 01 confirms the named acknowledgement; 00 00 confirms idle.
     // Neither response independently proves flash deletion.
@@ -78,12 +80,20 @@ public final class MemoketTransfer {
     /** The Oct-31 official HCI sent 05 after matching 02 metadata without a preceding 03. */
     public MemoketTransfer(CompletedFile save, FileSelector selector, int maxFiles,
             boolean verifyDeviceRemoval, boolean metadataOnlyFinalization) {
+        this(save, selector, maxFiles, verifyDeviceRemoval, metadataOnlyFinalization, true);
+    }
+
+    /** Independent, non-destructive diagnostics: false means never send CONTROL 05. */
+    public MemoketTransfer(CompletedFile save, FileSelector selector, int maxFiles,
+            boolean verifyDeviceRemoval, boolean metadataOnlyFinalization,
+            boolean acknowledgeOnSave) {
         if (maxFiles < 1) throw new IllegalArgumentException("Invalid file limit");
         this.save = save;
         this.selector = selector;
         this.maxFiles = maxFiles;
         this.verifyDeviceRemoval = verifyDeviceRemoval;
         this.metadataOnlyFinalization = metadataOnlyFinalization;
+        this.acknowledgeOnSave = acknowledgeOnSave;
     }
 
     public static byte[] initialCommand() {
@@ -295,6 +305,11 @@ public final class MemoketTransfer {
         save.persist(name, buffer.toByteArray(), expectedCrc);
         completedCount++;
         buffer = null;
+        if (!acknowledgeOnSave) {
+            name = null;
+            state = State.DONE;
+            return null;
+        }
         byte[] n = name.getBytes(StandardCharsets.US_ASCII);
         byte[] ack = new byte[n.length + 2];
         ack[0] = 5;

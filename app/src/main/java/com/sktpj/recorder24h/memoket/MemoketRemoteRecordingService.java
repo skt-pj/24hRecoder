@@ -45,6 +45,12 @@ public final class MemoketRemoteRecordingService extends Service {
     public static final String ACTION_CANDIDATE_TOGGLE = "com.sktpj.recorder24h.memoket.CANDIDATE_TOGGLE";
     public static final String ACTION_CANDIDATE_STATUS = "com.sktpj.recorder24h.memoket.CANDIDATE_STATUS";
     public static final String ACTION_CANDIDATE_TRANSFER = "com.sktpj.recorder24h.memoket.CANDIDATE_TRANSFER";
+    public static final String ACTION_DIAG_START_ONLY = "com.sktpj.recorder24h.memoket.DIAG_START_ONLY";
+    public static final String ACTION_DIAG_STOP_OFF = "com.sktpj.recorder24h.memoket.DIAG_STOP_OFF";
+    public static final String ACTION_DIAG_STOP_TOGGLE = "com.sktpj.recorder24h.memoket.DIAG_STOP_TOGGLE";
+    public static final String ACTION_DIAG_STOP_STATUS = "com.sktpj.recorder24h.memoket.DIAG_STOP_STATUS";
+    public static final String ACTION_DIAG_STOP_TRANSFER = "com.sktpj.recorder24h.memoket.DIAG_STOP_TRANSFER";
+    public static final String ACTION_DIAG_FETCH_ONLY = "com.sktpj.recorder24h.memoket.DIAG_FETCH_ONLY";
 
     private static final String CHANNEL_ID = "memoket_remote_recording";
     private static final int NOTIFICATION_ID = 3401;
@@ -67,6 +73,28 @@ public final class MemoketRemoteRecordingService extends Service {
     private volatile boolean manualStopPending;
     private int candidateId;
     private int candidateStep;
+    private boolean diagStartOnly;
+    private boolean diagStopOnly;
+    private boolean diagFileOnly;
+    private boolean diagMetadataInFlight;
+    private long diagLastDataAtMs;
+    private MemoketTransfer diagTransfer;
+    private final Deque<byte[]> diagEarlyAudio = new ArrayDeque<>();
+    private volatile boolean stopCompleted;
+    private final Runnable diagMetadataProbe = () -> {
+        if (!diagFileOnly || stopCompleted || diagTransfer == null || diagMetadataInFlight) return;
+        if (diagTransfer.shouldRequestMetadata()) {
+            diagMetadataInFlight = true;
+            trace.phase("DIAG_FILE_METADATA_REQUESTED_NO_DELETE", stateDetails());
+            queue(MemoketTransfer.metadataCommand());
+        }
+    };
+    private final Runnable diagStartDeadline = () -> {
+        if (diagStartOnly && !stopCompleted) finishWithError("開始候補03の応答が20秒以内に届きません");
+    };
+    private final Runnable diagFetchDeadline = () -> {
+        if (diagFileOnly && !stopCompleted) finishWithError("診断取得が120秒を超えました。05は送っていません");
+    };
     private final Runnable manualStopTimeout = () -> {
         if (manualStopPending) finishWithError("Gemへの停止操作が完了しませんでした");
     };
@@ -74,7 +102,6 @@ public final class MemoketRemoteRecordingService extends Service {
     private volatile boolean recordingActive;
     private boolean stopPending;
     private long stopRequestedAtMs;
-    private volatile boolean stopCompleted;
     private byte[] lastCommand;
     private MemoketTransfer stopTransfer;
     private MemoketOfficialStopSequence stopSequence;
@@ -124,6 +151,12 @@ public final class MemoketRemoteRecordingService extends Service {
                 : ACTION_CANDIDATE_TOGGLE.equals(action) ? 2
                 : ACTION_CANDIDATE_STATUS.equals(action) ? 3
                 : ACTION_CANDIDATE_TRANSFER.equals(action) ? 4 : 0;
+        int diagnosticStop = ACTION_DIAG_STOP_OFF.equals(action) ? 1
+                : ACTION_DIAG_STOP_TOGGLE.equals(action) ? 2
+                : ACTION_DIAG_STOP_STATUS.equals(action) ? 3
+                : ACTION_DIAG_STOP_TRANSFER.equals(action) ? 4 : 0;
+        boolean diagnosticStart = ACTION_DIAG_START_ONLY.equals(action);
+        boolean diagnosticFetch = ACTION_DIAG_FETCH_ONLY.equals(action);
         if (manualStopRequest) {
             if (!manualTestMode || !recordingActive || gatt == null || !session.isReady()
                     || manualStopPending || stopPending || stopCompleted) {
@@ -135,9 +168,11 @@ public final class MemoketRemoteRecordingService extends Service {
             return START_NOT_STICKY;
         }
         if (!stopRequest && !ACTION_START_RECORDING.equals(action)
-                && !fiveSecondRequest && !manualStartRequest && requestedCandidate == 0)
+                && !fiveSecondRequest && !manualStartRequest && requestedCandidate == 0
+                && !diagnosticStart && diagnosticStop == 0 && !diagnosticFetch)
             return START_NOT_STICKY;
-        if (!stopRequest && (recordingStartPending || recordingActive || stopPending || manualStopPending))
+        if (!stopRequest && (recordingStartPending || recordingActive || stopPending || manualStopPending
+                || diagFileOnly || diagStartOnly))
             return START_NOT_STICKY;
         if (stopRequest) {
             // A duplicate user STOP must not abort an ongoing verified download.
@@ -157,9 +192,16 @@ public final class MemoketRemoteRecordingService extends Service {
             return START_NOT_STICKY;
         }
         fiveSecondRecording = fiveSecondRequest;
-        manualTestMode = manualStartRequest || requestedCandidate != 0;
-        candidateId = requestedCandidate;
-        trace.phase(requestedCandidate != 0 ? "CANDIDATE_BUTTON_PRESSED_" + requestedCandidate
+        diagStartOnly = diagnosticStart;
+        diagStopOnly = diagnosticStop != 0;
+        diagFileOnly = diagnosticFetch;
+        diagMetadataInFlight = false;
+        candidateId = diagStopOnly ? diagnosticStop : requestedCandidate;
+        manualTestMode = manualStartRequest || candidateId != 0 || diagStartOnly;
+        trace.phase(diagStartOnly ? "DIAG_START_ONLY_BUTTON_PRESSED"
+                : diagStopOnly ? "DIAG_STOP_ONLY_BUTTON_PRESSED_" + diagnosticStop
+                : diagFileOnly ? "DIAG_FETCH_ONLY_BUTTON_PRESSED"
+                : requestedCandidate != 0 ? "CANDIDATE_BUTTON_PRESSED_" + requestedCandidate
                 : manualStartRequest ? "MANUAL_START_BUTTON_PRESSED"
                 : fiveSecondRecording ? "FIVE_SECOND_RECORDING_REQUESTED"
                 : "START_REQUESTED", stateDetails());
@@ -232,8 +274,10 @@ public final class MemoketRemoteRecordingService extends Service {
         trace.phase("CANDIDATE_STOP_SENT", stateDetails());
         log("MEMOKET_STOP_CANDIDATE_SENT", stateDetails());
         trace.completed(stateDetails());
-        updateState("停止候補" + candidateId + "送信済み");
-        MemoketSettings.saveResult(this, "停止候補" + candidateId + "を送信しました");
+        String sent = diagStopOnly ? "停止のみ候補" + candidateId + "送信済み（結果未確認）"
+                : "停止候補" + candidateId + "送信済み（結果未確認）";
+        updateState(sent);
+        MemoketSettings.saveResult(this, sent);
         stopForeground(STOP_FOREGROUND_REMOVE);
         closeGatt();
         stopSelf();
@@ -306,6 +350,9 @@ public final class MemoketRemoteRecordingService extends Service {
         stopHandler.removeCallbacks(fiveSecondStop);
         stopHandler.removeCallbacks(stopWatchdog);
         stopHandler.removeCallbacks(manualStopTimeout);
+        stopHandler.removeCallbacks(diagMetadataProbe);
+        stopHandler.removeCallbacks(diagFetchDeadline);
+        stopHandler.removeCallbacks(diagStartDeadline);
         closeGatt();
         super.onDestroy();
     }
@@ -482,6 +529,10 @@ public final class MemoketRemoteRecordingService extends Service {
     private synchronized void handleNotification(UUID uuid, byte[] value) {
         if (stopCompleted) return;
         try {
+            if (diagFileOnly && diagTransfer != null) {
+                onDiagnosticFileNotification(uuid, value);
+                return;
+            }
             if (stopPending) {
                 // All post-start notifications belong to the STOP/transfer
                 // phase; there is no additional CONTROL 03 ACK to wait for.
@@ -497,16 +548,40 @@ public final class MemoketRemoteRecordingService extends Service {
                 if (next != null) queue(next);
                 if (session.isReady() && recordingStartPending) {
                     recordingStartPending = false;
-                    recordingStartAwaitingAck = true;
-                    trace.phase("RECORD_START_COMMAND_REQUESTED");
-                    queue(new byte[]{0x03});
-                    trace.phase("OFFICIAL_03_SENT_START_EFFECT_UNVERIFIED");
+                    if (diagStopOnly) {
+                        trace.phase("DIAG_STOP_ONLY_NO_START_03", stateDetails());
+                        beginManualTestStop();
+                    } else if (diagFileOnly) {
+                        trace.phase("DIAG_FETCH_ONLY_NO_START_03_NO_GEM_DELETE", stateDetails());
+                        diagTransfer = new MemoketTransfer((name, bytes, crc) -> {
+                            new MemoketRecordingStore(this).persist(name, bytes, crc);
+                            trace.filePersisted(name, bytes.length, crc);
+                            trace.phase("DIAG_FILE_CRC_VALID_SAVED_NO_ACK", stateDetails());
+                        }, null, 1, true, true, false);
+                        diagLastDataAtMs = System.currentTimeMillis();
+                        stopHandler.postDelayed(diagFetchDeadline, 120_000L);
+                        updateState("ファイル取得のみ実行中");
+                        queue(MemoketTransfer.initialCommand());
+                    } else {
+                        recordingStartAwaitingAck = true;
+                        trace.phase(diagStartOnly
+                                ? "DIAG_START_ONLY_CONTROL_03_REQUESTED"
+                                : "RECORD_START_COMMAND_REQUESTED");
+                        queue(new byte[]{0x03});
+                        if (diagStartOnly) stopHandler.postDelayed(diagStartDeadline, 20_000L);
+                        trace.phase("OFFICIAL_03_SENT_START_EFFECT_UNVERIFIED");
+                    }
                 }
                 return;
             }
             if (recordingStartAwaitingAck && !stopPending && value != null
                     && value.length == 2 && value[0] == 0x03 && (value[1] & 0xff) == 0xff) {
                 recordingStartAwaitingAck = false;
+                if (diagStartOnly) {
+                    trace.phase("DIAG_START_ONLY_03FF_RECEIVED_NOT_RECORDING_PROOF", stateDetails());
+                    finishDiagnostic("開始のみ：03→03ff受信（録音成立は未確認）");
+                    return;
+                }
                 recordingActive = true;
                 MemoketSettings.recordingStarted(this, System.currentTimeMillis(),
                         java.time.ZoneId.systemDefault().getId());
@@ -525,6 +600,74 @@ public final class MemoketRemoteRecordingService extends Service {
         }
     }
 
+
+
+    /**
+     * Independent file acquisition, not a recording START or STOP.
+     * Never send CONTROL 05. Persist only after the complete DATA length and CRC
+     * have matched the metadata. The user can verify recording duration separately.
+     */
+    private void onDiagnosticFileNotification(UUID uuid, byte[] value) throws Exception {
+        if (value == null || diagTransfer == null) return;
+        if (uuid.equals(MemoketGattSync.DATA)) {
+            diagLastDataAtMs = System.currentTimeMillis();
+            if ("WAIT_LIST".equals(diagTransfer.debugState())) {
+                if (diagEarlyAudio.size() >= 256)
+                    throw new IllegalStateException("ファイル一覧受信前のDATAが多すぎます");
+                diagEarlyAudio.addLast(Arrays.copyOf(value, value.length));
+            } else {
+                onDiagnosticFileData(value);
+            }
+            return;
+        }
+        if (!uuid.equals(MemoketGattSync.RESPONSE) || value.length == 0) return;
+        trace.response(value, "DIAG_FILE_ONLY", diagTransfer.debugState());
+        if ((value[0] & 0xff) == 2) diagMetadataInFlight = false;
+        byte[] next = diagTransfer.onControl(value);
+        if ((value[0] & 0xff) == 1 && !"WAIT_LIST".equals(diagTransfer.debugState())) {
+            while (!diagEarlyAudio.isEmpty()) onDiagnosticFileData(diagEarlyAudio.removeFirst());
+        }
+        if (next != null) {
+            if (next.length > 0 && next[0] == 5)
+                throw new IllegalStateException("診断取得で禁止した05が発行されました");
+            queue(next);
+        }
+        if (diagTransfer.isDone()) {
+            finishDiagnostic(diagTransfer.completedCount() > 0
+                    ? "ファイル取得のみ：CRC検証・端末保存完了（05未送信）"
+                    : "ファイル取得のみ：対象ファイルなし（05未送信）");
+        } else if ((value[0] & 0xff) == 2 && diagTransfer.shouldRequestMetadata()) {
+            stopHandler.removeCallbacks(diagMetadataProbe);
+            stopHandler.postDelayed(diagMetadataProbe, 800L);
+        }
+    }
+
+    private void onDiagnosticFileData(byte[] dataPacket) {
+        trace.data(dataPacket, diagTransfer.debugState(), diagTransfer.bufferedBytes());
+        byte[] next = diagTransfer.onData(dataPacket);
+        if (next != null) {
+            if (next.length > 0 && next[0] == 5)
+                throw new IllegalStateException("診断取得で禁止した05が発行されました");
+            queue(next);
+        }
+        stopHandler.removeCallbacks(diagMetadataProbe);
+        stopHandler.postDelayed(diagMetadataProbe, 800L);
+    }
+
+    private synchronized void finishDiagnostic(String message) {
+        if (stopCompleted) return;
+        stopCompleted = true;
+        stopHandler.removeCallbacks(diagFetchDeadline);
+        stopHandler.removeCallbacks(diagStartDeadline);
+        stopHandler.removeCallbacks(diagMetadataProbe);
+        trace.phase("DIAG_INDEPENDENT_FINISHED", stateDetails());
+        trace.completed(stateDetails());
+        MemoketSettings.saveResult(this, message);
+        updateState(message);
+        stopForeground(STOP_FOREGROUND_REMOVE);
+        closeGatt();
+        stopSelf();
+    }
 
     /**
      * Replays the official HCI recording-control to file-transfer transition
@@ -733,6 +876,9 @@ public final class MemoketRemoteRecordingService extends Service {
         stopHandler.removeCallbacks(fiveSecondStop);
         stopHandler.removeCallbacks(stopWatchdog);
         stopHandler.removeCallbacks(manualStopTimeout);
+        stopHandler.removeCallbacks(diagMetadataProbe);
+        stopHandler.removeCallbacks(diagFetchDeadline);
+        stopHandler.removeCallbacks(diagStartDeadline);
         if (trace != null) {
             trace.failure(message, null);
         }
@@ -764,6 +910,12 @@ public final class MemoketRemoteRecordingService extends Service {
             d.put("fiveSecondRecording", fiveSecondRecording);
             d.put("manualTestMode", manualTestMode);
             d.put("candidateId", candidateId);
+            d.put("diagStartOnly", diagStartOnly);
+            d.put("diagStopOnly", diagStopOnly);
+            d.put("diagFileOnly", diagFileOnly);
+            d.put("diagFileBytes", diagTransfer == null ? 0 : diagTransfer.bufferedBytes());
+            d.put("diagFileSaved", diagTransfer == null ? 0 : diagTransfer.completedCount());
+            d.put("diagFileDeleteAcks", diagTransfer == null ? 0 : diagTransfer.deleteAcks());
             d.put("candidateStep", candidateStep);
             d.put("manualStopPending", manualStopPending);
             d.put("stopPending", stopPending);
