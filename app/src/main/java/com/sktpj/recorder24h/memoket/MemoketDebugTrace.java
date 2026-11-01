@@ -174,7 +174,7 @@ public final class MemoketDebugTrace {
         AppLogger.diagnostic(context, "MEMOKET_DATA_BLOCK_RECEIVED", d);
     }
 
-    public void metadataProbeScheduled(long delayMs, String transferState, int bufferedBytes) {
+    public void metadataProbeScheduled(long delayMs, String transferState, long bufferedBytes) {
         JSONObject d = base();
         put(d, "delayMs", delayMs);
         put(d, "transferState", transferState);
