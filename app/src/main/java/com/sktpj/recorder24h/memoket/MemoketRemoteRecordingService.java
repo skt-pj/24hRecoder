@@ -62,7 +62,7 @@ public final class MemoketRemoteRecordingService extends Service {
     private volatile boolean manualTestMode;
     private volatile boolean manualStopPending;
     private final Runnable manualStopTimeout = () -> {
-        if (manualStopPending && !stopCompleted) finishWithError("Gemへの停止操作が完了しませんでした");
+        if (manualStopPending) finishWithError("Gemへの停止操作が完了しませんでした");
     };
     private boolean recordingStartAwaitingAck;
     private volatile boolean recordingActive;
