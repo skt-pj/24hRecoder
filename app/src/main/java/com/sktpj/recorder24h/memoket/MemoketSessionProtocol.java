@@ -129,7 +129,7 @@ public final class MemoketSessionProtocol {
         if ((format == 0x0c || format == 0x0e) && (status == 0 || status == 2)) {
             return true;
         }
-        if (format != 0x0d || status != 1 || value.length != 16) return false;
+        if (format != 0x0d || status != 1 || value.length != format + 2) return false;
         for (int i = 3; i < value.length; i++) {
             int c = value[i] & 0xff;
             if (!((c >= '0' && c <= '9') || c == '/')) return false;
