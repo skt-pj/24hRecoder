@@ -35,7 +35,6 @@ public final class MemoketGattSync {
     private final Context context;
     private final String address;
     private final MemoketTransfer protocol;
-    private final MemoketStopTransferGuard stopTransferGuard;
     private final MemoketSessionProtocol session = new MemoketSessionProtocol();
     private final MemoketDebugTrace trace;
     private final CountDownLatch finished = new CountDownLatch(1);
@@ -60,8 +59,6 @@ public final class MemoketGattSync {
         this.address = address;
         this.trace = new MemoketDebugTrace(this.context, "SYNC_WORKER");
         MemoketRecordingStore store = new MemoketRecordingStore(this.context);
-        this.stopTransferGuard = onlyCurrentRecording == null ? null
-                : new MemoketStopTransferGuard(onlyCurrentRecording.startMs(), onlyCurrentRecording.stopMs());
         this.protocol = new MemoketTransfer((name, staged, crc) -> {
             store.persist(name, staged, crc);
             trace.filePersisted(name, staged.length(), crc);
@@ -217,13 +214,6 @@ public final class MemoketGattSync {
             if (uuid.equals(DATA)) {
                 trace.data(value, protocol.debugState(), protocol.bufferedBytes());
                 byte[] next = protocol.onData(value);
-                if (stopTransferGuard != null
-                        && stopTransferGuard.exceedsRecordedWindow(protocol.bufferedBytes())) {
-                    throw new IllegalStateException("録音停止後にも音声が増え続けています。"
-                            + "受信 " + protocol.bufferedBytes() + " bytes / 許容 "
-                            + stopTransferGuard.limitBytes()
-                            + " bytes。Gem側ファイルに完了・削除通知は送っていません");
-                }
                 trace.transferState(protocol, "DATA_RECEIVED");
                 if (next != null) queue(next);
                 if (protocol.shouldRequestMetadata()) scheduleMetadata(DATA_QUIET_MS);
