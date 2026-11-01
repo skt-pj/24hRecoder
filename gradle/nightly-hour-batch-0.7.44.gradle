@@ -296,7 +296,8 @@ private fun TranscriptionQueueTab(
     var queuePaused by remember { mutableStateOf(TranscriptionScheduler.isQueuePaused(context)) }
     var selectedPriorityId by remember { mutableStateOf<String?>(null) }
     var priorityRevision by remember { mutableIntStateOf(0) }
-    val groups = remember(records, priorityRevision) { buildTranscriptionQueueGroups(records) }
+    val activeSegments = remember(records, priorityRevision) { visibleTranscriptionQueue(records) }
+    val groups = remember(activeSegments, priorityRevision) { buildTranscriptionQueueGroups(activeSegments) }
 
     LaunchedEffect(groups) {
         if (selectedPriorityId != null && groups.none { it.id == selectedPriorityId }) {
@@ -334,6 +335,12 @@ private fun TranscriptionQueueTab(
         selectedIndex >= 0 && selectedIndex + 1 < groups.size && !groups[selectedIndex + 1].active
 
     Column(Modifier.fillMaxSize()) {
+        Text(
+            "音声 ${activeSegments.size}件 / 表示 ${groups.size}グループ（1時間バッチをタップして内訳を確認）",
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         PriorityControls(
             selected = selectedGroup != null,
             canMoveUp = canMoveUp,
@@ -374,7 +381,7 @@ private fun TranscriptionQueueTab(
                             selectedPriorityId = if (selectedPriorityId == group.id) null else group.id
                         }
                     },
-                    onOpen = { onSelect(group.representative) },
+                    onOpen = { record -> onSelect(record) },
                     onRemove = {
                         if (group.nightlyHour) {
                             var removed = 0
@@ -487,10 +494,11 @@ private fun TranscriptionQueueGroupRow(
     priority: Int,
     selectedForPriority: Boolean,
     onPrioritySelect: () -> Unit,
-    onOpen: () -> Unit,
+    onOpen: (SegmentRecord) -> Unit,
     onRemove: () -> Unit
 ) {
     var menuExpanded by remember(group.id) { mutableStateOf(false) }
+    var expanded by remember(group.id) { mutableStateOf(false) }
     val record = group.representative
     val status = if (group.nightlyHour) {
         when {
@@ -502,12 +510,14 @@ private fun TranscriptionQueueGroupRow(
         transcriptionQueueStatusLabel(record)
     }
 
-    Box {
+    Column {
         Row(
             Modifier
                 .fillMaxWidth()
                 .combinedClickable(
-                    onClick = onOpen,
+                    onClick = {
+                        if (group.nightlyHour) expanded = !expanded else onOpen(record)
+                    },
                     onLongClick = { if (!group.active) menuExpanded = true }
                 )
                 .padding(horizontal = 10.dp, vertical = 13.dp),
@@ -526,8 +536,8 @@ private fun TranscriptionQueueGroupRow(
                     maxLines = 1
                 )
                 Text(
-                    if (group.nightlyHour) "優先度 $priority • 1時間バッチ"
-                    else "優先度 $priority",
+                    if (group.nightlyHour) "優先度 $priority • 1時間バッチ • ${group.records.size}件"
+                    else "優先度 $priority • 1件",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -539,6 +549,29 @@ private fun TranscriptionQueueGroupRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1
             )
+        }
+
+        if (group.nightlyHour && expanded) {
+            group.records.forEach { item ->
+                Row(
+                    Modifier.fillMaxWidth().combinedClickable(
+                        onClick = { onOpen(item) },
+                        onLongClick = {}
+                    ).padding(start = 48.dp, end = 10.dp, top = 9.dp, bottom = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        formatQueueDateTime(item),
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        transcriptionQueueStatusLabel(item),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
 
         DropdownMenu(
@@ -577,13 +610,19 @@ queueUi044 = replaceBetween044(
         'replace transcription queue with hourly grouped queue')
 queueUi044 = queueUi044.replace(
         'if (paused) "通常文字起こしキュー: 一時停止中" else "通常文字起こしキュー: 実行中"',
-        'if (paused) "文字起こしキュー: 一時停止中" else "文字起こしキュー: 実行中"')
+        'if (paused) "文字起こしキュー: 一時停止中" else "文字起こしキュー: 再開状態"')
 queueUi044 = queueUi044.replace(
         '"待機中の項目は保持します。実行中の通常文字起こしも中断して待機へ戻します。"',
         '"夜間確定の1時間バッチと手動再文字起こしを保持して停止します。"')
 queueUi044 = queueUi044.replace(
         '"完全ストリーミング中に通常キューを止めたい場合は一時停止してください。"',
         '"夜間確定は1時間バッチで処理し、30秒暫定表示はこのキューとは独立して継続します。"')
+queueUi044 = queueUi044.replace(
+        '                    "処理中"\n',
+        '                    "処理許可中（実行中とは限りません）"\n')
+queueUi044 = queueUi044.replace(
+        'if (record.reason.orEmpty().startsWith("MANUAL_")) "ユーザー追加" else "自動追加"',
+        'when { record.reason.orEmpty().startsWith("MANUAL_") -> "ユーザー追加"; record.reason.orEmpty().startsWith("NIGHTLY_HOURLY_") -> "夜間確定"; else -> "自動追加" }')
 writeUtf8044(queueUiFile044, queueUi044)
 
 androidComponents {
