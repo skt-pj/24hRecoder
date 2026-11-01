@@ -194,7 +194,6 @@ fun MemoketGemSettingsCard() {
                     ) { Text("$name ($deviceAddress)") }
                 }
                 val candidateBusy = remoteState == "接続中"
-                    || remoteState == "録音中"
                     || remoteState == "開始候補送信済み"
                     || remoteState == "停止操作中"
                 val candidates = listOf(
