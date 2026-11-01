@@ -1,6 +1,7 @@
 package com.sktpj.recorder24h.memoket;
 
 import android.content.Context;
+import android.media.MediaMetadataRetriever;
 import androidx.annotation.NonNull;
 import androidx.work.Data;
 import androidx.work.ExistingWorkPolicy;
@@ -16,6 +17,8 @@ import com.sktpj.recorder24h.util.AppLogger;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.BufferedReader;
+import java.nio.file.Files;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Locale;
@@ -62,20 +65,24 @@ public final class MemoketAudioImportWorker extends Worker {
                     .format(new Date(started));
             File target = new File(StoragePolicy.getAudioDir(context), timestamp + "_" + id + ".m4a");
             if (!source.isFile() && !target.isFile()) return Result.retry();
+            long duration;
             if (!target.isFile() || target.length() == 0) {
                 StoragePolicy.enforce(context);
-                long duration = MemoketAudioImporter.convert(source, target);
+                duration = MemoketAudioImporter.convert(source, target);
+            } else {
+                duration = readDuration(target);
+            }
+            if (duration <= 0 || !target.isFile() || target.length() == 0)
+                throw new IllegalStateException("Gem M4A not ready");
+            File journal = new File(new File(context.getFilesDir(), "metadata"), "segments.jsonl");
+            if (!hasReadyRecord(journal, id, target.getName())) {
                 SegmentRepository.append(context, id, target, started,
                         started + duration, "READY", null);
             }
-            File journal = new File(new File(context.getFilesDir(), "metadata"), "segments.jsonl");
-            if (journal.isFile() && new String(java.nio.file.Files.readAllBytes(journal.toPath()),
-                    StandardCharsets.UTF_8).contains(id)) {
-                source.delete();
-                new File(source.getParentFile(), filename + ".raw").delete();
-                return Result.success();
-            }
-            return Result.retry();
+            if (!hasReadyRecord(journal, id, target.getName())) return Result.retry();
+            source.delete();
+            new File(source.getParentFile(), filename + ".raw").delete();
+            return Result.success();
         } catch (Exception error) {
             try {
                 AppLogger.event(context, "MEMOKET_AUDIO_IMPORT_FAILED",
@@ -84,5 +91,34 @@ public final class MemoketAudioImportWorker extends Worker {
             } catch (Exception ignored) {}
             return Result.retry();
         }
+    }
+
+    private static long readDuration(File audio) throws Exception {
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(audio.getAbsolutePath());
+            String value = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+            return value == null ? 0L : Long.parseLong(value);
+        } finally {
+            retriever.release();
+        }
+    }
+
+    private static boolean hasReadyRecord(File journal, String id, String fileName) throws Exception {
+        if (!journal.isFile()) return false;
+        try (BufferedReader reader = Files.newBufferedReader(journal.toPath(), StandardCharsets.UTF_8)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                try {
+                    JSONObject record = new JSONObject(line);
+                    if (id.equals(record.optString("segmentId"))
+                            && fileName.equals(record.optString("fileName"))
+                            && "READY".equals(record.optString("status"))) return true;
+                } catch (org.json.JSONException invalidLine) {
+                    continue;
+                }
+            }
+        }
+        return false;
     }
 }
