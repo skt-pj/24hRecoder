@@ -26,7 +26,7 @@ public final class MemoketDebugTrace {
     private volatile String lastSessionStep = "";
     private volatile String lastTransferState = "";
     private volatile String lastFileName = "";
-    private volatile int lastBufferedBytes;
+    private volatile long lastBufferedBytes;
     private volatile long lastExpectedSize = -1;
     private volatile String lastExpectedCrcHex = "";
     private volatile int lastGattStatus = Integer.MIN_VALUE;
@@ -154,7 +154,7 @@ public final class MemoketDebugTrace {
         AppLogger.diagnostic(context, "MEMOKET_NOTIFICATION_RECEIVED", d);
     }
 
-    public void data(byte[] value, String transferState, int bufferedBytes) {
+    public void data(byte[] value, String transferState, long bufferedBytes) {
         long sequence = sequence(value);
         int payloadBytes = value == null ? 0 : Math.max(0, value.length - 5);
         dataBlocks++;
@@ -182,7 +182,7 @@ public final class MemoketDebugTrace {
         AppLogger.diagnostic(context, "MEMOKET_METADATA_PROBE_SCHEDULED", d);
     }
 
-    public void filePersisted(String fileName, int payloadBytes, long expectedCrc) {
+    public void filePersisted(String fileName, long payloadBytes, long expectedCrc) {
         JSONObject d = base();
         put(d, "fileName", fileName);
         put(d, "payloadBytes", payloadBytes);
