@@ -59,13 +59,13 @@ public final class MemoketRemoteRecordingService extends Service {
     private int notifySetupStep;
     private boolean recordingStartPending;
     private boolean fiveSecondRecording;
-    private boolean manualTestMode;
-    private boolean manualStopPending;
+    private volatile boolean manualTestMode;
+    private volatile boolean manualStopPending;
     private final Runnable manualStopTimeout = () -> {
         if (manualStopPending && !stopCompleted) finishWithError("Gemへの停止操作が完了しませんでした");
     };
     private boolean recordingStartAwaitingAck;
-    private boolean recordingActive;
+    private volatile boolean recordingActive;
     private boolean stopPending;
     private long stopRequestedAtMs;
     private volatile boolean stopCompleted;
@@ -209,6 +209,7 @@ public final class MemoketRemoteRecordingService extends Service {
         stopHandler.removeCallbacks(manualStopTimeout);
         trace.phase("MANUAL_STOP_DATA_CCCD_DISABLED", stateDetails());
         log("MEMOKET_MANUAL_STOP_CANDIDATE_SENT", stateDetails());
+        trace.completed(stateDetails());
         updateState("停止候補送信済み");
         MemoketSettings.saveResult(this, "停止候補を送信しました");
         stopForeground(STOP_FOREGROUND_REMOVE);
