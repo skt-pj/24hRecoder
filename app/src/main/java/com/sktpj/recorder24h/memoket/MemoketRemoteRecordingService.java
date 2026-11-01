@@ -460,13 +460,13 @@ public final class MemoketRemoteRecordingService extends Service {
         MemoketTransfer.FileSelector latest = filename ->
                 window.matches(filename) && (activeName.isEmpty() || activeName.equals(filename));
         trace.phase("LATEST_RECORDING_IDENTIFIED");
-        stopTransfer = new MemoketTransfer((name, payload, crc) -> {
-            new MemoketRecordingStore(this).persist(name, payload, crc);
+        stopTransfer = new MemoketTransfer((name, staged, crc) -> {
+            new MemoketRecordingStore(this).persist(name, staged, crc);
             stopSavedFiles++;
             log("MEMOKET_FILE_DURABLY_SAVED_BEFORE_GEM_ACK",
                     new JSONObject().put("filename", name)
-                            .put("bytes", payload.length).put("crc32", Long.toHexString(crc)));
-        }, latest, 1, true, true);
+                            .put("bytes", staged.length()).put("crc32", Long.toHexString(crc)));
+        }, new MemoketRecordingStore(this).directory(), latest, 1, true, true, true);
         lastStopActivityAtMs = System.currentTimeMillis();
         lastStopDataAtMs = lastStopActivityAtMs;
         lastMetadataRequestAtMs = 0;
