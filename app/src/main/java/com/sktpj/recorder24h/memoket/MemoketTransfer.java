@@ -72,7 +72,6 @@ public final class MemoketTransfer {
     /** Follow the official 05 01 acknowledgement with non-destructive 00 status, never a second 01. */
     public MemoketTransfer(CompletedFile save, FileSelector selector, int maxFiles,
             boolean verifyDeviceRemoval) {
-        if (maxFiles < 1) throw new IllegalArgumentException("Invalid file limit");
         this(save, selector, maxFiles, verifyDeviceRemoval, false);
     }
 
