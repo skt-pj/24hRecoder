@@ -69,6 +69,21 @@ public final class MemoketRemoteRecordingService extends Service {
     private int notifySetupStep;
     private boolean recordingStartPending;
     private boolean fiveSecondRecording;
+    private boolean streamCaptureMode;
+    private boolean streamCaptureTimerStarted;
+    private boolean streamStopRequested;
+    private boolean streamMetadataReceived;
+    private final Runnable streamStopAtFiveSeconds = () -> {
+        if (!streamCaptureMode || stopCompleted || streamStopRequested || !stopPending) return;
+        streamStopRequested = true;
+        stopRequestedAtMs = System.currentTimeMillis();
+        MemoketSettings.recordingStopRequested(this, stopRequestedAtMs);
+        trace.phase("STREAM_5S_STOP_CONTROL_0200_REQUESTED", stateDetails());
+        updateState("録音確定中");
+        inFlightMetadata = true;
+        lastMetadataRequestAtMs = stopRequestedAtMs;
+        queue(MemoketTransfer.metadataCommand());
+    };
     private volatile boolean manualTestMode;
     private volatile boolean manualStopPending;
     private int candidateId;
@@ -191,7 +206,8 @@ public final class MemoketRemoteRecordingService extends Service {
             if (!recordingActive) stopSelf(startId);
             return START_NOT_STICKY;
         }
-        fiveSecondRecording = fiveSecondRequest;
+        streamCaptureMode = fiveSecondRequest;
+        fiveSecondRecording = false;
         diagStartOnly = diagnosticStart;
         diagStopOnly = diagnosticStop != 0;
         diagFileOnly = diagnosticFetch;
@@ -283,6 +299,41 @@ public final class MemoketRemoteRecordingService extends Service {
         stopSelf();
     }
 
+    private synchronized void beginStreamCapture() {
+        if (stopPending || stopCompleted || !session.isReady()) return;
+        long started = System.currentTimeMillis();
+        MemoketSettings.recordingStarted(this, started, java.time.ZoneId.systemDefault().getId());
+        MemoketRecordingWindow window = new MemoketRecordingWindow(
+                started, started + 15_000L, java.time.ZoneId.systemDefault().getId());
+        streamCaptureTimerStarted = false;
+        streamStopRequested = false;
+        streamMetadataReceived = false;
+        stopRequestedAtMs = 0;
+        stopSavedFiles = 0;
+        inFlightMetadata = false;
+        lastMetadataRequestAtMs = 0;
+        lastStopActivityAtMs = started;
+        lastStopDataAtMs = started;
+        lastDeleteStatusProbeAtMs = 0;
+        deleteStatusStartedAtMs = 0;
+        midTransferStatusStep = 0;
+        earlyAudio.clear();
+        stopTransfer = new MemoketTransfer((name, payload, crc) -> {
+            new MemoketRecordingStore(this).persist(name, payload, crc);
+            stopSavedFiles++;
+            trace.filePersisted(name, payload.length, crc);
+        }, window::matches, 1, true, false);
+        stopNotifyStep = 3;
+        stopPending = true;
+        recordingActive = true;
+        trace.phase("STREAM_CAPTURE_START_010000", stateDetails());
+        updateState("録音中");
+        updateNotification("Gemで5秒録音中");
+        queue(MemoketTransfer.initialCommand());
+        stopHandler.removeCallbacks(stopWatchdog);
+        stopHandler.postDelayed(stopWatchdog, 500L);
+    }
+
     private synchronized void beginOfficialStop() {
         if (stopPending || stopCompleted) return;
         // The observed official STOP transition follows the acknowledged
@@ -348,6 +399,7 @@ public final class MemoketRemoteRecordingService extends Service {
     @Override
     public void onDestroy() {
         stopHandler.removeCallbacks(fiveSecondStop);
+        stopHandler.removeCallbacks(streamStopAtFiveSeconds);
         stopHandler.removeCallbacks(stopWatchdog);
         stopHandler.removeCallbacks(manualStopTimeout);
         stopHandler.removeCallbacks(diagMetadataProbe);
@@ -484,6 +536,12 @@ public final class MemoketRemoteRecordingService extends Service {
             }
             synchronized (MemoketRemoteRecordingService.this) {
                 commandBusy = false;
+                if (streamCaptureMode && stopPending && !streamCaptureTimerStarted
+                        && Arrays.equals(lastCommand, MemoketTransfer.initialCommand())) {
+                    streamCaptureTimerStarted = true;
+                    trace.phase("STREAM_CAPTURE_5S_TIMER_STARTED", stateDetails());
+                    stopHandler.postDelayed(streamStopAtFiveSeconds, 5_000L);
+                }
                 if (manualStopPending && candidateStep == 3) {
                     candidateStep = 4;
                     trace.phase("CANDIDATE_CONTROL_WRITE_ACK", stateDetails());
@@ -565,6 +623,9 @@ public final class MemoketRemoteRecordingService extends Service {
                         stopHandler.postDelayed(diagFetchDeadline, 120_000L);
                         updateState("ファイル取得のみ実行中");
                         queue(MemoketTransfer.initialCommand());
+                    } else if (streamCaptureMode) {
+                        trace.phase("STREAM_CAPTURE_AUTHENTICATED", stateDetails());
+                        beginStreamCapture();
                     } else {
                         recordingStartAwaitingAck = true;
                         trace.phase(diagStartOnly
@@ -718,7 +779,13 @@ public final class MemoketRemoteRecordingService extends Service {
             midTransferStatusStep = 3;
             trace.phase("OFFICIAL_E1_STATUS_RECEIVED");
         }
-        if (opcode == 2) inFlightMetadata = false;
+        if (opcode == 2) {
+            inFlightMetadata = false;
+            if (streamCaptureMode && value.length >= 3 && value[1] == 0 && value[2] == 1) {
+                streamMetadataReceived = true;
+                trace.phase("STREAM_STOP_METADATA_RECEIVED", stateDetails());
+            }
+        }
         byte[] next = stopTransfer == null ? null : stopTransfer.onControl(value);
         if (opcode == 1 && stopTransfer != null
                 && !"WAIT_LIST".equals(stopTransfer.debugState())) {
@@ -757,7 +824,7 @@ public final class MemoketRemoteRecordingService extends Service {
             // finalize; do not confuse receiving audio with Gem STOP.
             trace.phase("GEM_TRANSFER_PROGRESS_STOP_UNVERIFIED", stateDetails());
         }
-        if (midTransferStatusStep == 0 && blocks >= 19) {
+        if (!streamCaptureMode && midTransferStatusStep == 0 && blocks >= 19) {
             // Official HCI interleaving: wait for the 00 response BEFORE e1.
             midTransferStatusStep = 1;
             trace.phase("OFFICIAL_INTERLEAVED_STATUS_00_REQUESTED");
@@ -778,19 +845,33 @@ public final class MemoketRemoteRecordingService extends Service {
                 inFlightMetadata = false;
                 trace.phase("METADATA_RESPONSE_TIMEOUT_CONTINUE");
             }
-            // The official capture reads final size/CRC after the DATA stream
-            // has ended. Do not finalize a still-growing recording mid-stream.
-            boolean intermediateStatusReady = midTransferStatusStep == 3
-                    || (midTransferStatusStep == 0 && stopTransfer.dataBlockCount() < 19);
-            if (stopNotifyStep == 3 && !commandBusy && commands.isEmpty()
-                    && intermediateStatusReady
-                    && MemoketMetadataGate.mayRequest(now, lastStopDataAtMs,
-                            lastMetadataRequestAtMs, stopTransfer.shouldRequestMetadata(),
-                            inFlightMetadata)) {
-                inFlightMetadata = true;
-                lastMetadataRequestAtMs = now;
-                trace.phase("OFFICIAL_METADATA_AFTER_DATA");
-                queue(MemoketTransfer.metadataCommand());
+            if (streamCaptureMode) {
+                if (streamStopRequested && !streamMetadataReceived
+                        && now - stopRequestedAtMs > 30_000L) {
+                    throw new IllegalStateException("5秒後の確定要求にGemが応答しませんでした");
+                }
+                if (streamStopRequested && !inFlightMetadata
+                        && stopTransfer.shouldRequestMetadata()
+                        && now - lastMetadataRequestAtMs >= 1_000L
+                        && !commandBusy && commands.isEmpty()) {
+                    inFlightMetadata = true;
+                    lastMetadataRequestAtMs = now;
+                    trace.phase("STREAM_STOP_METADATA_RETRY", stateDetails());
+                    queue(MemoketTransfer.metadataCommand());
+                }
+            } else {
+                boolean intermediateStatusReady = midTransferStatusStep == 3
+                        || (midTransferStatusStep == 0 && stopTransfer.dataBlockCount() < 19);
+                if (stopNotifyStep == 3 && !commandBusy && commands.isEmpty()
+                        && intermediateStatusReady
+                        && MemoketMetadataGate.mayRequest(now, lastStopDataAtMs,
+                                lastMetadataRequestAtMs, stopTransfer.shouldRequestMetadata(),
+                                inFlightMetadata)) {
+                    inFlightMetadata = true;
+                    lastMetadataRequestAtMs = now;
+                    trace.phase("OFFICIAL_METADATA_AFTER_DATA");
+                    queue(MemoketTransfer.metadataCommand());
+                }
             }
             if (stopTransfer.waitingForIdleStatus()) {
                 if (deleteStatusStartedAtMs > 0
@@ -813,6 +894,7 @@ public final class MemoketRemoteRecordingService extends Service {
 
     private void finishOfficialTransfer() {
         stopHandler.removeCallbacks(fiveSecondStop);
+        stopHandler.removeCallbacks(streamStopAtFiveSeconds);
         stopCompleted = true;
         stopPending = false;
         recordingActive = false;
@@ -877,6 +959,7 @@ public final class MemoketRemoteRecordingService extends Service {
 
     private void finishWithError(String message) {
         stopHandler.removeCallbacks(fiveSecondStop);
+        stopHandler.removeCallbacks(streamStopAtFiveSeconds);
         stopHandler.removeCallbacks(stopWatchdog);
         stopHandler.removeCallbacks(manualStopTimeout);
         stopHandler.removeCallbacks(diagMetadataProbe);
@@ -911,6 +994,10 @@ public final class MemoketRemoteRecordingService extends Service {
             d.put("recordingStartPending", recordingStartPending);
             d.put("recordingActive", recordingActive);
             d.put("fiveSecondRecording", fiveSecondRecording);
+            d.put("streamCaptureMode", streamCaptureMode);
+            d.put("streamCaptureTimerStarted", streamCaptureTimerStarted);
+            d.put("streamStopRequested", streamStopRequested);
+            d.put("streamMetadataReceived", streamMetadataReceived);
             d.put("manualTestMode", manualTestMode);
             d.put("candidateId", candidateId);
             d.put("diagStartOnly", diagStartOnly);
