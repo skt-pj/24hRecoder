@@ -49,12 +49,23 @@ public final class NightlyHourlyTranscriptionScheduler {
     public static void onSegmentReady(Context context, String segmentId, File file) {
         if (segmentId == null || segmentId.isEmpty() || file == null || !file.isFile()) return;
         Context app = context.getApplicationContext();
+        long startedAtMs = file.lastModified();
+        long endedAtMs = System.currentTimeMillis();
+        for (SegmentRecord record : SegmentHistoryRepository.load(app)) {
+            if (segmentId.equals(record.getSegmentId())
+                    && record.getStartedAtMs() > 0L
+                    && record.getEndedAtMs() >= record.getStartedAtMs()) {
+                startedAtMs = record.getStartedAtMs();
+                endedAtMs = record.getEndedAtMs();
+                break;
+            }
+        }
         SegmentRepository.appendWithoutNotify(
                 app,
                 segmentId,
                 file,
-                file.lastModified(),
-                System.currentTimeMillis(),
+                startedAtMs,
+                endedAtMs,
                 "READY",
                 PENDING_REASON);
         try {
