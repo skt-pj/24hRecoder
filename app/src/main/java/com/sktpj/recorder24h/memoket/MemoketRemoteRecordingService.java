@@ -211,7 +211,7 @@ public final class MemoketRemoteRecordingService extends Service {
             log("MEMOKET_FILE_DURABLY_SAVED_BEFORE_GEM_ACK",
                     new JSONObject().put("filename", name)
                             .put("bytes", payload.length).put("crc32", Long.toHexString(crc)));
-        }, latest, 1, true);
+        }, latest, 1, true, true);
         lastStopActivityAtMs = System.currentTimeMillis();
         lastStopDataAtMs = lastStopActivityAtMs;
         lastMetadataRequestAtMs = 0;
@@ -403,6 +403,7 @@ public final class MemoketRemoteRecordingService extends Service {
                     recordingStartAwaitingAck = true;
                     trace.phase("RECORD_START_COMMAND_REQUESTED");
                     queue(new byte[]{0x03});
+                    trace.phase("OFFICIAL_03_SENT_START_EFFECT_UNVERIFIED");
                 }
                 return;
             }
@@ -412,7 +413,7 @@ public final class MemoketRemoteRecordingService extends Service {
                 recordingActive = true;
                 MemoketSettings.recordingStarted(this, System.currentTimeMillis(),
                         java.time.ZoneId.systemDefault().getId());
-                trace.phase("RECORDING_ACTIVE");
+                trace.phase("OFFICIAL_03FF_RECEIVED_START_EFFECT_UNVERIFIED");
                 updateState("録音中");
                 updateNotification("Memoket Gem 録音中");
                 log("MEMOKET_REMOTE_RECORDING_STARTED", null);
@@ -457,11 +458,17 @@ public final class MemoketRemoteRecordingService extends Service {
         trace.response(value, "OFFICIAL_STOP_TRANSFER", "ONE_GATT");
         int opcode = value[0] & 0xff;
         if (midTransferStatusStep == 1 && opcode == 0) {
-            MemoketTransferStatus.verifyIntermediate00(value,
-                    stopTransfer == null ? "" : stopTransfer.debugFileName());
-            midTransferStatusStep = 2;
-            trace.phase("OFFICIAL_E1_STATUS_REQUESTED_AFTER_00_RESPONSE");
-            queue(new byte[]{(byte) 0xe1});
+            if (value.length == 2 && value[1] == 0) {
+                // Oct-31 HCI also has 00 00 after transfer; no e1 follows it.
+                midTransferStatusStep = 3;
+                trace.phase("OFFICIAL_IDLE_0000_NO_E1");
+            } else {
+                MemoketTransferStatus.verifyIntermediate00(value,
+                        stopTransfer == null ? "" : stopTransfer.debugFileName());
+                midTransferStatusStep = 2;
+                trace.phase("OFFICIAL_E1_STATUS_REQUESTED_AFTER_00_RESPONSE");
+                queue(new byte[]{(byte) 0xe1});
+            }
         } else if (midTransferStatusStep == 2 && opcode == 0xe1) {
             MemoketTransferStatus.verifyIntermediateE1(value);
             midTransferStatusStep = 3;
