@@ -58,7 +58,7 @@ public final class StreamingVadStore {
             streamBasePtsUs = -1L;
             processedFrameCount = 0L;
             frameWindowSamples = 512;
-            detector = new DetectorState();
+            detector = new DetectorState(StreamingVadSettings.snapshot(context));
             if (!WhisperModelManager.isVadReady(context)) return false;
             try {
                 nativeReady = nativeStreamingVadOpen(
@@ -110,7 +110,6 @@ public final class StreamingVadStore {
             closeNativeLocked();
             nativeReady = false;
             activeMode = "";
-            detector = new DetectorState();
         }
     }
 
