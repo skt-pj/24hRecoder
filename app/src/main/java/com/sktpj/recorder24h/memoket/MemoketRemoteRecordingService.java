@@ -41,6 +41,10 @@ public final class MemoketRemoteRecordingService extends Service {
     public static final String ACTION_STOP_RECORDING = "com.sktpj.recorder24h.memoket.STOP_RECORDING";
     public static final String ACTION_MANUAL_TEST_START = "com.sktpj.recorder24h.memoket.MANUAL_TEST_START";
     public static final String ACTION_MANUAL_TEST_STOP = "com.sktpj.recorder24h.memoket.MANUAL_TEST_STOP";
+    public static final String ACTION_CANDIDATE_OFF = "com.sktpj.recorder24h.memoket.CANDIDATE_OFF";
+    public static final String ACTION_CANDIDATE_TOGGLE = "com.sktpj.recorder24h.memoket.CANDIDATE_TOGGLE";
+    public static final String ACTION_CANDIDATE_STATUS = "com.sktpj.recorder24h.memoket.CANDIDATE_STATUS";
+    public static final String ACTION_CANDIDATE_TRANSFER = "com.sktpj.recorder24h.memoket.CANDIDATE_TRANSFER";
 
     private static final String CHANNEL_ID = "memoket_remote_recording";
     private static final int NOTIFICATION_ID = 3401;
@@ -61,6 +65,8 @@ public final class MemoketRemoteRecordingService extends Service {
     private boolean fiveSecondRecording;
     private volatile boolean manualTestMode;
     private volatile boolean manualStopPending;
+    private int candidateId;
+    private int candidateStep;
     private final Runnable manualStopTimeout = () -> {
         if (manualStopPending) finishWithError("Gemへの停止操作が完了しませんでした");
     };
@@ -76,7 +82,10 @@ public final class MemoketRemoteRecordingService extends Service {
     private final Deque<byte[]> earlyAudio = new ArrayDeque<>();
     private final Handler stopHandler = new Handler(Looper.getMainLooper());
     private final Runnable fiveSecondStop = () -> {
-        if (fiveSecondRecording && recordingActive && !stopPending && !stopCompleted) {
+        if (candidateId != 0 && recordingActive && !manualStopPending && !stopCompleted) {
+            trace.phase("CANDIDATE_FIVE_SECONDS_ELAPSED", stateDetails());
+            beginManualTestStop();
+        } else if (fiveSecondRecording && recordingActive && !stopPending && !stopCompleted) {
             trace.phase("FIVE_SECOND_RECORDING_ENDED");
             beginOfficialStop();
         }
@@ -111,6 +120,10 @@ public final class MemoketRemoteRecordingService extends Service {
         boolean fiveSecondRequest = ACTION_RECORD_FIVE_SECONDS.equals(action);
         boolean manualStartRequest = ACTION_MANUAL_TEST_START.equals(action);
         boolean manualStopRequest = ACTION_MANUAL_TEST_STOP.equals(action);
+        int requestedCandidate = ACTION_CANDIDATE_OFF.equals(action) ? 1
+                : ACTION_CANDIDATE_TOGGLE.equals(action) ? 2
+                : ACTION_CANDIDATE_STATUS.equals(action) ? 3
+                : ACTION_CANDIDATE_TRANSFER.equals(action) ? 4 : 0;
         if (manualStopRequest) {
             if (!manualTestMode || !recordingActive || gatt == null || !session.isReady()
                     || manualStopPending || stopPending || stopCompleted) {
@@ -122,7 +135,8 @@ public final class MemoketRemoteRecordingService extends Service {
             return START_NOT_STICKY;
         }
         if (!stopRequest && !ACTION_START_RECORDING.equals(action)
-                && !fiveSecondRequest && !manualStartRequest) return START_NOT_STICKY;
+                && !fiveSecondRequest && !manualStartRequest && requestedCandidate == 0)
+            return START_NOT_STICKY;
         if (!stopRequest && (recordingStartPending || recordingActive || stopPending || manualStopPending))
             return START_NOT_STICKY;
         if (stopRequest) {
@@ -143,8 +157,10 @@ public final class MemoketRemoteRecordingService extends Service {
             return START_NOT_STICKY;
         }
         fiveSecondRecording = fiveSecondRequest;
-        manualTestMode = manualStartRequest;
-        trace.phase(manualStartRequest ? "MANUAL_START_BUTTON_PRESSED"
+        manualTestMode = manualStartRequest || requestedCandidate != 0;
+        candidateId = requestedCandidate;
+        trace.phase(requestedCandidate != 0 ? "CANDIDATE_BUTTON_PRESSED_" + requestedCandidate
+                : manualStartRequest ? "MANUAL_START_BUTTON_PRESSED"
                 : fiveSecondRecording ? "FIVE_SECOND_RECORDING_REQUESTED"
                 : "START_REQUESTED", stateDetails());
         if (Build.VERSION.SDK_INT >= 31 &&
@@ -194,11 +210,17 @@ public final class MemoketRemoteRecordingService extends Service {
 
     private synchronized void beginManualTestStop() {
         manualStopPending = true;
-        trace.phase("MANUAL_STOP_BUTTON_PRESSED", stateDetails());
-        log("MEMOKET_MANUAL_STOP_BUTTON_PRESSED", stateDetails());
+        trace.phase("CANDIDATE_STOP_STARTED", stateDetails());
+        log("MEMOKET_STOP_CANDIDATE_STARTED", stateDetails());
         updateState("停止操作中");
-        stopHandler.postDelayed(manualStopTimeout, 8_000L);
-        setNotification(data, false);
+        stopHandler.postDelayed(manualStopTimeout, 10_000L);
+        if (candidateId == 3) {
+            candidateStep = 3;
+            queue(new byte[]{0x00});
+        } else {
+            candidateStep = 1;
+            setNotification(data, false);
+        }
     }
 
     private synchronized void finishManualTestStop() {
@@ -207,11 +229,11 @@ public final class MemoketRemoteRecordingService extends Service {
         stopCompleted = true;
         recordingActive = false;
         stopHandler.removeCallbacks(manualStopTimeout);
-        trace.phase("MANUAL_STOP_DATA_CCCD_DISABLED", stateDetails());
-        log("MEMOKET_MANUAL_STOP_CANDIDATE_SENT", stateDetails());
+        trace.phase("CANDIDATE_STOP_SENT", stateDetails());
+        log("MEMOKET_STOP_CANDIDATE_SENT", stateDetails());
         trace.completed(stateDetails());
-        updateState("停止候補送信済み");
-        MemoketSettings.saveResult(this, "停止候補を送信しました");
+        updateState("停止候補" + candidateId + "送信済み");
+        MemoketSettings.saveResult(this, "停止候補" + candidateId + "を送信しました");
         stopForeground(STOP_FOREGROUND_REMOVE);
         closeGatt();
         stopSelf();
@@ -349,13 +371,23 @@ public final class MemoketRemoteRecordingService extends Service {
                 return;
             }
             if (stopCompleted) return;
-            if (manualStopPending) {
+            if (manualStopPending && (candidateStep == 1 || candidateStep == 2)) {
+                byte[] expected = candidateStep == 1
+                        ? BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
+                        : BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE;
                 if (descriptor == null || !CCCD.equals(descriptor.getUuid())
                         || descriptor.getCharacteristic() == null
                         || !MemoketGattSync.DATA.equals(descriptor.getCharacteristic().getUuid())
-                        || !Arrays.equals(descriptor.getValue(),
-                                BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE)) {
-                    finishWithError("Gemへの停止操作が一致しませんでした");
+                        || !Arrays.equals(descriptor.getValue(), expected)) {
+                    finishWithError("Gemへの停止候補送信が一致しませんでした");
+                } else if (candidateStep == 1 && (candidateId == 2 || candidateId == 4)) {
+                    candidateStep = 2;
+                    trace.phase("CANDIDATE_DATA_RESUBSCRIBE_REQUESTED", stateDetails());
+                    setNotification(data, true);
+                } else if (candidateStep == 2 && candidateId == 4) {
+                    candidateStep = 3;
+                    trace.phase("CANDIDATE_010000_REQUESTED", stateDetails());
+                    queue(new byte[]{0x01,0x00,0x00});
                 } else {
                     finishManualTestStop();
                 }
@@ -405,6 +437,11 @@ public final class MemoketRemoteRecordingService extends Service {
             }
             synchronized (MemoketRemoteRecordingService.this) {
                 commandBusy = false;
+                if (manualStopPending && candidateStep == 3) {
+                    candidateStep = 4;
+                    trace.phase("CANDIDATE_CONTROL_WRITE_ACK", stateDetails());
+                    stopHandler.postDelayed(() -> finishManualTestStop(), 1_500L);
+                }
                 sendNext();
             }
         }
@@ -452,7 +489,8 @@ public final class MemoketRemoteRecordingService extends Service {
                 return;
             }
             if (!uuid.equals(MemoketGattSync.RESPONSE)) return;
-            trace.response(value, session.debugStep(), "RECORDING_CONTROL");
+            trace.response(value, session.debugStep(),
+                    candidateId == 0 ? "RECORDING_CONTROL" : "CANDIDATE_" + candidateId);
             if (!session.isReady()) {
                 byte[] next = session.onResponse(value);
                 trace.phase(session.debugStep());
@@ -477,8 +515,8 @@ public final class MemoketRemoteRecordingService extends Service {
                 updateNotification(manualTestMode ? "Gem接続中" : "Memoket Gem 録音中");
                 log(manualTestMode ? "MEMOKET_MANUAL_START_CANDIDATE_SENT"
                         : "MEMOKET_REMOTE_RECORDING_STARTED", stateDetails());
-                if (fiveSecondRecording) {
-                    trace.phase("FIVE_SECOND_RECORDING_TIMER_STARTED");
+                if (fiveSecondRecording || candidateId != 0) {
+                    trace.phase("FIVE_SECOND_RECORDING_TIMER_STARTED", stateDetails());
                     stopHandler.postDelayed(fiveSecondStop, 5_000L);
                 }
             }
@@ -725,6 +763,8 @@ public final class MemoketRemoteRecordingService extends Service {
             d.put("recordingActive", recordingActive);
             d.put("fiveSecondRecording", fiveSecondRecording);
             d.put("manualTestMode", manualTestMode);
+            d.put("candidateId", candidateId);
+            d.put("candidateStep", candidateStep);
             d.put("manualStopPending", manualStopPending);
             d.put("stopPending", stopPending);
             d.put("commandBusy", commandBusy);
