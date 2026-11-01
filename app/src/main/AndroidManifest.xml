@@ -61,6 +61,12 @@
             android:exported="false" />
 
         <service
+            android:name=".memoket.GemMicMonitorService"
+            android:exported="false"
+            android:foregroundServiceType="microphone"
+            android:process=":recorder" />
+
+        <service
             android:name=".memoket.MemoketRemoteRecordingService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
