@@ -277,7 +277,6 @@ public final class MemoketRemoteRecordingService extends Service {
             continuousStopRequested = false;
             RecorderStateStore.write(this, "STARTING", null, null);
             RecorderStateStore.setInputSource(this, "MEMOKET");
-            MemoketAudioImportWorker.enqueuePending(this);
         }
         streamCaptureMode = fiveSecondRequest || continuousRequest;
         fiveSecondRecording = false;
