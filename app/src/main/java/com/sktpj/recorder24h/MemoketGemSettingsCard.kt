@@ -196,25 +196,42 @@ fun MemoketGemSettingsCard() {
                 val candidateBusy = remoteState == "接続中"
                     || remoteState == "開始候補送信済み"
                     || remoteState == "停止操作中"
-                val candidates = listOf(
-                    "候補1：通知OFF" to MemoketRemoteRecordingService.ACTION_CANDIDATE_OFF,
-                    "候補2：通知OFF→ON" to MemoketRemoteRecordingService.ACTION_CANDIDATE_TOGGLE,
-                    "候補3：状態照会00" to MemoketRemoteRecordingService.ACTION_CANDIDATE_STATUS,
-                    "候補4：通知切替→取得要求" to MemoketRemoteRecordingService.ACTION_CANDIDATE_TRANSFER
+                    || remoteState == "ファイル取得のみ実行中"
+                val runDiagnostic: (String) -> Unit = { action ->
+                    context.startForegroundService(
+                        android.content.Intent(context, MemoketRemoteRecordingService::class.java)
+                            .setAction(action)
+                    )
+                    remoteState = "接続中"
+                }
+                Text("独立BLE試験（録音状態の確認は公式アプリで実施）",
+                    style = MaterialTheme.typography.titleMedium)
+                Text("開始だけ：接続・認証 → CONTROL 03 → 03ffを記録 → 切断。5秒待機や停止コマンドは送りません。")
+                Button(
+                    enabled = address.isNotEmpty() && !candidateBusy,
+                    onClick = { runDiagnostic(MemoketRemoteRecordingService.ACTION_DIAG_START_ONLY) },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("録音開始候補だけ送信（03）") }
+                Text("停止だけ：公式アプリで録音を開始してから、以下の候補を1件ずつ実行。24hRecoderから03は送りません。")
+                val stopOnlyCandidates = listOf(
+                    "停止だけ1：通知OFF" to MemoketRemoteRecordingService.ACTION_DIAG_STOP_OFF,
+                    "停止だけ2：通知OFF→ON" to MemoketRemoteRecordingService.ACTION_DIAG_STOP_TOGGLE,
+                    "停止だけ3：状態照会00" to MemoketRemoteRecordingService.ACTION_DIAG_STOP_STATUS,
+                    "停止だけ4：通知切替→取得要求" to MemoketRemoteRecordingService.ACTION_DIAG_STOP_TRANSFER
                 )
-                candidates.forEach { (label, action) ->
+                stopOnlyCandidates.forEach { (label, action) ->
                     Button(
                         enabled = address.isNotEmpty() && !candidateBusy,
-                        onClick = {
-                            context.startForegroundService(
-                                android.content.Intent(context, MemoketRemoteRecordingService::class.java)
-                                    .setAction(action)
-                            )
-                            remoteState = "接続中"
-                        },
+                        onClick = { runDiagnostic(action) },
                         modifier = Modifier.fillMaxWidth()
                     ) { Text(label) }
                 }
+                Text("取得だけ：接続・認証 → 010000 → データ受信・サイズ/CRC照合 → 端末に保存。03と05は送らず、Gem内の録音は削除しません。")
+                OutlinedButton(
+                    enabled = address.isNotEmpty() && !candidateBusy,
+                    onClick = { runDiagnostic(MemoketRemoteRecordingService.ACTION_DIAG_FETCH_ONLY) },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("ファイル取得だけ（削除なし）") }
                 Text("状態: $remoteState")
                 Text("保存済み音声: ${fileCount}件")
                 if (remoteState == "エラー" && result.isNotBlank()) Text(result)
