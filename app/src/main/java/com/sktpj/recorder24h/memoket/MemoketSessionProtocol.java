@@ -56,6 +56,12 @@ public final class MemoketSessionProtocol {
                 if (value.length != 3 || value[2] != 0x02) {
                     throw new IllegalStateException("Unexpected e1 handshake status: " + hex(value));
                 }
+                // Official 2026-10-31 HCI: e1 29 02 -> e3 01 directly, no f3 00.
+                // Keep the earlier f3 route for other observed e1 status values.
+                if ((value[1] & 0xff) == 0x29) {
+                    step = 5;
+                    return new byte[]{(byte) 0xe3, 0x01};
+                }
                 step = 4;
                 return new byte[]{(byte) 0xf3, 0x00};
             case 4:
@@ -87,9 +93,9 @@ public final class MemoketSessionProtocol {
                 return new byte[]{(byte) 0xe8};
             case 8:
                 if (opcode != 0xe8) return null;
-                // Official HCI e8 0c 00; Oct-13 Gem e8 0c 02.
-                // The third byte is a variable device status, not a fixed 00.
-                if (value.length < 4 || value[1] != 0x0c
+                // Official 2026-10-31: e8 0e 02 + variable data;
+                // earlier captures: e8 0c 00/02. Do not reject the observed 0e route.
+                if (value.length < 3 || (value[1] != 0x0c && value[1] != 0x0e)
                         || (value[2] != 0 && value[2] != 2)) {
                     throw new IllegalStateException("Unexpected e8 response: " + hex(value));
                 }

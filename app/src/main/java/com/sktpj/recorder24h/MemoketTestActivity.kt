@@ -92,7 +92,7 @@ private val starts = listOf(
     CaseUi("START_NONE", "通知なし", "認証後に通知をOFFにして03")
 )
 
-private val batchAll = CaseUi("BATCH_ALL", "停止済み音声の取得診断（遠隔停止ではない）", "Gem本体を停止してから実行。公式HCIのDATA OFF→ON→一覧→DATA→CRC→保存→ACKを試験します。遠隔開始・停止は設定画面の別ボタンです。")
+private val batchAll = CaseUi("BATCH_ALL", "録音済み音声の取得", "音声を1件取得")
 
 private val stops = emptyList<CaseUi>()
 
@@ -274,14 +274,8 @@ private fun MenuScreen(modifier: Modifier, onStart: () -> Unit, onStop: () -> Un
                 }
             }
         }
-        item { MenuCard("停止済み音声の取得診断", "通常の停止→取得→Gem削除は設定画面から実行", onStop) }
+        item { MenuCard("録音済み音声の取得", "音声を1件取得", onStop) }
         item { MenuCard("テスト履歴", "候補の実行時刻・音声長・検証結果を確認", onHistory) }
-        item {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                Text("診断専用です。通常の停止・音声取得・デバイスファイル削除は設定画面から実行します。",
-                    Modifier.padding(16.dp))
-            }
-        }
     }
 }
 
@@ -312,10 +306,6 @@ private fun StopCaseScreen(modifier: Modifier, cases: List<CaseUi>, selected: Ca
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            Text("以下は遠隔停止を行わず、Gem本体で停止済みのファイルを取得する従来の診断です。",
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        item {
             Row {
                 Checkbox(checked = ready, onCheckedChange = onReady)
                 Text("Gem本体の録音停止、赤LED消灯、停止時の振動を確認した")
@@ -325,9 +315,6 @@ private fun StopCaseScreen(modifier: Modifier, cases: List<CaseUi>, selected: Ca
             Button(onClick = onBatch, enabled = ready, modifier = Modifier.fillMaxWidth()) {
                 Text("停止済み音声1件をBLE取得・公式差分診断")
             }
-        }
-        item {
-            Text("試験は1回のBLE接続のみ。認証→ファイル一覧→データ全量→サイズ・CRC照合→端末保存→ACKを検証します。録音開始や未確定の停止コマンドの組み合わせは一切実行しません。")
         }
     }
 }
@@ -348,7 +335,6 @@ private fun CaseCard(c: CaseUi, selected: Boolean, onSelect: () -> Unit) {
 @Composable
 private fun FileScreen(modifier: Modifier, selected: CaseUi, specific: String, onSelect: (CaseUi) -> Unit, onSpecific: (String) -> Unit, onRun: () -> Unit) {
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { Text("Gemの未取得ファイルに対する取得経路を確認します。", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         items(files) { c -> CaseCard(c, selected.id == c.id) { onSelect(c) } }
         if (selected.id == "FILE_SPECIFIC") {
             item { OutlinedTextField(value = specific, onValueChange = onSpecific, label = { Text("ファイル名") }, modifier = Modifier.fillMaxWidth()) }
@@ -365,7 +351,6 @@ private fun RunningScreen(modifier: Modifier, selected: CaseUi, steps: List<Step
                 CircularProgressIndicator()
                 Text("テストを実行しています…", fontWeight = FontWeight.Bold)
                 Text(selected.title)
-                Text("通信が進んでいる間、転送時間による自動打ち切りはしません。")
                 OutlinedButton(onClick = onCancel) { Text("診断・転送を中止") }
             }
         }
@@ -406,7 +391,6 @@ private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObjec
             Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("公式通信との差分チェック", fontWeight = FontWeight.Bold)
-                    Text("基準: 公式アプリの生HCIから抽出した期待通信列。今回のGemとのバイト単位の再キャプチャ比較は未実施。")
                     Text("比較状態: " + (comparison?.optString("result") ?: "未実施"))
                     val checks = comparison?.optJSONArray("checks")
                     if (checks != null) for (j in 0 until checks.length()) {
@@ -414,8 +398,6 @@ private fun ResultScreen(modifier: Modifier, selected: CaseUi, result: JSONObjec
                         Text(c.optString("label") + ": " + c.optString("status")
                                 + " / " + c.optString("observed"))
                     }
-                    Text("未確認: Gem本体の赤LED消灯・遠隔停止成立・Wi-Fi経路",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }

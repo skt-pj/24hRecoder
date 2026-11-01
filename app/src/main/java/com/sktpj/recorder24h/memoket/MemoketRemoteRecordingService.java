@@ -211,7 +211,7 @@ public final class MemoketRemoteRecordingService extends Service {
             log("MEMOKET_FILE_DURABLY_SAVED_BEFORE_GEM_ACK",
                     new JSONObject().put("filename", name)
                             .put("bytes", payload.length).put("crc32", Long.toHexString(crc)));
-        }, latest, 1, true);
+        }, latest, 1, true, true);
         lastStopActivityAtMs = System.currentTimeMillis();
         lastStopDataAtMs = lastStopActivityAtMs;
         lastMetadataRequestAtMs = 0;
@@ -219,7 +219,7 @@ public final class MemoketRemoteRecordingService extends Service {
         deleteStatusStartedAtMs = 0;
         inFlightMetadata = false;
         midTransferStatusStep = 0;
-        updateState("Gem停止通信→今回1件の取得（停止成立は未検証）");
+        updateState("ファイル取得中");
         MemoketSettings.recordingStopRequested(this, stopRequestedAtMs);
         // PCS Wiki 04 §34: v0.7.107 removed a second CONTROL 03 because the
         // official HCI stop operation has no such frame. Do not re-introduce it.
@@ -403,6 +403,7 @@ public final class MemoketRemoteRecordingService extends Service {
                     recordingStartAwaitingAck = true;
                     trace.phase("RECORD_START_COMMAND_REQUESTED");
                     queue(new byte[]{0x03});
+                    trace.phase("OFFICIAL_03_SENT_START_EFFECT_UNVERIFIED");
                 }
                 return;
             }
@@ -412,7 +413,7 @@ public final class MemoketRemoteRecordingService extends Service {
                 recordingActive = true;
                 MemoketSettings.recordingStarted(this, System.currentTimeMillis(),
                         java.time.ZoneId.systemDefault().getId());
-                trace.phase("RECORDING_ACTIVE");
+                trace.phase("OFFICIAL_03FF_RECEIVED_START_EFFECT_UNVERIFIED");
                 updateState("録音中");
                 updateNotification("Memoket Gem 録音中");
                 log("MEMOKET_REMOTE_RECORDING_STARTED", null);
@@ -457,11 +458,17 @@ public final class MemoketRemoteRecordingService extends Service {
         trace.response(value, "OFFICIAL_STOP_TRANSFER", "ONE_GATT");
         int opcode = value[0] & 0xff;
         if (midTransferStatusStep == 1 && opcode == 0) {
-            MemoketTransferStatus.verifyIntermediate00(value,
-                    stopTransfer == null ? "" : stopTransfer.debugFileName());
-            midTransferStatusStep = 2;
-            trace.phase("OFFICIAL_E1_STATUS_REQUESTED_AFTER_00_RESPONSE");
-            queue(new byte[]{(byte) 0xe1});
+            if (value.length == 2 && value[1] == 0) {
+                // Oct-31 HCI also has 00 00 after transfer; no e1 follows it.
+                midTransferStatusStep = 3;
+                trace.phase("OFFICIAL_IDLE_0000_NO_E1");
+            } else {
+                MemoketTransferStatus.verifyIntermediate00(value,
+                        stopTransfer == null ? "" : stopTransfer.debugFileName());
+                midTransferStatusStep = 2;
+                trace.phase("OFFICIAL_E1_STATUS_REQUESTED_AFTER_00_RESPONSE");
+                queue(new byte[]{(byte) 0xe1});
+            }
         } else if (midTransferStatusStep == 2 && opcode == 0xe1) {
             MemoketTransferStatus.verifyIntermediateE1(value);
             midTransferStatusStep = 3;
@@ -567,12 +574,12 @@ public final class MemoketRemoteRecordingService extends Service {
         recordingActive = false;
         stopHandler.removeCallbacks(stopWatchdog);
         trace.phase("FILE_SAVED_05_ACK_IDLE_STOP_UNVERIFIED", stateDetails());
-        updateState("録音候補1件保存・Gemの05 ACK受信（本体停止未確認）");
+        updateState("音声1件保存済み");
         MemoketSettings.saveResult(this,
                 "対象1件をサイズ・CRC照合後に端末へ永続保存し、Gemの完了通知05 ACK(0501)"
                 + "と00待機応答を確認。Gem本体の録音停止と実ファイル削除は未検証");
         log("MEMOKET_FILE_SAVED_05_ACK_IDLE_STOP_UNVERIFIED", stateDetails());
-        updateNotification("今回1件保存・Gem 05 ACK受信");
+        updateNotification("音声1件を保存しました");
         stopForeground(STOP_FOREGROUND_REMOVE);
         closeGatt();
         stopSelf();

@@ -146,7 +146,6 @@ fun MemoketGemSettingsCard() {
     Card {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("録音データの接続先", style = MaterialTheme.typography.titleLarge)
-            Text("GemはBluetoothマイクではなく、本体に保存された録音を後から転送する機器です。")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = source == "LOCAL",
@@ -208,10 +207,10 @@ fun MemoketGemSettingsCard() {
                         remoteState = "接続中"
                     },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text("Gem録音→5秒→公式HCI停止遷移→取得（検証版）") }
-                Text("停止側の追加03送信は撤去しました。DATA通知OFF→ONはファイル転送用の既知手順ですが、Gem停止の確証ではなく、過去に停止後再録音の報告があります。対象1件のCRC照合・端末保存後の05 ACKは維持します。")
-                Text("Gem録音状態: $remoteState")
-                Text("端末内保存: ${fileCount}件 / 最新結果: $result")
+                ) { Text("5秒録音して取得") }
+                Text("状態: $remoteState")
+                Text("保存済み音声: ${fileCount}件")
+                if (remoteState == "エラー" && result.isNotBlank()) Text(result)
                 OutlinedButton(
                     enabled = fileCount > 0,
                     onClick = {
