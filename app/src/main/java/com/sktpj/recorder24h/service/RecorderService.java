@@ -14,6 +14,8 @@ import android.os.IBinder;
 import android.os.Looper;
 
 import com.sktpj.recorder24h.MainActivity;
+import com.sktpj.recorder24h.memoket.MemoketSettings;
+import com.sktpj.recorder24h.memoket.MemoketRemoteRecordingService;
 import com.sktpj.recorder24h.R;
 import com.sktpj.recorder24h.audio.AacSegmentRecorder;
 import com.sktpj.recorder24h.storage.RecorderHealth;
@@ -79,6 +81,13 @@ public final class RecorderService extends Service {
 
         if (ACTION_STOP.equals(action)) {
             RecordingIntentStore.setRequested(this, false);
+            if ("MEMOKET".equals(MemoketSettings.source(this))) {
+                startService(new Intent(this, MemoketRemoteRecordingService.class)
+                        .setAction(MemoketRemoteRecordingService.ACTION_STOP_CONTINUOUS));
+                RecorderStateStore.write(this, "STOPPING", null, null);
+                stopSelf();
+                return START_NOT_STICKY;
+            }
             stopRecorderAndSelf();
             return START_NOT_STICKY;
         }
@@ -94,6 +103,22 @@ public final class RecorderService extends Service {
             return START_NOT_STICKY;
         }
 
+        if ("MEMOKET".equals(MemoketSettings.source(this))) {
+            if (MemoketSettings.address(this).isEmpty()) {
+                failPermanently("Memoket Gemを選択してください", null);
+                stopSelf();
+                return START_NOT_STICKY;
+            }
+            try {
+                startForegroundService(new Intent(this, MemoketRemoteRecordingService.class)
+                        .setAction(MemoketRemoteRecordingService.ACTION_START_CONTINUOUS));
+            } catch (RuntimeException error) {
+                failPermanently("Gemの録音サービスを起動できません: " + messageOrType(error), error);
+            }
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+        RecorderStateStore.setInputSource(this, "LOCAL");
         String blocker = currentBlockingReason(null);
         if (blocker != null) {
             failPermanently(blocker, null);

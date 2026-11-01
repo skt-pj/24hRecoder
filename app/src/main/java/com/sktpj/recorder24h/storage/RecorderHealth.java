@@ -18,6 +18,7 @@ public final class RecorderHealth {
         long stateChangedAtMs = state.optLong("stateChangedAtMs", 0L);
         long audioReadMs = state.optLong("lastAudioReadMs", 0L);
         long segmentStartedAtMs = state.optLong("currentSegmentStartedAtMs", 0L);
+        boolean gemSource = "MEMOKET".equals(state.optString("inputSource", "LOCAL"));
         boolean captureSilenced = state.optBoolean("captureSilenced", false);
         String error = state.optString("error", "");
 
@@ -66,6 +67,28 @@ public final class RecorderHealth {
             return problem("HEARTBEAT_STALE", "録音が止まった可能性があります",
                     "録音heartbeatが15秒以上更新されていません。", true,
                     heartbeatAge, audioAge, segmentAge);
+        }
+        if (gemSource) {
+            if ("ROTATING".equals(rawState)) {
+                if (stateAge > 180_000L)
+                    return problem("GEM_TRANSFER_STALE", "Gem音声の取得が停止しています",
+                            "Gem音声の取得・保存が3分以上完了していません。", true,
+                            heartbeatAge, audioAge, segmentAge);
+                return neutral("GEM_TRANSFER", "Gem音声を取得中",
+                        "録音データの確定・保存を処理しています。", true,
+                        heartbeatAge, audioAge, segmentAge);
+            }
+            if (audioReadMs <= 0L || audioAge > AUDIO_READ_STALE_MS)
+                return problem("GEM_DATA_STALE", "Gemの音声通信を確認できません",
+                        "Gemからの音声データが15秒以上届いていません。", true,
+                        heartbeatAge, audioAge, segmentAge);
+            if (segmentStartedAtMs > 0L && segmentAge > SEGMENT_OVERDUE_MS)
+                return problem("GEM_SEGMENT_STALE", "Gemの録音切替が遅れています",
+                        "Gemの録音処理が6分30秒を超えています。", true,
+                        heartbeatAge, audioAge, segmentAge);
+            return new Snapshot("HEALTHY", "Gem録音中",
+                    "Gemからの音声DATAと接続状態を監視しています。",
+                    true, false, true, heartbeatAge, audioAge, segmentAge);
         }
         if (captureSilenced) {
             return problem("CAPTURE_SILENCED", "マイク入力が無音化されています",

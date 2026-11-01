@@ -24,6 +24,8 @@ import android.os.IBinder;
 import androidx.annotation.Nullable;
 
 import com.sktpj.recorder24h.R;
+import com.sktpj.recorder24h.storage.RecordingIntentStore;
+import com.sktpj.recorder24h.storage.RecorderStateStore;
 import com.sktpj.recorder24h.util.AppLogger;
 
 import org.json.JSONObject;
@@ -37,6 +39,9 @@ import java.util.UUID;
 
 public final class MemoketRemoteRecordingService extends Service {
     public static final String ACTION_START_RECORDING = "com.sktpj.recorder24h.memoket.START_RECORDING";
+    public static final String ACTION_START_CONTINUOUS = "com.sktpj.recorder24h.memoket.START_CONTINUOUS";
+    public static final String ACTION_STOP_CONTINUOUS = "com.sktpj.recorder24h.memoket.STOP_CONTINUOUS";
+    private static final long CONTINUOUS_SEGMENT_MS = 5L * 60_000L;
     public static final String ACTION_RECORD_FIVE_SECONDS = "com.sktpj.recorder24h.memoket.RECORD_FIVE_SECONDS";
     public static final String ACTION_STOP_RECORDING = "com.sktpj.recorder24h.memoket.STOP_RECORDING";
     public static final String ACTION_MANUAL_TEST_START = "com.sktpj.recorder24h.memoket.MANUAL_TEST_START";
@@ -70,9 +75,12 @@ public final class MemoketRemoteRecordingService extends Service {
     private boolean recordingStartPending;
     private boolean fiveSecondRecording;
     private boolean streamCaptureMode;
-    private boolean streamCaptureTimerStarted;
-    private boolean streamStopRequested;
-    private boolean streamMetadataReceived;
+    private boolean continuousMode;
+    private boolean continuousStopRequested;
+    private long continuousStartedAtMs;
+    private String continuousSegmentId;
+    private long continuousLastDataAtMs;
+    private int continuousRetries;
     private volatile boolean manualTestMode;
     private volatile boolean manualStopPending;
     private int candidateId;
@@ -134,11 +142,49 @@ public final class MemoketRemoteRecordingService extends Service {
     private int midTransferStatusStep;
         private long lastDeleteStatusProbeAtMs;
     private long deleteStatusStartedAtMs;
+    private final Runnable continuousHeartbeat = new Runnable() {
+        @Override public void run() {
+            if (!continuousMode || continuousStopRequested || stopCompleted) return;
+            long lastData = continuousLastDataAtMs > 0 ? continuousLastDataAtMs : continuousStartedAtMs;
+            RecorderStateStore.heartbeat(MemoketRemoteRecordingService.this,
+                    streamStopRequested ? "ROTATING" : "RECORDING",
+                    continuousSegmentId, continuousStartedAtMs, lastData);
+            stopHandler.postDelayed(this, 5_000L);
+        }
+    };
+    private final Runnable continuousRetry = () -> {
+        if (!continuousMode || continuousStopRequested
+                || !RecordingIntentStore.isRequested(this)
+                || !"MEMOKET".equals(MemoketSettings.source(this))) return;
+        recordingStartPending = false;
+        recordingActive = false;
+        stopPending = false;
+        stopCompleted = false;
+        manualStopPending = false;
+        commandBusy = false;
+        notifySetupStep = 0;
+        commands.clear();
+        data = null;
+        response = null;
+        control = null;
+        extraNotify5 = null;
+        extraNotify6 = null;
+        gatt = null;
+        trace.phase("CONTINUOUS_GEM_RETRY");
+        onStartCommand(new Intent(this, MemoketRemoteRecordingService.class)
+                .setAction(ACTION_START_CONTINUOUS), 0, 0);
+    };
+    private boolean streamCaptureTimerStarted;
+    private boolean streamStopRequested;
+    private boolean streamMetadataReceived;
     private final Runnable streamStopAtFiveSeconds = () -> {
         if (!streamCaptureMode || stopCompleted || streamStopRequested || !stopPending) return;
         streamStopRequested = true;
         stopRequestedAtMs = System.currentTimeMillis();
         MemoketSettings.recordingStopRequested(this, stopRequestedAtMs);
+        if (continuousMode) {
+            RecorderStateStore.write(this, "ROTATING", continuousSegmentId, null);
+        }
         trace.phase("STREAM_5S_STOP_CONTROL_0200_REQUESTED", stateDetails());
         updateState("録音確定中");
         inFlightMetadata = true;
@@ -158,6 +204,26 @@ public final class MemoketRemoteRecordingService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
+        if (action == null && RecordingIntentStore.isRequested(this)
+                && "MEMOKET".equals(MemoketSettings.source(this)))
+            action = ACTION_START_CONTINUOUS;
+        if (ACTION_STOP_CONTINUOUS.equals(action)) {
+            continuousStopRequested = true;
+            stopHandler.removeCallbacks(continuousRetry);
+            stopHandler.removeCallbacks(continuousHeartbeat);
+            if (continuousMode && stopPending && !streamStopRequested) {
+                stopHandler.removeCallbacks(streamStopAtFiveSeconds);
+                streamStopAtFiveSeconds.run();
+            } else if (!continuousMode || !stopPending || stopCompleted) {
+                stopHandler.removeCallbacks(streamStopAtFiveSeconds);
+                closeGatt();
+                RecorderStateStore.write(this, "STOPPED", null, null);
+                stopForeground(STOP_FOREGROUND_REMOVE);
+                stopSelf();
+            }
+            return START_NOT_STICKY;
+        }
+        boolean continuousRequest = ACTION_START_CONTINUOUS.equals(action);
         boolean stopRequest = ACTION_STOP_RECORDING.equals(action);
         boolean fiveSecondRequest = ACTION_RECORD_FIVE_SECONDS.equals(action);
         boolean manualStartRequest = ACTION_MANUAL_TEST_START.equals(action);
@@ -183,7 +249,7 @@ public final class MemoketRemoteRecordingService extends Service {
             return START_NOT_STICKY;
         }
         if (!stopRequest && !ACTION_START_RECORDING.equals(action)
-                && !fiveSecondRequest && !manualStartRequest && requestedCandidate == 0
+                && !fiveSecondRequest && !continuousRequest && !manualStartRequest && requestedCandidate == 0
                 && !diagnosticStart && diagnosticStop == 0 && !diagnosticFetch)
             return START_NOT_STICKY;
         if (!stopRequest && (recordingStartPending || recordingActive || stopPending || manualStopPending
@@ -206,7 +272,13 @@ public final class MemoketRemoteRecordingService extends Service {
             if (!recordingActive) stopSelf(startId);
             return START_NOT_STICKY;
         }
-        streamCaptureMode = fiveSecondRequest;
+        if (continuousRequest) {
+            continuousMode = true;
+            continuousStopRequested = false;
+            RecorderStateStore.write(this, "STARTING", null, null);
+            RecorderStateStore.setInputSource(this, "MEMOKET");
+        }
+        streamCaptureMode = fiveSecondRequest || continuousRequest;
         fiveSecondRecording = false;
         diagStartOnly = diagnosticStart;
         diagStopOnly = diagnosticStop != 0;
@@ -263,7 +335,7 @@ public final class MemoketRemoteRecordingService extends Service {
                 finishWithError(error.getMessage() == null ? "Gemへ接続できませんでした" : error.getMessage());
             }
         }, "memoket-connect").start();
-        return START_NOT_STICKY;
+        return continuousMode ? START_STICKY : START_NOT_STICKY;
     }
 
     private synchronized void beginManualTestStop() {
@@ -304,7 +376,16 @@ public final class MemoketRemoteRecordingService extends Service {
         long started = System.currentTimeMillis();
         MemoketSettings.recordingStarted(this, started, java.time.ZoneId.systemDefault().getId());
         MemoketRecordingWindow window = new MemoketRecordingWindow(
-                started, started + 15_000L, java.time.ZoneId.systemDefault().getId());
+                started, started + (continuousMode ? CONTINUOUS_SEGMENT_MS : 0L) + 15_000L,
+                java.time.ZoneId.systemDefault().getId());
+        if (continuousMode) {
+            continuousStartedAtMs = started;
+            continuousSegmentId = java.util.UUID.randomUUID().toString();
+            continuousLastDataAtMs = started;
+            RecorderStateStore.segmentStarted(this, continuousSegmentId, started, started);
+            stopHandler.removeCallbacks(continuousHeartbeat);
+            stopHandler.postDelayed(continuousHeartbeat, 5_000L);
+        }
         streamCaptureTimerStarted = false;
         streamStopRequested = false;
         streamMetadataReceived = false;
@@ -326,9 +407,9 @@ public final class MemoketRemoteRecordingService extends Service {
         stopNotifyStep = 3;
         stopPending = true;
         recordingActive = true;
-        trace.phase("STREAM_CAPTURE_START_010000", stateDetails());
+        trace.phase(continuousMode ? "GEM_SEGMENT_START_010000" : "STREAM_CAPTURE_START_010000", stateDetails());
         updateState("録音中");
-        updateNotification("Gemで5秒録音中");
+        updateNotification(continuousMode ? "Gemで録音中" : "Gemで5秒録音中");
         queue(MemoketTransfer.initialCommand());
         stopHandler.removeCallbacks(stopWatchdog);
         stopHandler.postDelayed(stopWatchdog, 500L);
@@ -405,6 +486,8 @@ public final class MemoketRemoteRecordingService extends Service {
         stopHandler.removeCallbacks(diagMetadataProbe);
         stopHandler.removeCallbacks(diagFetchDeadline);
         stopHandler.removeCallbacks(diagStartDeadline);
+        stopHandler.removeCallbacks(continuousHeartbeat);
+        stopHandler.removeCallbacks(continuousRetry);
         closeGatt();
         super.onDestroy();
     }
@@ -540,7 +623,8 @@ public final class MemoketRemoteRecordingService extends Service {
                         && Arrays.equals(lastCommand, MemoketTransfer.initialCommand())) {
                     streamCaptureTimerStarted = true;
                     trace.phase("STREAM_CAPTURE_5S_TIMER_STARTED", stateDetails());
-                    stopHandler.postDelayed(streamStopAtFiveSeconds, 5_000L);
+                    stopHandler.postDelayed(streamStopAtFiveSeconds,
+                            continuousMode ? CONTINUOUS_SEGMENT_MS : 5_000L);
                 }
                 if (manualStopPending && candidateStep == 3) {
                     candidateStep = 4;
@@ -577,7 +661,7 @@ public final class MemoketRemoteRecordingService extends Service {
             if (next != null && next.getDescriptor(CCCD) == null) next = null;
         }
         if (next == null) {
-            session.allowActiveRecordingStatus(diagStopOnly || diagFileOnly);
+            session.allowActiveRecordingStatus(diagStopOnly || diagFileOnly || continuousMode);
             trace.phase(diagStopOnly ? "HANDSHAKE_RECORDING_ACTIVE_ALLOWED_STOP_ONLY"
                     : diagFileOnly ? "HANDSHAKE_RECORDING_ACTIVE_ALLOWED_FETCH_ONLY"
                     : "HANDSHAKE_STARTED");
@@ -746,6 +830,7 @@ public final class MemoketRemoteRecordingService extends Service {
             if (stopNotifyStep != 3) return;
             lastStopActivityAtMs = now;
             lastStopDataAtMs = now;
+            if (continuousMode) continuousLastDataAtMs = now;
             if (stopTransfer == null) return;
             if ("WAIT_LIST".equals(stopTransfer.debugState())) {
                 // DATA can overtake the 01 list response; keep the exact order.
@@ -904,6 +989,19 @@ public final class MemoketRemoteRecordingService extends Service {
         MemoketSettings.saveResult(this, "音声ファイルを1件保存しました");
         log("MEMOKET_FILE_SAVED_05_ACK_IDLE_STOP_UNVERIFIED", stateDetails());
         updateNotification("音声1件を保存しました");
+        if (continuousMode) {
+            continuousRetries = 0;
+            RecorderStateStore.segmentFinalized(this, continuousSegmentId,
+                    System.currentTimeMillis(), Math.max(0L, System.currentTimeMillis() - continuousStartedAtMs));
+            if (!continuousStopRequested && RecordingIntentStore.isRequested(this)
+                    && "MEMOKET".equals(MemoketSettings.source(this))) {
+                stopCompleted = false;
+                beginStreamCapture();
+                return;
+            }
+            RecorderStateStore.write(this, "STOPPED", null, null);
+        }
+        stopHandler.removeCallbacks(continuousHeartbeat);
         stopForeground(STOP_FOREGROUND_REMOVE);
         closeGatt();
         stopSelf();
@@ -956,6 +1054,26 @@ public final class MemoketRemoteRecordingService extends Service {
     }
 
     private void finishWithError(String message) {
+        if (continuousMode && !continuousStopRequested
+                && RecordingIntentStore.isRequested(this)) {
+            stopHandler.removeCallbacks(streamStopAtFiveSeconds);
+            stopHandler.removeCallbacks(stopWatchdog);
+            stopHandler.removeCallbacks(continuousHeartbeat);
+            stopCompleted = true;
+            trace.failure(message, null);
+            updateState("再接続中");
+            RecorderStateStore.write(this, "RECOVERING", continuousSegmentId, message);
+            updateNotification("Gemを再接続しています");
+            closeGatt();
+            continuousRetries++;
+            stopHandler.removeCallbacks(continuousRetry);
+            stopHandler.postDelayed(continuousRetry, Math.min(60_000L, 5_000L * continuousRetries));
+            return;
+        }
+        if (continuousMode) RecorderStateStore.write(this,
+                continuousStopRequested ? "STOPPED" : "ERROR", null, message);
+        stopHandler.removeCallbacks(continuousRetry);
+        stopHandler.removeCallbacks(continuousHeartbeat);
         stopHandler.removeCallbacks(fiveSecondStop);
         stopHandler.removeCallbacks(streamStopAtFiveSeconds);
         stopHandler.removeCallbacks(stopWatchdog);
