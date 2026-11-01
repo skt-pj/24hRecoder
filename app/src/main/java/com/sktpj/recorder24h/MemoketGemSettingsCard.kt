@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.sktpj.recorder24h.memoket.MemoketRecordingStore
 import com.sktpj.recorder24h.memoket.MemoketRemoteRecordingService
+import com.sktpj.recorder24h.storage.RecordingIntentStore
 import com.sktpj.recorder24h.memoket.MemoketSettings
 import com.sktpj.recorder24h.memoket.MemoketSyncScheduler
 import kotlinx.coroutines.delay
@@ -71,6 +72,7 @@ fun MemoketGemSettingsCard() {
     var source by remember { mutableStateOf(MemoketSettings.source(context)) }
     var address by remember { mutableStateOf(MemoketSettings.address(context)) }
     var automatic by remember { mutableStateOf(MemoketSettings.enabled(context)) }
+    var recordingActive by remember { mutableStateOf(RecordingIntentStore.isRequested(context)) }
     var result by remember { mutableStateOf(MemoketSettings.result(context)) }
     var fileCount by remember { mutableStateOf(MemoketRecordingStore(context).count()) }
     var remoteState by remember { mutableStateOf(MemoketSettings.remoteRecordingState(context)) }
@@ -136,6 +138,7 @@ fun MemoketGemSettingsCard() {
             automatic = false
         }
         while (true) {
+            recordingActive = RecordingIntentStore.isRequested(context)
             result = MemoketSettings.result(context)
             fileCount = MemoketRecordingStore(context).count()
             remoteState = MemoketSettings.remoteRecordingState(context)
@@ -149,6 +152,7 @@ fun MemoketGemSettingsCard() {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = source == "LOCAL",
+                    enabled = !recordingActive,
                     onClick = {
                         MemoketSettings.setSource(context, "LOCAL")
                         MemoketSyncScheduler.setPeriodic(context, false)
@@ -159,6 +163,7 @@ fun MemoketGemSettingsCard() {
                 )
                 FilterChip(
                     selected = source == "MEMOKET",
+                    enabled = !recordingActive,
                     onClick = {
                         MemoketSettings.setSource(context, "MEMOKET")
                         source = "MEMOKET"
@@ -166,10 +171,11 @@ fun MemoketGemSettingsCard() {
                     label = { Text("Memoket Gem") }
                 )
             }
+            if (recordingActive) Text("入力先の変更は録音停止後に行えます")
             if (source == "MEMOKET") {
                 Text("選択中のGem: ${if (address.isEmpty()) "未選択" else address}")
                 OutlinedButton(
-                    enabled = !scanning,
+                    enabled = !scanning && !recordingActive,
                     onClick = {
                         val required = if (Build.VERSION.SDK_INT >= 31) {
                             arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
@@ -185,6 +191,7 @@ fun MemoketGemSettingsCard() {
                 if (scanState.isNotEmpty()) Text(scanState)
                 devices.forEach { (deviceAddress, name) ->
                     OutlinedButton(
+                        enabled = !recordingActive,
                         onClick = {
                             MemoketSettings.selectDevice(context, deviceAddress)
                             address = deviceAddress
@@ -193,21 +200,7 @@ fun MemoketGemSettingsCard() {
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("$name ($deviceAddress)") }
                 }
-                val busy = remoteState == "接続中"
-                    || remoteState == "録音中"
-                    || remoteState == "録音確定中"
-                    || remoteState == "ファイル取得中"
-                Button(
-                    enabled = address.isNotEmpty() && !busy,
-                    onClick = {
-                        context.startForegroundService(
-                            android.content.Intent(context, MemoketRemoteRecordingService::class.java)
-                                .setAction(MemoketRemoteRecordingService.ACTION_RECORD_FIVE_SECONDS)
-                        )
-                        remoteState = "接続中"
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("5秒録音して取得") }
+                Text("Gemの録音はホームの「録音開始・停止」から操作します。")
                 Text("状態: $remoteState")
                 Text("保存済み音声: ${fileCount}件")
                 if (remoteState == "エラー" && result.isNotBlank()) Text(result)
