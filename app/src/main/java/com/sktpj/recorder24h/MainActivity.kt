@@ -440,7 +440,6 @@ private fun RecorderApp(
                         )
                         section == AppSection.QUEUE -> UnifiedQueueScreen(
                             records = records,
-                            activeQueueCount = dashboard.activeQueueCount,
                             onSelect = { selectedId = it.segmentId },
                             onRemove = { record ->
                                 val file = record.audioPath?.let { java.io.File(it) }
