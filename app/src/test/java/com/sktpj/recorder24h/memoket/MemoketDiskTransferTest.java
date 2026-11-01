@@ -67,6 +67,7 @@ public class MemoketDiskTransferTest {
             assertNull(transfer.onControl(list()));
             byte[] data = frame(0, audio);
             for (int i = 0; i < blocks; i++) {
+                data[2] = (byte) (i >>> 16);
                 data[3] = (byte) (i >>> 8);
                 data[4] = (byte) i;
                 transfer.onData(data);
