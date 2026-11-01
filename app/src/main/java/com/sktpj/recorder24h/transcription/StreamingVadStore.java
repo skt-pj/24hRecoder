@@ -50,6 +50,70 @@ public final class StreamingVadStore {
     private StreamingVadStore() {
     }
 
+    public static boolean startGemMonitor(Context context) {
+        synchronized (LOCK) {
+            closeNativeLocked();
+            nativeReady = false;
+            activeMode = "GEM_MIC_MONITOR";
+            streamBasePtsUs = -1L;
+            processedFrameCount = 0L;
+            frameWindowSamples = 512;
+            detector = new DetectorState();
+            if (!WhisperModelManager.isVadReady(context)) return false;
+            try {
+                nativeReady = nativeStreamingVadOpen(
+                        WhisperModelManager.vadModelFile(context).getAbsolutePath(), threadCount());
+            } catch (Exception error) {
+                nativeReady = false;
+            }
+            return nativeReady;
+        }
+    }
+
+    public static boolean observeGemPcm16(byte[] bytes, int length, long startPtsUs) {
+        synchronized (LOCK) {
+            if (!nativeReady || !"GEM_MIC_MONITOR".equals(activeMode))
+                throw new IllegalStateException("Gem音声判定が利用できません");
+            if (streamBasePtsUs < 0L) streamBasePtsUs = startPtsUs;
+            int count = Math.min(length, bytes.length) / 2;
+            float[] pcm = new float[count];
+            for (int i = 0; i < count; i++) {
+                int lo = bytes[i * 2] & 0xff;
+                int hi = bytes[i * 2 + 1];
+                pcm[i] = ((short) ((hi << 8) | lo)) / 32768.0f;
+            }
+            try {
+                JSONObject response = new JSONObject(nativeStreamingVadProcess(pcm));
+                int window = response.optInt("windowSamples", frameWindowSamples);
+                if (window > 0) frameWindowSamples = window;
+                long frameUs = Math.max(1L, frameWindowSamples * 1_000_000L / SAMPLE_RATE);
+                JSONArray probabilities = response.optJSONArray("probabilities");
+                if (probabilities != null) {
+                    for (int i = 0; i < probabilities.length(); i++) {
+                        long startUs = streamBasePtsUs + processedFrameCount * frameUs;
+                        detector.accept(probabilities.optDouble(i, 0.0), startUs, startUs + frameUs);
+                        processedFrameCount++;
+                    }
+                }
+                if (processedFrameCount % 320 == 0)
+                    detector.pruneBefore(startPtsUs - 30_000_000L);
+                return detector.activeStartUs() >= 0L;
+            } catch (Exception error) {
+                throw new IllegalStateException("Silero VADによる音声判定に失敗しました", error);
+            }
+        }
+    }
+
+    public static void stopGemMonitor() {
+        synchronized (LOCK) {
+            if (!"GEM_MIC_MONITOR".equals(activeMode)) return;
+            closeNativeLocked();
+            nativeReady = false;
+            activeMode = "";
+            detector = new DetectorState();
+        }
+    }
+
     public static void resetStream(Context context) {
         FullStreamingTranscriptionCoordinator.resetStream(context);
         synchronized (LOCK) {
