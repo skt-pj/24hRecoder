@@ -205,9 +205,16 @@ public final class MemoketRemoteRecordingService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
-        if (action == null && RecordingIntentStore.isRequested(this)
-                && "MEMOKET".equals(MemoketSettings.source(this)))
-            action = ACTION_START_CONTINUOUS;
+        if (action == null || ACTION_START_CONTINUOUS.equals(action)) {
+            continuousStopRequested = true;
+            stopHandler.removeCallbacks(continuousRetry);
+            stopHandler.removeCallbacks(continuousHeartbeat);
+            if (!recordingActive && !stopPending) {
+                closeGatt();
+                stopSelf(startId);
+            }
+            return START_NOT_STICKY;
+        }
         if (ACTION_STOP_CONTINUOUS.equals(action)) {
             continuousStopRequested = true;
             stopHandler.removeCallbacks(continuousRetry);
@@ -1067,10 +1074,13 @@ public final class MemoketRemoteRecordingService extends Service {
     }
 
     private void finishWithError(String message) {
+        String userMessage = message != null && message.startsWith("Unexpected ")
+                ? "Gemからの応答を処理できませんでした"
+                : message;
         if (monitorDriven) {
             startService(new Intent(this, GemMicMonitorService.class)
                     .setAction(GemMicMonitorService.ACTION_GEM_FAILED)
-                    .putExtra(GemMicMonitorService.EXTRA_ERROR, message));
+                    .putExtra(GemMicMonitorService.EXTRA_ERROR, userMessage));
             monitorDriven = false;
         }
         if (continuousMode && !continuousStopRequested
@@ -1104,8 +1114,8 @@ public final class MemoketRemoteRecordingService extends Service {
             trace.failure(message, null);
         }
         MemoketSettings.saveResult(this, stopPending
-                ? "Gem録音の停止・対象ファイル処理が未完了: " + message
-                : "Gem録音操作失敗: " + message);
+                ? "Gem録音の停止・対象ファイル処理が未完了: " + userMessage
+                : "Gem録音操作失敗: " + userMessage);
         updateState("エラー");
         try { log("MEMOKET_REMOTE_RECORDING_FAILED", new JSONObject().put("error", message)); }
         catch (Exception ignored) { }
