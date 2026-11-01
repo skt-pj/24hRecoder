@@ -73,17 +73,6 @@ public final class MemoketRemoteRecordingService extends Service {
     private boolean streamCaptureTimerStarted;
     private boolean streamStopRequested;
     private boolean streamMetadataReceived;
-    private final Runnable streamStopAtFiveSeconds = () -> {
-        if (!streamCaptureMode || stopCompleted || streamStopRequested || !stopPending) return;
-        streamStopRequested = true;
-        stopRequestedAtMs = System.currentTimeMillis();
-        MemoketSettings.recordingStopRequested(this, stopRequestedAtMs);
-        trace.phase("STREAM_5S_STOP_CONTROL_0200_REQUESTED", stateDetails());
-        updateState("録音確定中");
-        inFlightMetadata = true;
-        lastMetadataRequestAtMs = stopRequestedAtMs;
-        queue(MemoketTransfer.metadataCommand());
-    };
     private volatile boolean manualTestMode;
     private volatile boolean manualStopPending;
     private int candidateId;
@@ -145,6 +134,17 @@ public final class MemoketRemoteRecordingService extends Service {
     private int midTransferStatusStep;
         private long lastDeleteStatusProbeAtMs;
     private long deleteStatusStartedAtMs;
+    private final Runnable streamStopAtFiveSeconds = () -> {
+        if (!streamCaptureMode || stopCompleted || streamStopRequested || !stopPending) return;
+        streamStopRequested = true;
+        stopRequestedAtMs = System.currentTimeMillis();
+        MemoketSettings.recordingStopRequested(this, stopRequestedAtMs);
+        trace.phase("STREAM_5S_STOP_CONTROL_0200_REQUESTED", stateDetails());
+        updateState("録音確定中");
+        inFlightMetadata = true;
+        lastMetadataRequestAtMs = stopRequestedAtMs;
+        queue(MemoketTransfer.metadataCommand());
+    };
 
     @Override
     public void onCreate() {
