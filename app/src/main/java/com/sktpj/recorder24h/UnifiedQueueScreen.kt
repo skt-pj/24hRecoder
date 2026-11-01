@@ -59,7 +59,6 @@ private enum class QueueTab(val label: String) {
 @Composable
 internal fun UnifiedQueueScreen(
     records: List<SegmentRecord>,
-    activeQueueCount: Int,
     onSelect: (SegmentRecord) -> Unit,
     onRemove: (SegmentRecord) -> Unit
 ) {
@@ -88,7 +87,6 @@ internal fun UnifiedQueueScreen(
         when (selectedTab) {
             QueueTab.TRANSCRIPTION -> TranscriptionQueueTab(
                 records = records,
-                activeQueueCount = activeQueueCount,
                 onSelect = onSelect,
                 onRemove = onRemove
             )
@@ -100,7 +98,6 @@ internal fun UnifiedQueueScreen(
 @Composable
 private fun TranscriptionQueueTab(
     records: List<SegmentRecord>,
-    activeQueueCount: Int,
     onSelect: (SegmentRecord) -> Unit,
     onRemove: (SegmentRecord) -> Unit
 ) {
@@ -110,7 +107,19 @@ private fun TranscriptionQueueTab(
     var selectedPriorityId by remember { mutableStateOf<String?>(null) }
     var priorityRevision by remember { mutableIntStateOf(0) }
     val queued = remember(records, priorityRevision) {
-        visibleTranscriptionQueue(records)
+        records
+            .filter {
+                it.status == "QUEUED" ||
+                    it.status == "RETRY_WAIT" ||
+                    it.status == "TRANSCRIBING"
+            }
+            .sortedWith(
+                compareBy<SegmentRecord> {
+                    if (it.status == "TRANSCRIBING") 0 else 1
+                }.thenBy {
+                    if (it.queueEnqueuedAtMs > 0L) it.queueEnqueuedAtMs else it.stateChangedAtMs
+                }
+            )
     }
 
     LaunchedEffect(queued) {
@@ -127,8 +136,6 @@ private fun TranscriptionQueueTab(
 
     TranscriptionQueuePauseControls(
         paused = queuePaused,
-        visibleCount = queued.size,
-        activeCount = activeQueueCount,
         onToggle = {
             val next = !queuePaused
             queuePaused = next
@@ -210,8 +217,6 @@ private fun TranscriptionQueueTab(
 @Composable
 private fun TranscriptionQueuePauseControls(
     paused: Boolean,
-    visibleCount: Int,
-    activeCount: Int,
     onToggle: () -> Unit
 ) {
     Row(
@@ -222,21 +227,17 @@ private fun TranscriptionQueuePauseControls(
     ) {
         Column(Modifier.weight(1f)) {
             Text(
-                if (paused) "文字起こしキュー: 一時停止中" else "文字起こしキュー: 再開状態",
+                if (paused) "通常文字起こしキュー: 一時停止中" else "通常文字起こしキュー: 実行中",
                 style = MaterialTheme.typography.titleSmall
             )
             Text(
-                if (visibleCount == activeCount) {
-                    "実キュー $activeCount 件 / 音声ファイル $visibleCount 件を個別表示"
+                if (paused) {
+                    "処理は一時停止中"
                 } else {
-                    "実キュー $activeCount 件 / 表示 $visibleCount 件（件数不一致）"
+                    "処理中"
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = if (visibleCount == activeCount) {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                } else {
-                    MaterialTheme.colorScheme.error
-                }
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
         Spacer(Modifier.width(12.dp))
@@ -567,6 +568,9 @@ private fun transcriptionQueueStatusLabel(record: SegmentRecord): String {
     }
     return "$state • $source"
 }
+
+private fun transcriptionQueueSourceLabel(record: SegmentRecord): String =
+    if (record.reason.orEmpty().startsWith("MANUAL_")) "ユーザー追加" else "自動追加"
 
 private fun formatQueueDateTime(record: SegmentRecord): String {
     if (record.startedAtMs <= 0L) return "日時不明"
