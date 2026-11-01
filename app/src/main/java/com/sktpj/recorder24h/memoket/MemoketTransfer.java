@@ -80,7 +80,6 @@ public final class MemoketTransfer {
     /** The Oct-31 official HCI sent 05 after matching 02 metadata without a preceding 03. */
     public MemoketTransfer(CompletedFile save, FileSelector selector, int maxFiles,
             boolean verifyDeviceRemoval, boolean metadataOnlyFinalization) {
-        if (maxFiles < 1) throw new IllegalArgumentException("Invalid file limit");
         this(save, selector, maxFiles, verifyDeviceRemoval, metadataOnlyFinalization, true);
     }
 
