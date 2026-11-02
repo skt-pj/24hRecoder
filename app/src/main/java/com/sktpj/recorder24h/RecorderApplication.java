@@ -45,10 +45,10 @@ public final class RecorderApplication extends Application implements Applicatio
     @Override
     public void onCreate() {
         super.onCreate();
-        String processName = Application.getProcessName();
-        if (processName != null && processName.endsWith(":postprocess_asr")) {
-            installAsrCrashLogger(processName);
+        if ((getPackageName() + ":postprocess_asr").equals(Application.getProcessName())) {
+            installAsrCrashLogger(Application.getProcessName());
         }
+        String processName = Application.getProcessName();
         if (!getPackageName().equals(processName)) {
             return;
         }
