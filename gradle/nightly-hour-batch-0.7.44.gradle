@@ -296,7 +296,7 @@ private fun TranscriptionQueueTab(
     var queuePaused by remember { mutableStateOf(TranscriptionScheduler.isQueuePaused(context)) }
     var selectedPriorityId by remember { mutableStateOf<String?>(null) }
     var priorityRevision by remember { mutableIntStateOf(0) }
-    val activeSegments = remember(records, priorityRevision) { visibleTranscriptionQueue(records) }
+    val activeSegments = remember(records, priorityRevision) { activeTranscriptionQueueSegments(records) }
     val groups = remember(activeSegments, priorityRevision) { buildTranscriptionQueueGroups(activeSegments) }
 
     LaunchedEffect(groups) {
