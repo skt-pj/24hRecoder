@@ -172,3 +172,4 @@ dependencies {
 
 apply from: rootProject.file('gradle/digital-agency-ui-0.7.125.gradle')
 apply from: rootProject.file('gradle/transcription-version-0.7.126.gradle')
+apply from: rootProject.file('gradle/transcription-process-v0.7.127.gradle')

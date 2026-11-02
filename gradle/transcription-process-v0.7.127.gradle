@@ -1,0 +1,24 @@
+// Applied after all historical source transformations. Reject accidental cross-process regressions.
+def appMain = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionQueueService.java').getText('UTF-8')
+def schedulerMain = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionScheduler.java').getText('UTF-8')
+def manifestMain = rootProject.file('app/src/main/AndroidManifest.xml').getText('UTF-8')
+if (appMain.contains('TranscriptionScheduler.ensureDrainScheduled(context);')
+        || !appMain.contains('TranscriptionDrainReceiver.requestMainProcess(context, false);')) {
+    throw new GradleException('Direct ASR drain is still invoking WorkManager from a secondary process')
+}
+if (!schedulerMain.contains('TranscriptionDrainReceiver.requestMainProcess(app, false);')
+        || !schedulerMain.contains('TranscriptionDrainReceiver.requestMainProcess(app, true);')) {
+    throw new GradleException('Scheduler must redirect remote-process WorkManager operations')
+}
+if (!manifestMain.contains('android:name=".transcription.TranscriptionDrainReceiver"')
+        || !manifestMain.contains('android:process="${applicationId}"')) {
+    throw new GradleException('Explicit main-process transcription drain receiver missing')
+}
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1127)
+            output.versionName.set('0.7.127')
+        }
+    }
+}

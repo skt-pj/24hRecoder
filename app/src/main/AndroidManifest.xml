@@ -95,6 +95,13 @@
             android:foregroundServiceType="mediaProcessing|dataSync"
             tools:node="merge" />
 
+        <!-- Always delivered to the normal app process, not :postprocess_asr. -->
+        <receiver
+            android:name=".transcription.TranscriptionDrainReceiver"
+            android:enabled="true"
+            android:exported="false"
+            android:process="${applicationId}" />
+
         <receiver
             android:name=".transcription.SegmentReadyReceiver"
             android:enabled="true"

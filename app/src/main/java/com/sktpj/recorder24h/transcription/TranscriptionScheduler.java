@@ -231,6 +231,10 @@ public final class TranscriptionScheduler {
 
     public static void ensureDrainScheduled(Context context) {
         Context app = context.getApplicationContext();
+        if (!TranscriptionDrainReceiver.isMainProcess(app)) {
+            TranscriptionDrainReceiver.requestMainProcess(app, false);
+            return;
+        }
         if (isQueuePaused(app)) {
             return;
         }
@@ -246,6 +250,10 @@ public final class TranscriptionScheduler {
 
     static void appendDrainContinuationIfPending(Context context) {
         Context app = context.getApplicationContext();
+        if (!TranscriptionDrainReceiver.isMainProcess(app)) {
+            TranscriptionDrainReceiver.requestMainProcess(app, true);
+            return;
+        }
         if (isQueuePaused(app) || !hasQueuedWork(app)) {
             return;
         }
