@@ -1,0 +1,285 @@
+import java.nio.charset.StandardCharsets
+
+def mainFile = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt')
+def mainText = new String(mainFile.bytes, StandardCharsets.UTF_8)
+def patchRegion = { String text, String from, String until, String replacement ->
+    int start = text.indexOf(from)
+    int end = text.indexOf(until, start + from.length())
+    if (start < 0 || end < 0) throw new GradleException('Digital Agency UI anchor missing')
+    text.substring(0, start) + replacement + text.substring(end)
+}
+
+mainText = patchRegion(mainText, '@Composable\nprivate fun HomeScreen(', '\n@Composable\nprivate fun RecordingCard(', '''@Composable
+private fun HomeScreen(
+    dashboard: DashboardSnapshot,
+    onRequestStart: () -> Unit,
+    onStop: () -> Unit,
+    onOpenHistory: () -> Unit,
+    latestRecord: SegmentRecord?,
+    onOpenRecord: (SegmentRecord) -> Unit
+) {
+    var confirmStop by remember { mutableStateOf(false) }
+    if (confirmStop) {
+        AlertDialog(
+            onDismissRequest = { confirmStop = false },
+            title = { Text("録音を停止しますか？") },
+            text = { Text("録音を停止します。ホームから再開できます。") },
+            confirmButton = {
+                Button(onClick = { confirmStop = false; onStop() },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error))
+                { Text("停止する") }
+            },
+            dismissButton = { TextButton(onClick = { confirmStop = false }) { Text("キャンセル") } }
+        )
+    }
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("ホーム", style = MaterialTheme.typography.headlineMedium)
+                Text("録音状態と保存状況", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        item { RecordingCard(dashboard, onRequestStart, onRequestStop = { confirmStop = true }) }
+        item { DashboardSectionHeading("保存状況") }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    DashboardMetric("保持音声", dashboard.retainedAudioCount.toString() + "件", Modifier.weight(1f))
+                    DashboardMetric("確定文字起こし", dashboard.transcriptCount.toString() + "件", Modifier.weight(1f))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    DashboardMetric("実キュー", dashboard.activeQueueCount.toString() + "件", Modifier.weight(1f))
+                    DashboardMetric("要確認", dashboard.needsAttentionCount.toString() + "件", Modifier.weight(1f))
+                }
+            }
+        }
+        item { DashboardSectionHeading("最新の記録") }
+        item {
+            if (latestRecord == null) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                    Text("記録はまだありません", modifier = Modifier.fillMaxWidth().padding(20.dp))
+                }
+            } else {
+                Card(
+                    onClick = { onOpenRecord(latestRecord) },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(formatTimeRange(latestRecord), modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.titleMedium)
+                            StatusPill(recordStatusLabel(latestRecord), recordTone(latestRecord))
+                        }
+                        Text(latestRecord.transcriptText?.takeIf { it.isNotBlank() }
+                            ?: "文字起こし結果はまだありません",
+                            maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        Text("詳細を見る", style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+        }
+        item { StorageCard(dashboard) }
+        item { TranscriptionCard(dashboard, onOpenHistory) }
+    }
+}
+
+@Composable
+private fun DashboardSectionHeading(title: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Box(Modifier.width(4.dp).height(22.dp).background(MaterialTheme.colorScheme.primary))
+        Text(title, style = MaterialTheme.typography.titleLarge)
+    }
+}
+
+@Composable
+private fun DashboardMetric(label: String, value: String, modifier: Modifier = Modifier) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(label, style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+''')
+
+def requirePatch = { String oldText, String newText ->
+    if (!mainText.contains(oldText)) throw new GradleException('Digital Agency UI replacement missing')
+    mainText = mainText.replace(oldText, newText)
+}
+requirePatch(
+'''    LaunchedEffect(section, refresh, selectedId) {
+        if (section == AppSection.HISTORY || section == AppSection.QUEUE) {''',
+'''    LaunchedEffect(section, refresh, selectedId) {
+        if (section == AppSection.HOME || section == AppSection.HISTORY || section == AppSection.QUEUE) {''')
+requirePatch('} while (section == AppSection.HISTORY || section == AppSection.QUEUE)',
+             '} while (section == AppSection.HOME || section == AppSection.HISTORY || section == AppSection.QUEUE)')
+requirePatch(
+'''                            onOpenHistory = { section = AppSection.HISTORY; refresh++ }
+                        )''',
+'''                            onOpenHistory = { section = AppSection.HISTORY; refresh++ },
+                            latestRecord = records.firstOrNull(),
+                            onOpenRecord = { record -> section = AppSection.HISTORY; selectedId = record.segmentId }
+                        )''')
+requirePatch(
+'''            topBar = {
+                TopAppBar(''',
+'''            topBar = {
+                Column {
+                    Box(Modifier.fillMaxWidth().height(4.dp).background(MaterialTheme.colorScheme.primary))
+                    TopAppBar(''')
+requirePatch(
+'''                )
+            },
+            bottomBar = {''',
+'''                    )
+                }
+            },
+            bottomBar = {''')
+requirePatch(
+'''    MaterialTheme(
+        colorScheme = scheme,''',
+'''    val blue = androidx.compose.ui.graphics.Color(0xFF0046C8)
+    val accessibleScheme = if (dark) scheme.copy(
+        primary = androidx.compose.ui.graphics.Color(0xFFABC7FF),
+        onPrimary = androidx.compose.ui.graphics.Color(0xFF062C69),
+        primaryContainer = androidx.compose.ui.graphics.Color(0xFF163D76),
+        onPrimaryContainer = androidx.compose.ui.graphics.Color(0xFFDCE8FF)
+    ) else scheme.copy(
+        primary = blue,
+        onPrimary = androidx.compose.ui.graphics.Color.White,
+        primaryContainer = androidx.compose.ui.graphics.Color(0xFFDBE8FF),
+        onPrimaryContainer = androidx.compose.ui.graphics.Color(0xFF102D5B),
+        secondaryContainer = androidx.compose.ui.graphics.Color(0xFFF1F4FA),
+        surfaceVariant = androidx.compose.ui.graphics.Color(0xFFF4F6FA),
+        outlineVariant = androidx.compose.ui.graphics.Color(0xFFCDD5E0)
+    )
+    MaterialTheme(
+        colorScheme = accessibleScheme,''')
+mainText = mainText.replace('small = RoundedCornerShape(12.dp),\n            medium = RoundedCornerShape(20.dp),\n            large = RoundedCornerShape(28.dp)',
+    'small = RoundedCornerShape(8.dp),\n            medium = RoundedCornerShape(12.dp),\n            large = RoundedCornerShape(16.dp)')
+mainText = mainText.replace(
+    'Card(onClick = onClick, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {',
+    '''Card(
+        onClick = onClick,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shape = RoundedCornerShape(12.dp)
+    ) {''')
+mainText = mainText.replace(
+    'Card(colors = CardDefaults.cardColors(containerColor = cardColor)) {',
+    '''Card(colors = CardDefaults.cardColors(containerColor = cardColor),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shape = RoundedCornerShape(12.dp)) {''')
+mainText = mainText.replace(
+    'Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {',
+    '''Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shape = RoundedCornerShape(12.dp)) {''')
+
+def detailStart = mainText.indexOf('private fun RecordDetailScreen(record: SegmentRecord)')
+def audioFunctionStart = mainText.indexOf('private fun AudioPlaybackCard(', detailStart)
+def detailEnd = audioFunctionStart >= 0 ? mainText.lastIndexOf('@Composable', audioFunctionStart) : -1
+if (detailStart >= 0 && detailEnd >= 0) {
+def detailHeaderStart = mainText.lastIndexOf('@Composable\n', detailStart)
+mainText = mainText.substring(0, detailHeaderStart) + '''@Composable
+private fun RecordDetailScreen(record: SegmentRecord) {
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(formatTimeRange(record), style = MaterialTheme.typography.headlineMedium)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(formatDay(record.sortTimeMs), modifier = Modifier.weight(1f),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        StatusPill(recordStatusLabel(record), recordTone(record))
+                    }
+                    Text("ID: " + record.segmentId.take(8), style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        item { TranscriptCard(record) }
+        item {
+            if (record.audioAvailable && record.audioPath != null) {
+                AudioPlaybackCard(record)
+            } else {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("録音データ", style = MaterialTheme.typography.titleLarge)
+                        Text(if (record.hasTranscript) "音声削除済み" else "音声なし",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+        item { TranscriptionProcessingCard(record) }
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("詳細", style = MaterialTheme.typography.titleLarge)
+                    InfoRow("状態", recordStatusLabel(record))
+                    InfoRow("開始", formatDateTime(record.startedAtMs))
+                    InfoRow("終了", formatDateTime(record.endedAtMs))
+                    InfoRow("長さ", if (record.durationMs > 0L) formatDuration(record.durationMs) else "-")
+                    InfoRow("ファイル", record.fileName ?: "-")
+                    InfoRow("サイズ", SegmentHistoryRepository.formatBytes(record.fileSizeBytes))
+                    InfoRow("文字起こし", record.transcriptModel?.ifBlank { "-" } ?: "-")
+                    if (!record.reason.isNullOrBlank()) InfoRow("理由", record.reason)
+                }
+            }
+        }
+    }
+}
+''' + mainText.substring(detailEnd)
+}
+
+def controlOwner = mainText.indexOf('private fun RecordingCard(')
+def controlStart = mainText.indexOf('            if (active) {\n                Button(', controlOwner)
+def controlEnd = mainText.indexOf('\n        }\n    }\n}\n\n@Composable\nprivate fun StorageCard', controlStart)
+if (controlStart >= 0 && controlEnd >= 0) {
+def controlText = mainText.substring(controlStart, controlEnd)
+mainText = mainText.substring(0, controlStart) + mainText.substring(controlEnd)
+def controlsBeforeDetails = mainText.indexOf('            if (dashboard.heartbeatMs > 0L)', controlOwner)
+if (controlsBeforeDetails < 0) throw new GradleException('Recording status location not found')
+mainText = mainText.substring(0, controlsBeforeDetails) + controlText + '\n' + mainText.substring(controlsBeforeDetails)
+}
+
+mainFile.setText(mainText, 'UTF-8')
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1125)
+            output.versionName.set('0.7.125')
+        }
+    }
+}

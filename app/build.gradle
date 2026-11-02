@@ -169,3 +169,5 @@ dependencies {
     implementation 'androidx.compose.material:material-icons-core'
     debugImplementation 'androidx.compose.ui:ui-tooling'
 }
+
+apply from: rootProject.file('gradle/digital-agency-ui-0.7.125.gradle')
