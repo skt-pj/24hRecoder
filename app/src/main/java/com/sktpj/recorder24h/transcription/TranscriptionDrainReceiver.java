@@ -31,7 +31,12 @@ public final class TranscriptionDrainReceiver extends BroadcastReceiver {
     static void requestMainProcess(Context context, boolean append) {
         Context app = context.getApplicationContext();
         if (isMainProcess(app)) {
-            throw new IllegalStateException("Main-process drain routing must originate in a secondary process");
+            if (append) {
+                TranscriptionScheduler.appendDrainContinuationIfPending(app);
+            } else {
+                TranscriptionScheduler.ensureDrainScheduled(app);
+            }
+            return;
         }
         Intent intent = new Intent(app, TranscriptionDrainReceiver.class)
                 .setAction(append ? ACTION_APPEND : ACTION_ENSURE);
