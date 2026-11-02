@@ -25,7 +25,7 @@ public final class TranscriptionDrainReceiver extends BroadcastReceiver {
     private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
 
     static boolean isMainProcess(Context context) {
-        return context.getPackageName().equals(Application.getProcessName());
+        return DrainProcessPolicy.isMainProcess(Application.getProcessName(), context.getPackageName());
     }
 
     static void requestMainProcess(Context context, boolean append) {
