@@ -1148,7 +1148,8 @@ public final class MemoketRemoteRecordingService extends Service {
             monitorDriven = false;
         }
         if (continuousMode && !continuousStopRequested
-                && RecordingIntentStore.isRequested(this)) {
+                && RecordingIntentStore.isRequested(this)
+                && (message == null || !message.startsWith("Gemに未回収の録音"))) {
             stopHandler.removeCallbacks(streamStopAtFiveSeconds);
             stopHandler.removeCallbacks(stopWatchdog);
             stopHandler.removeCallbacks(continuousHeartbeat);
