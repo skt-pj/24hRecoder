@@ -49,8 +49,8 @@ class TranscriptionQueueDisplayPolicyTest {
         val result = activeTranscriptionQueueSegments(nightly + manual)
         assertEquals(7, result.size)
         assertEquals(7, result.map { it.segmentId }.distinct().size)
-        assertEquals(6, result.count { transcriptionQueueSourceLabel(it) == "夜間確定" })
-        assertEquals(1, result.count { transcriptionQueueSourceLabel(it) == "ユーザー追加" })
+        assertEquals(6, result.count { queueSourceForSegment(it) == "夜間確定" })
+        assertEquals(1, result.count { queueSourceForSegment(it) == "ユーザー追加" })
     }
 
     @Test fun includesAllQueueStatusesButNotReadyOrCompletedAudio() {
