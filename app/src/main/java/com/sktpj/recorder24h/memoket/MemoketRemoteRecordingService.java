@@ -387,11 +387,6 @@ public final class MemoketRemoteRecordingService extends Service {
         stopSelf();
     }
 
-    /**
-     * A 00 01 status is a file/transfer status, not proof that Gem is recording.
-     * Recover and acknowledge only a filename linked to a previously requested
-     * stop from this application. Unknown files must never be acknowledged.
-     */
     private synchronized boolean recoverOwnedPendingFile() {
         String filename = session.recordingFileHint();
         long started = MemoketSettings.recordingStartedAt(this);
