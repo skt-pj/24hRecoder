@@ -96,6 +96,8 @@ public final class TranscriptionQueueService extends Service {
             executor.execute(() -> {
                 try {
                     drainQueue();
+                } catch (Throwable crash) {
+                    logQueueFailure(getApplicationContext(), crash);
                 } finally {
                     draining.set(false);
                     stopForeground(STOP_FOREGROUND_REMOVE);
@@ -139,9 +141,14 @@ public final class TranscriptionQueueService extends Service {
                     continue;
                 }
 
-                // Prevent a pre-0.7.11 legacy per-segment job from later running the same segment.
-                WorkManager.getInstance(context).cancelUniqueWork(TranscriptionScheduler.uniqueWorkName(segmentId));
-
+                try {
+                    AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_ITEM_SELECTED",
+                            new JSONObject()
+                                    .put("segmentId", segmentId)
+                                    .put("audioPresent", new File(audioPath).isFile())
+                                    .put("reason", next.getReason() == null ? JSONObject.NULL : next.getReason()));
+                } catch (Exception ignored) {
+                }
                 boolean manual = next.getReason() != null && next.getReason().startsWith("MANUAL_");
                 processOne(context, segmentId, new File(audioPath), manual);
             }
@@ -328,6 +335,18 @@ public final class TranscriptionQueueService extends Service {
                     return;
                 }
             }
+        }
+    }
+
+    private static void logQueueFailure(Context context, Throwable crash) {
+        try {
+            JSONObject details = new JSONObject();
+            details.put("type", crash.getClass().getName());
+            details.put("message", safeMessage(crash));
+            String trace = android.util.Log.getStackTraceString(crash);
+            details.put("stackTrace", trace.length() > 12000 ? trace.substring(0, 12000) : trace);
+            AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_UNHANDLED", details);
+        } catch (Throwable ignored) {
         }
     }
 

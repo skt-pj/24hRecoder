@@ -1,0 +1,22 @@
+def asrService = rootProject.file('app/src/main/java/com/sktpj/recorder24h/transcription/TranscriptionQueueService.java').getText('UTF-8')
+if (asrService.contains('cancelUniqueWorkCrossProcess(context, TranscriptionScheduler.uniqueWorkName(segmentId))')
+        || asrService.contains('WorkManager.getInstance(context).cancelUniqueWork(TranscriptionScheduler.uniqueWorkName(segmentId))')) {
+    throw new GradleException('Transcription direct queue still cancels cross-process work before inference')
+}
+if (!asrService.contains('TRANSCRIPTION_DIRECT_QUEUE_UNHANDLED')
+        || !asrService.contains('TRANSCRIPTION_DIRECT_QUEUE_ITEM_SELECTED')) {
+    throw new GradleException('Transcription exception and selection diagnostics missing')
+}
+def asrApplication = rootProject.file('app/src/main/java/com/sktpj/recorder24h/RecorderApplication.java').getText('UTF-8')
+if (!asrApplication.contains('POSTPROCESS_ASR_UNCAUGHT_EXCEPTION')) {
+    throw new GradleException('ASR uncaught crash diagnostics missing')
+}
+
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1126)
+            output.versionName.set('0.7.126')
+        }
+    }
+}
