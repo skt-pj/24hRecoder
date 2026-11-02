@@ -1,6 +1,5 @@
 package com.sktpj.recorder24h.memoket;
 
-/** Never ACK a Gem file unless it falls within this app's persisted start/stop window. */
 final class MemoketPendingFilePolicy {
     private MemoketPendingFilePolicy() {}
 
@@ -12,7 +11,7 @@ final class MemoketPendingFilePolicy {
         }
         try {
             return new MemoketRecordingWindow(startedAtMs, stopRequestedAtMs, zoneId).matches(name);
-        } catch (IllegalArgumentException ex) {
+        } catch (RuntimeException ex) {
             return false;
         }
     }
