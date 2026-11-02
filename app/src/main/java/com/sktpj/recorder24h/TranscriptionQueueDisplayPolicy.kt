@@ -2,8 +2,7 @@ package com.sktpj.recorder24h
 
 import com.sktpj.recorder24h.ui.SegmentRecord
 
-/** One visible queue row always represents exactly one persisted audio segment. */
-internal fun visibleTranscriptionQueue(records: List<SegmentRecord>): List<SegmentRecord> =
+internal fun activeTranscriptionQueueSegments(records: List<SegmentRecord>): List<SegmentRecord> =
     records
         .filter { it.status == "QUEUED" || it.status == "RETRY_WAIT" || it.status == "TRANSCRIBING" }
         .distinctBy { it.segmentId }
