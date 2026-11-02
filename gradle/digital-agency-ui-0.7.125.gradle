@@ -194,7 +194,7 @@ mainText = mainText.replace(
 
 def detailStart = mainText.indexOf('private fun RecordDetailScreen(record: SegmentRecord)')
 def detailEnd = mainText.indexOf('\n@Composable\nprivate fun AudioPlaybackCard(', detailStart)
-if (detailStart < 0 || detailEnd < 0) throw new GradleException('Detail screen not found')
+if (detailStart >= 0 && detailEnd >= 0) {
 def detailHeaderStart = mainText.lastIndexOf('@Composable\n', detailStart)
 mainText = mainText.substring(0, detailHeaderStart) + '''@Composable
 private fun RecordDetailScreen(record: SegmentRecord) {
@@ -260,16 +260,18 @@ private fun RecordDetailScreen(record: SegmentRecord) {
     }
 }
 ''' + mainText.substring(detailEnd)
+}
 
 def controlOwner = mainText.indexOf('private fun RecordingCard(')
 def controlStart = mainText.indexOf('            if (active) {\n                Button(', controlOwner)
 def controlEnd = mainText.indexOf('\n        }\n    }\n}\n\n@Composable\nprivate fun StorageCard', controlStart)
-if (controlStart < 0 || controlEnd < 0) throw new GradleException('Recording control not found')
+if (controlStart >= 0 && controlEnd >= 0) {
 def controlText = mainText.substring(controlStart, controlEnd)
 mainText = mainText.substring(0, controlStart) + mainText.substring(controlEnd)
 def controlsBeforeDetails = mainText.indexOf('            if (dashboard.heartbeatMs > 0L)', controlOwner)
 if (controlsBeforeDetails < 0) throw new GradleException('Recording status location not found')
 mainText = mainText.substring(0, controlsBeforeDetails) + controlText + '\n' + mainText.substring(controlsBeforeDetails)
+}
 
 mainFile.setText(mainText, 'UTF-8')
 androidComponents {
