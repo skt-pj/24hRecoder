@@ -46,6 +46,9 @@ public final class RecorderApplication extends Application implements Applicatio
     public void onCreate() {
         super.onCreate();
         String processName = Application.getProcessName();
+        if (processName != null && processName.endsWith(":postprocess_asr")) {
+            installAsrCrashLogger(processName);
+        }
         if (!getPackageName().equals(processName)) {
             return;
         }
@@ -57,6 +60,24 @@ public final class RecorderApplication extends Application implements Applicatio
         NightlyHourlyTranscriptionScheduler.ensureScheduled(this);
         TranscriptionScheduler.recoverInterruptedAndEnsureDrainAsync(this);
         registerActivityLifecycleCallbacks(this);
+    }
+
+    private void installAsrCrashLogger(String processName) {
+        Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
+            try {
+                JSONObject details = new JSONObject();
+                details.put("process", processName);
+                details.put("thread", thread.getName());
+                details.put("type", error.getClass().getName());
+                details.put("message", error.getMessage() == null ? "" : error.getMessage());
+                String trace = android.util.Log.getStackTraceString(error);
+                details.put("stackTrace", trace.length() > 12000 ? trace.substring(0, 12000) : trace);
+                AppLogger.event(this, "POSTPROCESS_ASR_UNCAUGHT_EXCEPTION", details);
+            } catch (Throwable ignored) {
+            }
+            if (previous != null) previous.uncaughtException(thread, error);
+        });
     }
 
     @Override
