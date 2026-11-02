@@ -398,9 +398,7 @@ public final class MemoketRemoteRecordingService extends Service {
         long stopped = MemoketSettings.recordingStopRequestedAt(this);
         String zone = MemoketSettings.recordingStartedZone(this);
         if (!MemoketPendingFilePolicy.mayAcknowledge(filename, started, stopped, zone)) {
-            trace.phase("GEM_PENDING_FILE_NOT_OWNED",
-                    new JSONObject().put("filename", filename).put("startedAtMs", started)
-                            .put("stopRequestedAtMs", stopped));
+            trace.phase("GEM_PENDING_FILE_NOT_OWNED", stateDetails());
             return false;
         }
 
@@ -684,7 +682,7 @@ public final class MemoketRemoteRecordingService extends Service {
             }
             synchronized (MemoketRemoteRecordingService.this) {
                 commandBusy = false;
-                if (streamCaptureMode && stopPending && !streamCaptureTimerStarted
+                if (streamCaptureMode && !recoveringOwnedPendingFile && stopPending && !streamCaptureTimerStarted
                         && Arrays.equals(lastCommand, MemoketTransfer.initialCommand())) {
                     streamCaptureTimerStarted = true;
                     trace.phase("STREAM_CAPTURE_5S_TIMER_STARTED", stateDetails());
