@@ -14,7 +14,7 @@ internal fun activeTranscriptionQueueSegments(records: List<SegmentRecord>): Lis
             }
         )
 
-internal fun transcriptionQueueSourceLabel(record: SegmentRecord): String = when {
+internal fun queueSourceForSegment(record: SegmentRecord): String = when {
     record.reason.orEmpty().startsWith("MANUAL_") -> "ユーザー追加"
     record.reason.orEmpty().startsWith("NIGHTLY_HOURLY_") -> "夜間確定"
     else -> "自動追加"
