@@ -22,6 +22,25 @@ public class MemoketActiveSessionTest {
         assertEquals("WAIT_2702", session.debugStep());
     }
 
+
+    @Test
+    public void observedNov02PendingFileStatusPreservesNameWithoutProvingRecording() {
+        MemoketSessionProtocol session = new MemoketSessionProtocol();
+        session.allowActiveRecordingStatus(true);
+        assertArrayEquals(new byte[]{0}, session.firstCommand());
+        byte[] name = "20261102_134047_2.opus".getBytes(StandardCharsets.US_ASCII);
+        byte[] status = new byte[4 + name.length];
+        status[0] = 0;
+        status[1] = 1;
+        status[2] = (byte) 0xe5;
+        status[3] = (byte) 0x5e;
+        System.arraycopy(name, 0, status, 4, name.length);
+        assertArrayEquals(new byte[]{0x27, 0x01}, session.onResponse(status));
+        assertTrue(session.busyOrTransferringReported());
+        assertFalse(session.initialIdleReported());
+        assertEquals("20261102_134047_2.opus", session.recordingFileHint());
+    }
+
     @Test
     public void idleStatusStillAdvancesHandshake() {
         MemoketSessionProtocol session = new MemoketSessionProtocol();

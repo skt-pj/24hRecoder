@@ -15,7 +15,6 @@ public final class MemoketTransferStatus {
         byte[] name = selectedName.getBytes(StandardCharsets.US_ASCII);
         if (payload == null || payload.length != name.length + 4
                 || payload[0] != 0 || payload[1] != 1
-                || payload[2] != 0 || payload[3] != 2
                 || !Arrays.equals(Arrays.copyOfRange(payload, 4, payload.length), name)) {
             throw new IllegalStateException("Gem 00 transfer status did not match selected recording");
         }

@@ -94,30 +94,30 @@ jobs:
           printf '%s\n' "$VERIFY_OUT"
           printf '%s\n' "$VERIFY_OUT" | grep -F "Signer #1 certificate SHA-256 digest: e648320071b8ab0de038f76790064b99461b67d7dbe7ce7506d12a5f4fa884d8"
 
-      - name: Verify APK version 0.7.127
+      - name: Verify APK version 0.7.128
         run: |
           set -euo pipefail
           AAPT="$ANDROID_HOME/build-tools/36.0.0/aapt"
           APK="app/build/outputs/apk/debug/app-debug.apk"
           "$AAPT" dump badging "$APK" | tee app/build/outputs/apk/debug/badging.txt
-          grep -F "versionCode='1127'" app/build/outputs/apk/debug/badging.txt
-          grep -F "versionName='0.7.127'" app/build/outputs/apk/debug/badging.txt
+          grep -F "versionCode='1128'" app/build/outputs/apk/debug/badging.txt
+          grep -F "versionName='0.7.128'" app/build/outputs/apk/debug/badging.txt
 
       - name: Generate APK integrity and build metadata
         run: |
           set -euo pipefail
           mkdir -p release
           APK="app/build/outputs/apk/debug/app-debug.apk"
-          cp "$APK" release/24hRecoder-0.7.127-debug.apk
+          cp "$APK" release/24hRecoder-0.7.128-debug.apk
           cd release
-          sha256sum 24hRecoder-0.7.127-debug.apk > 24hRecoder-0.7.127-debug.apk.sha256
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs 24hRecoder-0.7.127-debug.apk > signing-certificate.txt
+          sha256sum 24hRecoder-0.7.128-debug.apk > 24hRecoder-0.7.128-debug.apk.sha256
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs 24hRecoder-0.7.128-debug.apk > signing-certificate.txt
           grep -F "Signer #1 certificate SHA-256 digest: e648320071b8ab0de038f76790064b99461b67d7dbe7ce7506d12a5f4fa884d8" signing-certificate.txt
           {
             printf 'repository=%s\n' "$GITHUB_REPOSITORY"
             printf 'branch=%s\n' "$GITHUB_REF_NAME"
             printf 'commit=%s\n' "$GITHUB_SHA"
-            printf 'versionName=0.7.127-debug\nversionCode=1127\n'
+            printf 'versionName=0.7.128-debug\nversionCode=1128\n'
             printf 'workflow_run=%s\n' "$GITHUB_RUN_ID"
             printf 'build_and_test=passed\n'
             printf 'signing=commonStable\n'
@@ -126,10 +126,10 @@ jobs:
       - name: Upload signed debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: 24hRecoder-v0.7.127-debug
+          name: 24hRecoder-v0.7.128-debug
           path: |
-            release/24hRecoder-0.7.127-debug.apk
-            release/24hRecoder-0.7.127-debug.apk.sha256
+            release/24hRecoder-0.7.128-debug.apk
+            release/24hRecoder-0.7.128-debug.apk.sha256
             release/signing-certificate.txt
             release/build-metadata.txt
           if-no-files-found: error
@@ -140,7 +140,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="v0.7.127-debug"
+          TAG="v0.7.128-debug"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git rev-parse --verify "refs/tags/$TAG" >/dev/null 2>&1; then
@@ -149,14 +149,14 @@ jobs:
               exit 1
             }
           else
-            git tag -a "$TAG" -m "24hRecoder 0.7.127-debug"
+            git tag -a "$TAG" -m "24hRecoder 0.7.128-debug"
             git push origin "refs/tags/$TAG"
           fi
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release already published for $TAG"
           else
-            gh release create "$TAG"               release/24hRecoder-0.7.127-debug.apk               release/24hRecoder-0.7.127-debug.apk.sha256               release/signing-certificate.txt               release/build-metadata.txt               --verify-tag --prerelease               --title "24hRecoder 0.7.127-debug"               --notes "Route all transcription drain WorkManager scheduling to the main app process, fixing an IllegalStateException after completed ASR queue items. Real-device verification pending."
+            gh release create "$TAG"               release/24hRecoder-0.7.128-debug.apk               release/24hRecoder-0.7.128-debug.apk.sha256               release/signing-certificate.txt               release/build-metadata.txt               --verify-tag --prerelease               --title "24hRecoder 0.7.128-debug"               --notes "Fix continuous Gem START being treated as STOP and safely recover pending files owned by this app. Retain ASR process-boundary fix. Device validation pending."
           fi
           mkdir -p release-check
-          gh release download "$TAG" --pattern "24hRecoder-0.7.127-debug.apk" --dir release-check
-          test "$(sha256sum release-check/24hRecoder-0.7.127-debug.apk | cut -d' ' -f1)" =                "$(sha256sum release/24hRecoder-0.7.127-debug.apk | cut -d' ' -f1)"
+          gh release download "$TAG" --pattern "24hRecoder-0.7.128-debug.apk" --dir release-check
+          test "$(sha256sum release-check/24hRecoder-0.7.128-debug.apk | cut -d' ' -f1)" =                "$(sha256sum release/24hRecoder-0.7.128-debug.apk | cut -d' ' -f1)"

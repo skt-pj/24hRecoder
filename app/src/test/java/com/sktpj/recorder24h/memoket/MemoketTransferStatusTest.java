@@ -15,6 +15,16 @@ public final class MemoketTransferStatusTest {
         MemoketTransferStatus.verifyIntermediate00(payload, FILE);
     }
 
+    @Test public void nov02AcceptsOtherTwoByteStatusForSameFile() {
+        byte[] name = FILE.getBytes(StandardCharsets.US_ASCII);
+        byte[] payload = new byte[name.length + 4];
+        payload[1] = 1;
+        payload[2] = (byte) 0xe5;
+        payload[3] = (byte) 0x5e;
+        System.arraycopy(name, 0, payload, 4, name.length);
+        MemoketTransferStatus.verifyIntermediate00(payload, FILE);
+    }
+
     @Test(expected = IllegalStateException.class)
     public void ut11RejectsOtherFilenameDuring00Status() {
         byte[] name = "20261009_224936_2.opus".getBytes(StandardCharsets.US_ASCII);

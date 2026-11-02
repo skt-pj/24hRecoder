@@ -161,6 +161,7 @@ public final class MemoketRemoteRecordingService extends Service {
         recordingActive = false;
         stopPending = false;
         stopCompleted = false;
+        recoveringOwnedPendingFile = false;
         manualStopPending = false;
         commandBusy = false;
         notifySetupStep = 0;
@@ -178,6 +179,7 @@ public final class MemoketRemoteRecordingService extends Service {
     private boolean streamCaptureTimerStarted;
     private boolean streamStopRequested;
     private boolean streamMetadataReceived;
+    private boolean recoveringOwnedPendingFile;
     private final Runnable streamStopAtFiveSeconds = () -> {
         if (!streamCaptureMode || stopCompleted || streamStopRequested || !stopPending) return;
         streamStopRequested = true;
@@ -204,8 +206,10 @@ public final class MemoketRemoteRecordingService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        String action = intent == null ? null : intent.getAction();
-        if (action == null || ACTION_START_CONTINUOUS.equals(action)) {
+        String action = MemoketContinuousIntentPolicy.resolveAction(
+                intent == null ? null : intent.getAction(),
+                RecordingIntentStore.isRequested(this), MemoketSettings.source(this));
+        if (action == null) {
             continuousStopRequested = true;
             stopHandler.removeCallbacks(continuousRetry);
             stopHandler.removeCallbacks(continuousHeartbeat);
@@ -215,7 +219,7 @@ public final class MemoketRemoteRecordingService extends Service {
             }
             return START_NOT_STICKY;
         }
-        if (ACTION_STOP_CONTINUOUS.equals(action)) {
+        if (MemoketContinuousIntentPolicy.isContinuousStop(action)) {
             continuousStopRequested = true;
             stopHandler.removeCallbacks(continuousRetry);
             stopHandler.removeCallbacks(continuousHeartbeat);
@@ -231,7 +235,7 @@ public final class MemoketRemoteRecordingService extends Service {
             }
             return START_NOT_STICKY;
         }
-        boolean continuousRequest = ACTION_START_CONTINUOUS.equals(action);
+        boolean continuousRequest = MemoketContinuousIntentPolicy.isContinuousStart(action);
         boolean stopRequest = ACTION_STOP_RECORDING.equals(action);
         boolean fiveSecondRequest = ACTION_RECORD_FIVE_SECONDS.equals(action);
         boolean manualStartRequest = ACTION_MANUAL_TEST_START.equals(action);
@@ -290,6 +294,7 @@ public final class MemoketRemoteRecordingService extends Service {
             RecorderStateStore.setInputSource(this, "MEMOKET");
         }
         streamCaptureMode = fiveSecondRequest || continuousRequest;
+        recoveringOwnedPendingFile = false;
         fiveSecondRecording = false;
         diagStartOnly = diagnosticStart;
         diagStopOnly = diagnosticStop != 0;
@@ -380,6 +385,47 @@ public final class MemoketRemoteRecordingService extends Service {
         stopForeground(STOP_FOREGROUND_REMOVE);
         closeGatt();
         stopSelf();
+    }
+
+    private synchronized boolean recoverOwnedPendingFile() {
+        String filename = session.recordingFileHint();
+        long started = MemoketSettings.recordingStartedAt(this);
+        long stopped = MemoketSettings.recordingStopRequestedAt(this);
+        String zone = MemoketSettings.recordingStartedZone(this);
+        if (!MemoketPendingFilePolicy.mayAcknowledge(filename, started, stopped, zone)) {
+            trace.phase("GEM_PENDING_FILE_NOT_OWNED", stateDetails());
+            return false;
+        }
+
+        MemoketRecordingWindow window = new MemoketRecordingWindow(started, stopped, zone);
+        recoveringOwnedPendingFile = true;
+        stopPending = true;
+        recordingActive = false;
+        stopSavedFiles = 0;
+        stopNotifyStep = 3;
+        inFlightMetadata = false;
+        midTransferStatusStep = 0;
+        earlyAudio.clear();
+        lastStopActivityAtMs = System.currentTimeMillis();
+        lastStopDataAtMs = lastStopActivityAtMs;
+        lastMetadataRequestAtMs = 0;
+        lastDeleteStatusProbeAtMs = 0;
+        deleteStatusStartedAtMs = 0;
+        stopTransfer = new MemoketTransfer((name, staged, crc) -> {
+            new MemoketRecordingStore(this).persist(name, staged, crc);
+            stopSavedFiles++;
+            trace.filePersisted(name, staged.length(), crc);
+        }, new MemoketRecordingStore(this).directory(),
+                name -> filename.equals(name) && window.matches(name),
+                1, true, false, true);
+        trace.phase("GEM_OWNED_PENDING_FILE_RECOVERY_REQUESTED", stateDetails());
+        updateState("前回録音の安全な取得中");
+        updateNotification("Gemの前回録音を検証・保存中");
+        if (continuousMode) RecorderStateStore.write(this, "TRANSFERRING", null, null);
+        queue(MemoketTransfer.initialCommand());
+        stopHandler.removeCallbacks(stopWatchdog);
+        stopHandler.postDelayed(stopWatchdog, 500L);
+        return true;
     }
 
     private synchronized void beginStreamCapture() {
@@ -631,7 +677,7 @@ public final class MemoketRemoteRecordingService extends Service {
             }
             synchronized (MemoketRemoteRecordingService.this) {
                 commandBusy = false;
-                if (streamCaptureMode && stopPending && !streamCaptureTimerStarted
+                if (streamCaptureMode && !recoveringOwnedPendingFile && stopPending && !streamCaptureTimerStarted
                         && Arrays.equals(lastCommand, MemoketTransfer.initialCommand())) {
                     streamCaptureTimerStarted = true;
                     trace.phase("STREAM_CAPTURE_5S_TIMER_STARTED", stateDetails());
@@ -673,7 +719,8 @@ public final class MemoketRemoteRecordingService extends Service {
             if (next != null && next.getDescriptor(CCCD) == null) next = null;
         }
         if (next == null) {
-            session.allowActiveRecordingStatus(diagStopOnly || diagFileOnly || continuousMode);
+            session.allowActiveRecordingStatus(diagStopOnly || diagFileOnly || continuousMode
+                    || (!manualTestMode && !diagStartOnly));
             trace.phase(diagStopOnly ? "HANDSHAKE_RECORDING_ACTIVE_ALLOWED_STOP_ONLY"
                     : diagFileOnly ? "HANDSHAKE_RECORDING_ACTIVE_ALLOWED_FETCH_ONLY"
                     : "HANDSHAKE_STARTED");
@@ -705,6 +752,13 @@ public final class MemoketRemoteRecordingService extends Service {
                 if (next != null) queue(next);
                 if (session.isReady() && recordingStartPending) {
                     recordingStartPending = false;
+                    if (session.busyOrTransferringReported() && !diagStopOnly && !diagFileOnly) {
+                        if (recoverOwnedPendingFile()) return;
+                        trace.phase("GEM_PENDING_FILE_UNOWNED_PROTECTED", stateDetails());
+                        finishWithError("Gemに未回収の録音があります。今回の録音として確認できないため、"
+                                + "既存音声を保護して新規録音を中断しました");
+                        return;
+                    }
                     if (diagStopOnly) {
                         trace.phase("DIAG_STOP_ONLY_NO_START_03", stateDetails());
                         beginManualTestStop();
@@ -922,7 +976,8 @@ public final class MemoketRemoteRecordingService extends Service {
             // finalize; do not confuse receiving audio with Gem STOP.
             trace.phase("GEM_TRANSFER_PROGRESS_STOP_UNVERIFIED", stateDetails());
         }
-        if (!streamCaptureMode && midTransferStatusStep == 0 && blocks >= 19) {
+        if ((!streamCaptureMode || recoveringOwnedPendingFile)
+                && midTransferStatusStep == 0 && blocks >= 19) {
             // Official HCI interleaving: wait for the 00 response BEFORE e1.
             midTransferStatusStep = 1;
             trace.phase("OFFICIAL_INTERLEAVED_STATUS_00_REQUESTED");
@@ -943,7 +998,7 @@ public final class MemoketRemoteRecordingService extends Service {
                 inFlightMetadata = false;
                 trace.phase("METADATA_RESPONSE_TIMEOUT_CONTINUE");
             }
-            if (streamCaptureMode) {
+            if (streamCaptureMode && !recoveringOwnedPendingFile) {
                 if (streamStopRequested && !streamMetadataReceived
                         && now - stopRequestedAtMs > 30_000L) {
                     throw new IllegalStateException("5秒後の確定要求にGemが応答しませんでした");
@@ -1004,10 +1059,14 @@ public final class MemoketRemoteRecordingService extends Service {
         monitorDriven = false;
         log("MEMOKET_FILE_SAVED_05_ACK_IDLE_STOP_UNVERIFIED", stateDetails());
         updateNotification("音声1件を保存しました");
+        boolean wasRecoveringPendingFile = recoveringOwnedPendingFile;
+        recoveringOwnedPendingFile = false;
         if (continuousMode) {
             continuousRetries = 0;
-            RecorderStateStore.segmentFinalized(this, continuousSegmentId,
-                    System.currentTimeMillis(), Math.max(0L, System.currentTimeMillis() - continuousStartedAtMs));
+            if (!wasRecoveringPendingFile) {
+                RecorderStateStore.segmentFinalized(this, continuousSegmentId,
+                        System.currentTimeMillis(), Math.max(0L, System.currentTimeMillis() - continuousStartedAtMs));
+            }
             if (!continuousStopRequested && RecordingIntentStore.isRequested(this)
                     && "MEMOKET".equals(MemoketSettings.source(this))) {
                 stopCompleted = false;
@@ -1084,7 +1143,8 @@ public final class MemoketRemoteRecordingService extends Service {
             monitorDriven = false;
         }
         if (continuousMode && !continuousStopRequested
-                && RecordingIntentStore.isRequested(this)) {
+                && RecordingIntentStore.isRequested(this)
+                && (message == null || !message.startsWith("Gemに未回収の録音"))) {
             stopHandler.removeCallbacks(streamStopAtFiveSeconds);
             stopHandler.removeCallbacks(stopWatchdog);
             stopHandler.removeCallbacks(continuousHeartbeat);
