@@ -36,7 +36,7 @@ class TranscriptionQueueDisplayPolicyTest {
         liveModelId = null
     )
 
-    @Test fun sixNightlySegmentsPlusOneManualAreSevenVisibleRows() {
+    @Test fun sixNightlySegmentsPlusOneManualRemainSevenQueueItems() {
         val nightly = (1..6).map {
             record(
                 id = "night-$it",
@@ -46,7 +46,7 @@ class TranscriptionQueueDisplayPolicyTest {
             )
         }
         val manual = record("manual", "QUEUED", "MANUAL_DIRECT_QUEUE_ENQUEUED", 20L)
-        val result = visibleTranscriptionQueue(nightly + manual)
+        val result = activeTranscriptionQueueSegments(nightly + manual)
         assertEquals(7, result.size)
         assertEquals(7, result.map { it.segmentId }.distinct().size)
         assertEquals(6, result.count { transcriptionQueueSourceLabel(it) == "夜間確定" })
@@ -54,7 +54,7 @@ class TranscriptionQueueDisplayPolicyTest {
     }
 
     @Test fun includesAllQueueStatusesButNotReadyOrCompletedAudio() {
-        val result = visibleTranscriptionQueue(listOf(
+        val result = activeTranscriptionQueueSegments(listOf(
             record("ready", "READY", "NIGHTLY_HOURLY_PENDING"),
             record("waiting", "QUEUED", "LOCAL_TRANSCRIPTION_WORK_ENQUEUED"),
             record("retry", "RETRY_WAIT", "SOME_ERROR"),
@@ -65,7 +65,7 @@ class TranscriptionQueueDisplayPolicyTest {
     }
 
     @Test fun repeatedJournalVersionsOfSameSegmentDoNotCreateTwoRows() {
-        val result = visibleTranscriptionQueue(listOf(
+        val result = activeTranscriptionQueueSegments(listOf(
             record("same", "QUEUED", "NIGHTLY_HOURLY_WORK_ENQUEUED", 10L),
             record("same", "QUEUED", "NIGHTLY_HOURLY_WORK_ENQUEUED", 20L)
         ))
