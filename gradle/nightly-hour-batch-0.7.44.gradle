@@ -646,3 +646,8 @@ if (!priorityFile044.text.contains('NIGHTLY_HOURLY_PRIORITY_WORK_ENQUEUED')) {
 if (!queueUiFile044.text.contains('1時間バッチ')) {
     throw new GradleException('0.7.44 hourly queue UI missing')
 }
+if (!queueUiFile044.text.contains('音声 ${activeSegments.size}件 / 表示 ${groups.size}グループ')
+        || !queueUiFile044.text.contains('if (group.nightlyHour && expanded)')
+        || !queueUiFile044.text.contains('onOpen(item)')) {
+    throw new GradleException('Queue UI must expose every grouped audio segment')
+}
