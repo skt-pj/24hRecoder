@@ -12,7 +12,6 @@ import android.os.Build;
 import android.os.IBinder;
 
 import androidx.annotation.Nullable;
-import androidx.work.WorkManager;
 
 import com.sktpj.recorder24h.MainActivity;
 import com.sktpj.recorder24h.storage.SegmentRepository;
@@ -116,7 +115,7 @@ public final class TranscriptionQueueService extends Service {
         }
         if (!TranscriptionExecutionGate.tryAcquire()) {
             AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_DEFERRED_RUNNER_BUSY");
-            TranscriptionScheduler.ensureDrainScheduled(context);
+            TranscriptionDrainReceiver.requestMainProcess(context, false);
             return;
         }
 
@@ -158,7 +157,7 @@ public final class TranscriptionQueueService extends Service {
             TranscriptionExecutionGate.release();
             // If the FGS reaches its runtime limit or another path queued work while it was
             // active, hand the remaining persisted queue back to the single background Worker.
-            TranscriptionScheduler.ensureDrainScheduled(context);
+            TranscriptionDrainReceiver.requestMainProcess(context, false);
         }
     }
 
