@@ -622,7 +622,7 @@ queueUi044 = queueUi044.replace(
         '                    "処理許可中（実行中とは限りません）"\n')
 queueUi044 = queueUi044.replace(
         'if (record.reason.orEmpty().startsWith("MANUAL_")) "ユーザー追加" else "自動追加"',
-        'when { record.reason.orEmpty().startsWith("MANUAL_") -> "ユーザー追加"; record.reason.orEmpty().startsWith("NIGHTLY_HOURLY_") -> "夜間確定"; else -> "自動追加" }')
+        'queueSourceForSegment(record)')
 writeUtf8044(queueUiFile044, queueUi044)
 
 androidComponents {
