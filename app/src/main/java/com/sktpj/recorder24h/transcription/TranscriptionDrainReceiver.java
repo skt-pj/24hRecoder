@@ -40,13 +40,20 @@ public final class TranscriptionDrainReceiver extends BroadcastReceiver {
         }
         Intent intent = new Intent(app, TranscriptionDrainReceiver.class)
                 .setAction(append ? ACTION_APPEND : ACTION_ENSURE);
-        app.sendBroadcast(intent);
         try {
+            app.sendBroadcast(intent);
             JSONObject details = new JSONObject();
             details.put("action", append ? "APPEND" : "ENSURE");
             details.put("fromProcess", Application.getProcessName());
             AppLogger.event(app, "TRANSCRIPTION_DRAIN_ROUTED_TO_MAIN", details);
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            try {
+                JSONObject details = new JSONObject();
+                details.put("type", error.getClass().getName());
+                details.put("message", error.getMessage() == null ? "" : error.getMessage());
+                AppLogger.event(app, "TRANSCRIPTION_DRAIN_MAIN_DISPATCH_FAILED", details);
+            } catch (Exception ignored) {
+            }
         }
     }
 
