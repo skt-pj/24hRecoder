@@ -193,7 +193,8 @@ mainText = mainText.replace(
         shape = RoundedCornerShape(12.dp)) {''')
 
 def detailStart = mainText.indexOf('private fun RecordDetailScreen(record: SegmentRecord)')
-def detailEnd = mainText.indexOf('\n@Composable\nprivate fun AudioPlaybackCard(', detailStart)
+def audioFunctionStart = mainText.indexOf('private fun AudioPlaybackCard(', detailStart)
+def detailEnd = audioFunctionStart >= 0 ? mainText.lastIndexOf('@Composable', audioFunctionStart) : -1
 if (detailStart >= 0 && detailEnd >= 0) {
 def detailHeaderStart = mainText.lastIndexOf('@Composable\n', detailStart)
 mainText = mainText.substring(0, detailHeaderStart) + '''@Composable
