@@ -1,4 +1,3 @@
-// Applied last, after historical Gradle source rewrites.
 def serviceSource = rootProject.file('app/src/main/java/com/sktpj/recorder24h/memoket/MemoketRemoteRecordingService.java').getText('UTF-8')
 def protocolSource = rootProject.file('app/src/main/java/com/sktpj/recorder24h/memoket/MemoketSessionProtocol.java').getText('UTF-8')
 def statusSource = rootProject.file('app/src/main/java/com/sktpj/recorder24h/memoket/MemoketTransferStatus.java').getText('UTF-8')
@@ -10,7 +9,7 @@ if (serviceSource.contains('if (action == null || ACTION_START_CONTINUOUS.equals
     throw new GradleException('Continuous Gem START was routed to STOP or pending-file recovery was lost')
 }
 if (!protocolSource.contains('if (value.length > 4)')
-        || !statusSource.contains('filename must still match the selected recording exactly')) {
+        || !statusSource.contains('Arrays.copyOfRange(payload, 4, payload.length), name')) {
     throw new GradleException('Observed 00 01 file-status handling was reverted')
 }
 androidComponents {
