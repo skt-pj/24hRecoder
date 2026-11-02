@@ -141,11 +141,14 @@ public final class TranscriptionQueueService extends Service {
                     continue;
                 }
 
-                AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_ITEM_SELECTED",
-                        new JSONObject()
-                                .put("segmentId", segmentId)
-                                .put("audioPresent", new File(audioPath).isFile())
-                                .put("reason", next.getReason() == null ? JSONObject.NULL : next.getReason()));
+                try {
+                    AppLogger.event(context, "TRANSCRIPTION_DIRECT_QUEUE_ITEM_SELECTED",
+                            new JSONObject()
+                                    .put("segmentId", segmentId)
+                                    .put("audioPresent", new File(audioPath).isFile())
+                                    .put("reason", next.getReason() == null ? JSONObject.NULL : next.getReason()));
+                } catch (Exception ignored) {
+                }
                 boolean manual = next.getReason() != null && next.getReason().startsWith("MANUAL_");
                 processOne(context, segmentId, new File(audioPath), manual);
             }
