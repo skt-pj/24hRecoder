@@ -1,6 +1,5 @@
 package com.sktpj.recorder24h.memoket;
 
-/** Separates an explicit start from a stop, including START_STICKY restarts. */
 final class MemoketContinuousIntentPolicy {
     private static final String START = "com.sktpj.recorder24h.memoket.START_CONTINUOUS";
     private static final String STOP = "com.sktpj.recorder24h.memoket.STOP_CONTINUOUS";
