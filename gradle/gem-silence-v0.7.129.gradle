@@ -4,6 +4,16 @@ if (!gateSource.contains('SPEECH_TO_START_MS = 2_000L')
         || !gateSource.contains('lastSpeechAtMs < SPEECH_TO_START_MS')) {
     throw new GradleException('Gem speech-start and silence-stop thresholds differ from the selected version')
 }
+def serviceSource = rootProject.file('app/src/main/java/com/sktpj/recorder24h/memoket/MemoketRemoteRecordingService.java').getText('UTF-8')
+if (!serviceSource.contains('streamCaptureMode = fiveSecondRequest || continuousRequest || monitorDriven;')
+        || !serviceSource.contains('if (monitorDriven && streamCaptureMode && stopPending)')
+        || !serviceSource.contains('streamStopAtFiveSeconds.run();')
+        || !serviceSource.contains('GEM_MIC_CAPTURE_START_010000_ACCEPTED')
+        || !serviceSource.contains('GEM_MIC_STOP_CONTROL_0200_REQUESTED')
+        || !serviceSource.contains('sessionFileSelector')
+        || !serviceSource.contains('queue(MemoketTransfer.metadataCommand());')) {
+    throw new GradleException('Mic-gated Gem recording no longer follows the v0.7.119 stream capture path')
+}
 androidComponents {
     onVariants(selector().withBuildType('debug')) { variant ->
         variant.outputs.each { output ->
