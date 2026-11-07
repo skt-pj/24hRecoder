@@ -48,6 +48,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a v0.7.129-debug -m "24hRecoder 0.7.129 debug"
           git push origin refs/tags/v0.7.129-debug
           gh release create v0.7.129-debug release/24hRecoder-0.7.129-debug.apk release/24hRecoder-0.7.129-debug.apk.sha256 release/signing-certificate.txt --verify-tag --prerelease --title "24hRecoder v0.7.129-debug" --notes "Gem microphone-gated recording uses the v0.7.119 proven start/stop transfer sequence and 60-second silence stop. Hardware verification pending."
