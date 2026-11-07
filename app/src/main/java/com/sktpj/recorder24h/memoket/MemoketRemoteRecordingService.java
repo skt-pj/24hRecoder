@@ -188,7 +188,7 @@ public final class MemoketRemoteRecordingService extends Service {
         if (continuousMode) {
             RecorderStateStore.write(this, "ROTATING", continuousSegmentId, null);
         }
-        trace.phase("STREAM_5S_STOP_CONTROL_0200_REQUESTED", stateDetails());
+        trace.phase(monitorDriven ? "GEM_MIC_STOP_CONTROL_0200_REQUESTED" : "STREAM_5S_STOP_CONTROL_0200_REQUESTED", stateDetails());
         updateState("録音確定中");
         inFlightMetadata = true;
         lastMetadataRequestAtMs = stopRequestedAtMs;
@@ -268,9 +268,15 @@ public final class MemoketRemoteRecordingService extends Service {
                 || diagFileOnly || diagStartOnly))
             return START_NOT_STICKY;
         if (stopRequest) {
-            // A duplicate user STOP must not abort an ongoing verified download.
-            if (stopPending || stopCompleted) return START_NOT_STICKY;
+            if (stopCompleted || (streamCaptureMode && stopPending && streamStopRequested))
+                return START_NOT_STICKY;
             trace.phase("STOP_REQUESTED", stateDetails());
+            if (monitorDriven && streamCaptureMode && stopPending) {
+                stopHandler.removeCallbacks(streamStopAtFiveSeconds);
+                streamStopAtFiveSeconds.run();
+                return START_NOT_STICKY;
+            }
+            if (stopPending) return START_NOT_STICKY;
             if (!MemoketStopSafety.canStop(gatt != null && data != null,
                     session.isReady(), recordingActive, stopPending || stopCompleted)) {
                 finishWithError("アプリがこの接続で開始した録音を確認できません。取得・削除を送信しません");
@@ -293,7 +299,7 @@ public final class MemoketRemoteRecordingService extends Service {
             RecorderStateStore.write(this, "STARTING", null, null);
             RecorderStateStore.setInputSource(this, "MEMOKET");
         }
-        streamCaptureMode = fiveSecondRequest || continuousRequest;
+        streamCaptureMode = fiveSecondRequest || continuousRequest || monitorDriven;
         recoveringOwnedPendingFile = false;
         fiveSecondRecording = false;
         diagStartOnly = diagnosticStart;
@@ -432,9 +438,16 @@ public final class MemoketRemoteRecordingService extends Service {
         if (stopPending || stopCompleted || !session.isReady()) return;
         long started = System.currentTimeMillis();
         MemoketSettings.recordingStarted(this, started, java.time.ZoneId.systemDefault().getId());
+        String captureZoneId = java.time.ZoneId.systemDefault().getId();
         MemoketRecordingWindow window = new MemoketRecordingWindow(
                 started, started + (continuousMode ? CONTINUOUS_SEGMENT_MS : 0L) + 15_000L,
-                java.time.ZoneId.systemDefault().getId());
+                captureZoneId);
+        MemoketTransfer.FileSelector sessionFileSelector = monitorDriven
+                ? filename -> new MemoketRecordingWindow(
+                        started, Math.max(started, stopRequestedAtMs > 0L
+                                ? stopRequestedAtMs : System.currentTimeMillis()), captureZoneId)
+                        .matches(filename)
+                : window::matches;
         if (continuousMode) {
             continuousStartedAtMs = started;
             continuousSegmentId = java.util.UUID.randomUUID().toString();
@@ -460,13 +473,13 @@ public final class MemoketRemoteRecordingService extends Service {
             new MemoketRecordingStore(this).persist(name, staged, crc);
             stopSavedFiles++;
             trace.filePersisted(name, staged.length(), crc);
-        }, new MemoketRecordingStore(this).directory(), window::matches, 1, true, false, true);
+        }, new MemoketRecordingStore(this).directory(), sessionFileSelector, 1, true, false, true);
         stopNotifyStep = 3;
         stopPending = true;
         recordingActive = true;
         trace.phase(continuousMode ? "GEM_SEGMENT_START_010000" : "STREAM_CAPTURE_START_010000", stateDetails());
         updateState("録音中");
-        updateNotification(continuousMode ? "Gemで録音中" : "Gemで5秒録音中");
+        updateNotification(continuousMode || monitorDriven ? "Gemで録音中" : "Gemで5秒録音中");
         queue(MemoketTransfer.initialCommand());
         stopHandler.removeCallbacks(stopWatchdog);
         stopHandler.postDelayed(stopWatchdog, 500L);
@@ -680,9 +693,14 @@ public final class MemoketRemoteRecordingService extends Service {
                 if (streamCaptureMode && !recoveringOwnedPendingFile && stopPending && !streamCaptureTimerStarted
                         && Arrays.equals(lastCommand, MemoketTransfer.initialCommand())) {
                     streamCaptureTimerStarted = true;
-                    trace.phase("STREAM_CAPTURE_5S_TIMER_STARTED", stateDetails());
-                    stopHandler.postDelayed(streamStopAtFiveSeconds,
-                            continuousMode ? CONTINUOUS_SEGMENT_MS : 5_000L);
+                    if (monitorDriven) {
+                        trace.phase("GEM_MIC_CAPTURE_START_010000_ACCEPTED", stateDetails());
+                        signalMonitor(GemMicMonitorService.ACTION_GEM_STARTED);
+                    } else {
+                        trace.phase("STREAM_CAPTURE_5S_TIMER_STARTED", stateDetails());
+                        stopHandler.postDelayed(streamStopAtFiveSeconds,
+                                continuousMode ? CONTINUOUS_SEGMENT_MS : 5_000L);
+                    }
                 }
                 if (manualStopPending && candidateStep == 3) {
                     candidateStep = 4;
@@ -1001,7 +1019,7 @@ public final class MemoketRemoteRecordingService extends Service {
             if (streamCaptureMode && !recoveringOwnedPendingFile) {
                 if (streamStopRequested && !streamMetadataReceived
                         && now - stopRequestedAtMs > 30_000L) {
-                    throw new IllegalStateException("5秒後の確定要求にGemが応答しませんでした");
+                    throw new IllegalStateException("録音停止の確定要求にGemが応答しませんでした");
                 }
                 if (streamStopRequested && !inFlightMetadata
                         && stopTransfer.shouldRequestMetadata()
