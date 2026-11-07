@@ -16,14 +16,32 @@ public class GemVoiceGateTest {
         gate.startSent();
         assertFalse(gate.shouldStart(10_100L));
         gate.started();
-        assertFalse(gate.shouldStop(11_999L));
-        assertTrue(gate.shouldStop(12_000L));
+        assertFalse(gate.shouldStop(69_999L));
+        assertTrue(gate.shouldStop(70_000L));
         gate.stopSent();
-        assertFalse(gate.shouldStart(12_100L));
+        assertFalse(gate.shouldStart(70_100L));
         gate.acquired();
-        assertFalse(gate.shouldStart(13_000L));
-        gate.heardSpeech(15_000L);
-        assertTrue(gate.shouldStart(15_000L));
+        assertFalse(gate.shouldStart(70_100L));
+        gate.heardSpeech(71_000L);
+        assertTrue(gate.shouldStart(71_000L));
+    }
+
+    @Test public void speechWindowForStartingStaysTwoSeconds() {
+        GemVoiceGate gate = new GemVoiceGate();
+        gate.heardSpeech(10_000L);
+        assertTrue(gate.shouldStart(11_999L));
+        assertFalse(gate.shouldStart(12_000L));
+    }
+
+    @Test public void newSpeechResetsOneMinuteSilenceCountdown() {
+        GemVoiceGate gate = new GemVoiceGate();
+        gate.heardSpeech(10_000L);
+        gate.startSent();
+        gate.started();
+        assertFalse(gate.shouldStop(69_999L));
+        gate.heardSpeech(60_000L);
+        assertFalse(gate.shouldStop(119_999L));
+        assertTrue(gate.shouldStop(120_000L));
     }
 
     @Test public void stoppingWhileConnectingFinishesOnlyAfterRetrieval() {

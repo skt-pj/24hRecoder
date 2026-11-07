@@ -1,7 +1,8 @@
 package com.sktpj.recorder24h.memoket;
 
 public final class GemVoiceGate {
-    private static final long SILENCE_TO_STOP_MS = 2_000L;
+    private static final long SPEECH_TO_START_MS = 2_000L;
+    private static final long SILENCE_TO_STOP_MS = 60_000L;
     private long lastSpeechAtMs;
     private boolean starting;
     private boolean recording;
@@ -14,7 +15,7 @@ public final class GemVoiceGate {
 
     public boolean shouldStart(long nowMs) {
         return !userStopped && !starting && !recording && !fetching
-                && lastSpeechAtMs > 0L && nowMs - lastSpeechAtMs < SILENCE_TO_STOP_MS;
+                && lastSpeechAtMs > 0L && nowMs - lastSpeechAtMs < SPEECH_TO_START_MS;
     }
 
     public void startSent() {
