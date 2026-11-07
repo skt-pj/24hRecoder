@@ -19,13 +19,12 @@ public class GemVoiceGateTest {
         assertFalse(gate.shouldStop(69_999L));
         assertTrue(gate.shouldStop(70_000L));
         gate.stopSent();
-        assertFalse(gate.shouldStart(12_100L));
+        assertFalse(gate.shouldStart(70_100L));
         gate.acquired();
         assertFalse(gate.shouldStart(70_100L));
         gate.heardSpeech(71_000L);
         assertTrue(gate.shouldStart(71_000L));
     }
-
 
     @Test public void speechWindowForStartingStaysTwoSeconds() {
         GemVoiceGate gate = new GemVoiceGate();
