@@ -184,6 +184,7 @@ public final class MemoketRemoteRecordingService extends Service {
         if (!streamCaptureMode || stopCompleted || streamStopRequested || !stopPending) return;
         streamStopRequested = true;
         stopRequestedAtMs = System.currentTimeMillis();
+        if (monitorDriven) lastStopActivityAtMs = stopRequestedAtMs;
         MemoketSettings.recordingStopRequested(this, stopRequestedAtMs);
         if (continuousMode) {
             RecorderStateStore.write(this, "ROTATING", continuousSegmentId, null);
@@ -1008,7 +1009,7 @@ public final class MemoketRemoteRecordingService extends Service {
         long now = System.currentTimeMillis();
         try {
             // No absolute download time cap: only missing BLE progress is fatal.
-            if (now - lastStopActivityAtMs > 60_000L) {
+            if ((!monitorDriven || streamStopRequested) && now - lastStopActivityAtMs > 60_000L) {
                 throw new IllegalStateException("Gemから60秒間DATA/RESPONSEがなく、処理を終了しました");
             }
             if (inFlightMetadata && now - lastMetadataRequestAtMs > 5_000L) {
@@ -1017,7 +1018,7 @@ public final class MemoketRemoteRecordingService extends Service {
                 trace.phase("METADATA_RESPONSE_TIMEOUT_CONTINUE");
             }
             if (streamCaptureMode && !recoveringOwnedPendingFile) {
-                if (streamStopRequested && !streamMetadataReceived
+                if (!monitorDriven && streamStopRequested && !streamMetadataReceived
                         && now - stopRequestedAtMs > 30_000L) {
                     throw new IllegalStateException("録音停止の確定要求にGemが応答しませんでした");
                 }
