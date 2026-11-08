@@ -244,7 +244,7 @@ public final class GemMicMonitorService extends Service {
     }
 
     private synchronized void fail(String error) {
-        if (gate.isRecording() && !gate.isFetching()) {
+        if (gate.isRecording() && !gate.isStopping() && !gate.isFetching()) {
             gate.stopSent();
             try {
                 startService(new Intent(this, MemoketRemoteRecordingService.class)
