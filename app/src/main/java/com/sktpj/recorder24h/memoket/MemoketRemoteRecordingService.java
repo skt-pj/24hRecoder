@@ -182,6 +182,7 @@ public final class MemoketRemoteRecordingService extends Service {
     // DATA before STOP is permitted by the v0.7.119 trace, but cannot prove
     // that a post-stop file transfer has begun.
     private boolean monitorTransferDataSeen;
+    private boolean monitorPostStopFetchRequested;
     private boolean recoveringOwnedPendingFile;
     private final Runnable streamStopAtFiveSeconds = () -> {
         if (!streamCaptureMode || stopCompleted || streamStopRequested || !stopPending) return;
@@ -467,6 +468,7 @@ public final class MemoketRemoteRecordingService extends Service {
         streamStopRequested = false;
         streamMetadataReceived = false;
         monitorTransferDataSeen = false;
+        monitorPostStopFetchRequested = false;
         stopRequestedAtMs = 0;
         stopSavedFiles = 0;
         inFlightMetadata = false;
@@ -973,6 +975,16 @@ public final class MemoketRemoteRecordingService extends Service {
             }
         }
         byte[] next = stopTransfer == null ? null : stopTransfer.onControl(value);
+        if (GemTransferProgressPolicy.requestPostStopFetch(monitorDriven,
+                streamStopRequested, streamMetadataReceived,
+                stopTransfer != null && "WAIT_LIST".equals(stopTransfer.debugState()),
+                monitorPostStopFetchRequested)) {
+            // Unlike RECORDING, this 01 is a documented file request after
+            // the stop metadata response, never an additional START request.
+            monitorPostStopFetchRequested = true;
+            trace.phase("GEM_POST_STOP_FILE_FETCH_010000_REQUESTED", stateDetails());
+            queue(MemoketTransfer.initialCommand());
+        }
         if (opcode == 1 && stopTransfer != null
                 && !"WAIT_LIST".equals(stopTransfer.debugState())) {
             // Once the filename exists, feed DATA that arrived before 01.
