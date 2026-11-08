@@ -36,27 +36,25 @@ public class GemDelayedTransferTest {
             saved.incrementAndGet();
         }, filename::equals, 1, true, false);
 
-        // 02 can arrive while Gem has not sent a 01 filename or any DATA.
+        // Match the successful test: one 010000 request, filename announcement,
+        // 0200 after the recording interval, then post-stop DATA and 03.
         assertEquals("WAIT_LIST", transfer.debugState());
-        assertNull(transfer.onControl(metadata(name, audio.length, crc.getValue())));
-        assertTrue(GemTransferProgressPolicy.requestPostStopFetch(true, true,
-                true, "WAIT_LIST".equals(transfer.debugState()), false));
         assertArrayEquals(new byte[]{1, 0, 0}, MemoketTransfer.initialCommand());
+        byte[] announced = new byte[3 + name.length];
+        announced[0] = 1; announced[1] = 1; announced[2] = 1;
+        System.arraycopy(name, 0, announced, 3, name.length);
+        assertNull(transfer.onControl(announced));
+        assertEquals("RECEIVING_DATA", transfer.debugState());
+        assertArrayEquals(new byte[]{2, 0}, MemoketTransfer.metadataCommand());
+        assertNull(transfer.onControl(metadata(name, audio.length, crc.getValue())));
         gate.fetchStarted();
         assertTrue(gate.isFetching());
         assertFalse(GemTransferProgressPolicy.stalled(
                 true, true, true, false, 100_000L, 1L));
 
-        byte[] announced = new byte[3 + name.length];
-        announced[0] = 1; announced[1] = 1; announced[2] = 1;
-        System.arraycopy(name, 0, announced, 3, name.length);
-        assertNull(transfer.onControl(announced));
         byte[] block = new byte[5 + audio.length];
         System.arraycopy(audio, 0, block, 5, audio.length);
-        assertNull(transfer.onData(block));
-        assertTrue(transfer.shouldRequestMetadata());
-        assertArrayEquals(new byte[]{3}, transfer.onControl(
-                metadata(name, audio.length, crc.getValue())));
+        assertArrayEquals(new byte[]{3}, transfer.onData(block));
 
         byte[] listing = new byte[6 + name.length + 4];
         listing[0] = 3; listing[1] = 1;

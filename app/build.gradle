@@ -179,3 +179,5 @@ apply from: rootProject.file('gradle/gem-silence-v0.7.129.gradle')
 apply from: rootProject.file('gradle/gem-recording-transfer-v0.7.130.gradle')
 apply from: rootProject.file('gradle/gem-start-response-v0.7.131.gradle')
 apply from: rootProject.file('gradle/gem-state-recovery-v0.7.132.gradle')
+
+apply from: rootProject.file('gradle/gem-vad-tested-sequence-v0.7.133.gradle')
