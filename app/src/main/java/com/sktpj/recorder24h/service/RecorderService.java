@@ -82,9 +82,11 @@ public final class RecorderService extends Service {
         if (ACTION_STOP.equals(action)) {
             RecordingIntentStore.setRequested(this, false);
             if ("MEMOKET".equals(MemoketSettings.source(this))) {
+                // The monitor may immediately confirm STOPPED if no Gem session
+                // survived the previous process. Do not overwrite that result.
+                RecorderStateStore.write(this, "STOPPING", null, null);
                 startService(new Intent(this, com.sktpj.recorder24h.memoket.GemMicMonitorService.class)
                         .setAction(com.sktpj.recorder24h.memoket.GemMicMonitorService.ACTION_STOP));
-                RecorderStateStore.write(this, "STOPPING", null, null);
                 stopSelf();
                 return START_NOT_STICKY;
             }

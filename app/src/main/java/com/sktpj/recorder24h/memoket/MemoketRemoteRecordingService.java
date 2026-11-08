@@ -578,6 +578,11 @@ public final class MemoketRemoteRecordingService extends Service {
 
     @Override
     public void onDestroy() {
+        // Closing this Android service is not proof that Gem physically
+        // stopped. Suppress late GATT callbacks and start deadlines.
+        stopCompleted = true;
+        monitorDriven = false;
+        stopHandler.removeCallbacks(monitorStartFilenameDeadline);
         stopHandler.removeCallbacks(fiveSecondStop);
         stopHandler.removeCallbacks(streamStopAtFiveSeconds);
         stopHandler.removeCallbacks(stopWatchdog);

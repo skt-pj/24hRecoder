@@ -39,6 +39,12 @@ public final class RecorderHealth {
                     heartbeatAge, audioAge, segmentAge);
         }
         if ("STOPPING".equals(rawState)) {
+            if (gemSource && stateAge > 30_000L && heartbeatAge > HEARTBEAT_STALE_MS) {
+                return problem("GEM_STOPPING_STALE", "Gem停止処理を確認できません",
+                        "アプリ側の停止状態が更新されていません。Gem本体の録音状態は未確認です。"
+                        + "操作の中断は可能です。", true,
+                        heartbeatAge, audioAge, segmentAge);
+            }
             return gemSource
                     ? neutral("GEM_STOPPING", "Gem停止処理中",
                             "Gemへ停止要求を送り、録音ファイルの確定を確認しています。", true,
