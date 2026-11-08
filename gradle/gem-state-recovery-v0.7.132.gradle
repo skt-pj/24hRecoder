@@ -11,7 +11,7 @@ if (!recovery.contains('interruptedByProcessReplacement(')
         || !screen.contains('GEM_PENDING_OPERATION_ABORTED_BY_USER')
         || !screen.contains('stopService(Intent(this, MemoketRemoteRecordingService::class.java))')
         || !screen.contains('"STOPPING" -> "操作を中断"')
-        || !remote.contains('stopCompleted = true;\n        monitorDriven = false;\n        stopHandler.removeCallbacks(monitorStartFilenameDeadline)')
+        || !remote.contains('stopCompleted = true;\n        monitorDriven = false;\n        stopHandler.removeCallbacks(fiveSecondStop)')
         || !controller.contains('Do not overwrite that result.')) {
     throw new GradleException('Gem interrupted session recovery / user abort requirements regressed')
 }

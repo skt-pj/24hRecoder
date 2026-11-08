@@ -1,0 +1,25 @@
+def sourceRoot = rootProject.file('app/src/main/java/com/sktpj/recorder24h/memoket')
+def remote = new File(sourceRoot, 'MemoketRemoteRecordingService.java').getText('UTF-8')
+def monitor = new File(sourceRoot, 'GemMicMonitorService.java').getText('UTF-8')
+def gate = new File(sourceRoot, 'GemVoiceGate.java').getText('UTF-8')
+if (!remote.contains('GEM_MIC_START_CONTROL_010000_WRITE_OK')
+        || !remote.contains('signalMonitor(GemMicMonitorService.ACTION_GEM_STARTED);')
+        || !remote.contains('if (monitorDriven && streamCaptureMode && stopPending)')
+        || !remote.contains('streamStopAtFiveSeconds.run();')
+        || !remote.contains('GEM_MIC_STOP_CONTROL_0200_REQUESTED')
+        || !remote.contains('queue(MemoketTransfer.metadataCommand());')
+        || remote.contains('monitorStartFilenameDeadline')
+        || remote.contains('GemResponsePhasePolicy.receivedFileAnnouncement(')
+        || remote.contains('GemTransferProgressPolicy.requestPostStopFetch(')
+        || !monitor.contains('if (gate.shouldStop(nowMs))')
+        || !gate.contains('SILENCE_TO_STOP_MS = 60_000L')) {
+    throw new GradleException('Gem microphone START/STOP diverged from successful v0.7.119 sequence')
+}
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1133)
+            output.versionName.set('0.7.133')
+        }
+    }
+}

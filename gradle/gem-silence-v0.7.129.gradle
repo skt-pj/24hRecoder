@@ -8,7 +8,7 @@ def serviceSource = rootProject.file('app/src/main/java/com/sktpj/recorder24h/me
 if (!serviceSource.contains('streamCaptureMode = fiveSecondRequest || continuousRequest || monitorDriven;')
         || !serviceSource.contains('if (monitorDriven && streamCaptureMode && stopPending)')
         || !serviceSource.contains('streamStopAtFiveSeconds.run();')
-        || !serviceSource.contains('GEM_START_WRITE_OK_AWAITING_FILE_RESPONSE')
+        || !serviceSource.contains('GEM_MIC_START_CONTROL_010000_WRITE_OK')
         || !serviceSource.contains('GEM_MIC_STOP_CONTROL_0200_REQUESTED')
         || !serviceSource.contains('sessionFileSelector')
         || !serviceSource.contains('queue(MemoketTransfer.metadataCommand());')) {
