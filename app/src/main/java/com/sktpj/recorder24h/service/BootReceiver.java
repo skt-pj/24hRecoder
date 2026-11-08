@@ -10,6 +10,9 @@ import android.content.Intent;
 
 import com.sktpj.recorder24h.MainActivity;
 import com.sktpj.recorder24h.R;
+import com.sktpj.recorder24h.memoket.GemStateRecoveryPolicy;
+import com.sktpj.recorder24h.memoket.MemoketSettings;
+import com.sktpj.recorder24h.storage.RecorderStateStore;
 import com.sktpj.recorder24h.storage.RecordingIntentStore;
 import com.sktpj.recorder24h.transcription.WhisperModelManager;
 import com.sktpj.recorder24h.util.AppLogger;
@@ -31,8 +34,22 @@ public final class BootReceiver extends BroadcastReceiver {
             AppLogger.event(context, "PACKAGE_REPLACED_VAD_ASSET_REPAIR_QUEUED");
         }
 
-        if (!RecordingIntentStore.isRequested(context)) {
-            return;
+        final boolean wasRequested = RecordingIntentStore.isRequested(context);
+        if (!wasRequested) return;
+
+        // App upgrade / reboot terminates the prior process and its BLE session.
+        // Do not report its persisted STOPPING or TRANSFERRING as a live operation.
+        // Leave Gem-side files untouched; physical record/stop remains unknown.
+        String oldState = RecorderStateStore.read(context).optString("state", "STOPPED");
+        if (GemStateRecoveryPolicy.interruptedByProcessReplacement(
+                MemoketSettings.source(context), wasRequested, oldState)) {
+            String reason = "アプリ更新・端末再起動で前回のGem操作が中断されました。"
+                    + "Gem本体の録音状態と未取得ファイルは未確認です。";
+            RecordingIntentStore.setRequested(context, false);
+            RecorderStateStore.write(context, "ERROR", null, reason);
+            MemoketSettings.setRemoteRecordingState(context, "操作中断・要確認");
+            MemoketSettings.saveResult(context, reason);
+            AppLogger.event(context, "GEM_INTERRUPTED_STATE_RECOVERED_AFTER_RESTART");
         }
 
         AppLogger.event(context, "BOOT_OR_PACKAGE_REPLACED_RECORDING_RESTART_REQUIRED");
@@ -59,7 +76,7 @@ public final class BootReceiver extends BroadcastReceiver {
         Notification notification = new Notification.Builder(context, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("24hRecoder")
-                .setContentText("録音が停止しています。アプリを開くと自動復旧を試みます。")
+                .setContentText("録音を再開するにはアプリを開いて確認してください。")
                 .setContentIntent(pending)
                 .setAutoCancel(true)
                 .build();
