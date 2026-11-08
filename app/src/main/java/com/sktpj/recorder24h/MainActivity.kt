@@ -114,6 +114,9 @@ import com.sktpj.recorder24h.transcription.TranscriptionResetManager
 import com.sktpj.recorder24h.transcription.TranscriptionPipelineSettings
 import com.sktpj.recorder24h.transcription.TranscriptionScheduler
 import com.sktpj.recorder24h.transcription.WhisperModelManager
+import com.sktpj.recorder24h.memoket.GemStateRecoveryPolicy
+import com.sktpj.recorder24h.memoket.GemMicMonitorService
+import com.sktpj.recorder24h.memoket.MemoketRemoteRecordingService
 import com.sktpj.recorder24h.memoket.MemoketSettings
 import com.sktpj.recorder24h.memoket.MemoketAudioImportWorker
 import com.sktpj.recorder24h.ui.SegmentHistoryRepository
@@ -224,6 +227,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun stopRecording() {
+        val pendingState = RecorderStateStore.read(this).optString("state", "STOPPED")
+        if (GemStateRecoveryPolicy.requiresExplicitLocalAbort(MemoketSettings.source(this), pendingState)) {
+            // Explicitly cancel only this app's services. Do not send Gem 05
+            // or treat the device's recording status as verified.
+            RecordingIntentStore.setRequested(this, false)
+            stopService(Intent(this, GemMicMonitorService::class.java))
+            stopService(Intent(this, MemoketRemoteRecordingService::class.java))
+            stopService(Intent(this, RecorderService::class.java))
+            val reason = "Gem操作を中断しました。Gem本体の録音状態と未取得ファイルは未確認です。"
+            MemoketSettings.setRemoteRecordingState(this, "操作中断・要確認")
+            MemoketSettings.saveResult(this, reason)
+            RecorderStateStore.write(this, "ERROR", null, reason)
+            AppLogger.event(this, "GEM_PENDING_OPERATION_ABORTED_BY_USER")
+            return
+        }
         RecordingIntentStore.setRequested(this, false)
         try {
             startService(Intent(this, RecorderService::class.java).setAction(RecorderService.ACTION_STOP))
@@ -524,11 +542,16 @@ private fun HomeScreen(
     onOpenHistory: () -> Unit
 ) {
     var confirmStop by remember { mutableStateOf(false) }
+    val abortingGem = GemStateRecoveryPolicy.requiresExplicitLocalAbort(
+        dashboard.inputSource, dashboard.state
+    )
     if (confirmStop) {
         AlertDialog(
             onDismissRequest = { confirmStop = false },
-            title = { Text("録音を停止しますか？") },
-            text = { Text("24時間録音を停止します。停止後はホームから再開できます。") },
+            title = { Text(if (abortingGem) "Gem操作を中断しますか？" else "録音を停止しますか？") },
+            text = { Text(if (abortingGem)
+                "アプリ側の停止待ち・ファイル取得を終了します。Gem本体の録音状態は未確認です。未取得の音声を削除する命令は送りません。"
+                else "24時間録音を停止します。停止後はホームから再開できます。") },
             confirmButton = {
                 Button(
                     onClick = { confirmStop = false; onStop() },
@@ -536,7 +559,7 @@ private fun HomeScreen(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError
                     )
-                ) { Text("停止する") }
+                ) { Text(if (abortingGem) "操作を中断" else "停止する") }
             },
             dismissButton = { TextButton(onClick = { confirmStop = false }) { Text("キャンセル") } }
         )
@@ -644,15 +667,14 @@ private fun RecordingCard(
             if (active) {
                 Button(
                     onClick = onRequestStop,
-                    enabled = dashboard.state !in setOf("STOPPING", "TRANSFERRING"),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError
                     ),
                     modifier = Modifier.fillMaxWidth().height(56.dp)
                 ) { Text(when (dashboard.state) {
-                    "STOPPING" -> "停止処理中…"
-                    "TRANSFERRING" -> "Gemファイル取得中…"
+                    "STOPPING" -> "操作を中断"
+                    "TRANSFERRING" -> "取得処理を中断"
                     else -> "録音を停止"
                 }) }
             } else {
