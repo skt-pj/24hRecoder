@@ -21,6 +21,16 @@ final class GemTransferProgressPolicy {
         return nowMs - lastProgressAtMs > TRANSFER_STALL_MS;
     }
 
+    // CONTROL 01 is a file-transfer request in official Gem logs. If the
+    // recording's original command never produced a file list, a confirmed
+    // post-stop metadata response permits a single explicit file fetch.
+    static boolean requestPostStopFetch(boolean micDriven, boolean stopRequested,
+            boolean metadataConfirmed, boolean waitingForFileName,
+            boolean alreadyRequested) {
+        return micDriven && stopRequested && metadataConfirmed
+                && waitingForFileName && !alreadyRequested;
+    }
+
     static boolean retryMetadata(boolean stopRequested, boolean micDriven,
             boolean metadataConfirmed, boolean transferNeedsMetadata,
             boolean inFlight, boolean commandIdle, long nowMs, long lastRequestAtMs) {
