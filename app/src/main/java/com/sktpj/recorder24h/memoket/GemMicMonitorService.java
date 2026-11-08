@@ -30,6 +30,7 @@ public final class GemMicMonitorService extends Service {
     public static final String ACTION_START = "com.sktpj.recorder24h.memoket.MIC_START";
     public static final String ACTION_STOP = "com.sktpj.recorder24h.memoket.MIC_STOP";
     public static final String ACTION_GEM_STARTED = "com.sktpj.recorder24h.memoket.GEM_STARTED";
+    public static final String ACTION_GEM_STOPPING = "com.sktpj.recorder24h.memoket.GEM_STOPPING";
     public static final String ACTION_GEM_FETCHING = "com.sktpj.recorder24h.memoket.GEM_FETCHING";
     public static final String ACTION_GEM_FINISHED = "com.sktpj.recorder24h.memoket.GEM_FINISHED";
     public static final String ACTION_GEM_FAILED = "com.sktpj.recorder24h.memoket.GEM_FAILED";
@@ -76,9 +77,12 @@ public final class GemMicMonitorService extends Service {
         if (ACTION_GEM_STARTED.equals(action)) {
             gate.started();
             event("GEM_MIC_DEVICE_STARTED");
-        } else if (ACTION_GEM_FETCHING.equals(action)) {
+        } else if (ACTION_GEM_STOPPING.equals(action)) {
             gate.stopSent();
-            event("GEM_MIC_DEVICE_STOP_FETCHING");
+            event("GEM_MIC_DEVICE_STOP_REQUESTED");
+        } else if (ACTION_GEM_FETCHING.equals(action)) {
+            gate.fetchStarted();
+            event("GEM_MIC_DEVICE_FILE_FETCHING");
         } else if (ACTION_GEM_FINISHED.equals(action)) {
             gate.acquired();
             nextStartAllowedAtMs = System.currentTimeMillis() + 1_000L;
@@ -199,7 +203,7 @@ public final class GemMicMonitorService extends Service {
         }
         if (gate.shouldStop(nowMs)) {
             gate.stopSent();
-            publishState("TRANSFERRING");
+            publishState("STOPPING");
             try {
                 startService(new Intent(this, MemoketRemoteRecordingService.class)
                         .setAction(MemoketRemoteRecordingService.ACTION_STOP_RECORDING));
@@ -219,6 +223,7 @@ public final class GemMicMonitorService extends Service {
 
     private String stateForGate() {
         if (gate.isFetching()) return "TRANSFERRING";
+        if (gate.isStopping()) return "STOPPING";
         if (gate.isRecording()) return "RECORDING";
         if (gate.isStarting()) return "STARTING";
         return "MONITORING";

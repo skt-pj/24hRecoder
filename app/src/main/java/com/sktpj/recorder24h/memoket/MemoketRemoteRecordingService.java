@@ -179,18 +179,25 @@ public final class MemoketRemoteRecordingService extends Service {
     private boolean streamCaptureTimerStarted;
     private boolean streamStopRequested;
     private boolean streamMetadataReceived;
+    // DATA before STOP is permitted by the v0.7.119 trace, but cannot prove
+    // that a post-stop file transfer has begun.
+    private boolean monitorTransferDataSeen;
+    private boolean monitorPostStopFetchRequested;
     private boolean recoveringOwnedPendingFile;
     private final Runnable streamStopAtFiveSeconds = () -> {
         if (!streamCaptureMode || stopCompleted || streamStopRequested || !stopPending) return;
         streamStopRequested = true;
         stopRequestedAtMs = System.currentTimeMillis();
-        if (monitorDriven) lastStopActivityAtMs = stopRequestedAtMs;
+        if (monitorDriven) {
+            lastStopActivityAtMs = stopRequestedAtMs;
+            signalMonitor(GemMicMonitorService.ACTION_GEM_STOPPING);
+        }
         MemoketSettings.recordingStopRequested(this, stopRequestedAtMs);
         if (continuousMode) {
             RecorderStateStore.write(this, "ROTATING", continuousSegmentId, null);
         }
         trace.phase(monitorDriven ? "GEM_MIC_STOP_CONTROL_0200_REQUESTED" : "STREAM_5S_STOP_CONTROL_0200_REQUESTED", stateDetails());
-        updateState("録音確定中");
+        updateState(monitorDriven ? "Gem停止処理中" : "録音確定中");
         inFlightMetadata = true;
         lastMetadataRequestAtMs = stopRequestedAtMs;
         queue(MemoketTransfer.metadataCommand());
@@ -460,6 +467,8 @@ public final class MemoketRemoteRecordingService extends Service {
         streamCaptureTimerStarted = false;
         streamStopRequested = false;
         streamMetadataReceived = false;
+        monitorTransferDataSeen = false;
+        monitorPostStopFetchRequested = false;
         stopRequestedAtMs = 0;
         stopSavedFiles = 0;
         inFlightMetadata = false;
@@ -757,8 +766,8 @@ public final class MemoketRemoteRecordingService extends Service {
                 return;
             }
             if (stopPending) {
-                // All post-start notifications belong to the STOP/transfer
-                // phase; there is no additional CONTROL 03 ACK to wait for.
+                // Preserve baseline v0.7.119 notifications while Gem records,
+                // without treating them as proof of STOP or a live-mic stream.
                 onOfficialStopNotification(uuid, value);
                 return;
             }
@@ -916,6 +925,7 @@ public final class MemoketRemoteRecordingService extends Service {
             if (stopNotifyStep != 3) return;
             lastStopActivityAtMs = now;
             lastStopDataAtMs = now;
+            if (monitorDriven && streamStopRequested) monitorTransferDataSeen = true;
             if (continuousMode) continuousLastDataAtMs = now;
             if (stopTransfer == null) return;
             if ("WAIT_LIST".equals(stopTransfer.debugState())) {
@@ -952,12 +962,29 @@ public final class MemoketRemoteRecordingService extends Service {
         }
         if (opcode == 2) {
             inFlightMetadata = false;
-            if (streamCaptureMode && value.length >= 3 && value[1] == 0 && value[2] == 1) {
+            if (streamCaptureMode && streamStopRequested && value.length >= 3
+                    && value[1] == 0 && value[2] == 1) {
                 streamMetadataReceived = true;
                 trace.phase("STREAM_STOP_METADATA_RECEIVED", stateDetails());
+                if (monitorDriven) {
+                    // A valid 02 metadata response is the first confirmed
+                    // post-stop file stage, not the earlier VAD stop request.
+                    updateState("Gemファイル取得中");
+                    signalMonitor(GemMicMonitorService.ACTION_GEM_FETCHING);
+                }
             }
         }
         byte[] next = stopTransfer == null ? null : stopTransfer.onControl(value);
+        if (GemTransferProgressPolicy.requestPostStopFetch(monitorDriven,
+                streamStopRequested, streamMetadataReceived,
+                stopTransfer != null && "WAIT_LIST".equals(stopTransfer.debugState()),
+                monitorPostStopFetchRequested)) {
+            // Unlike RECORDING, this 01 is a documented file request after
+            // the stop metadata response, never an additional START request.
+            monitorPostStopFetchRequested = true;
+            trace.phase("GEM_POST_STOP_FILE_FETCH_010000_REQUESTED", stateDetails());
+            queue(MemoketTransfer.initialCommand());
+        }
         if (opcode == 1 && stopTransfer != null
                 && !"WAIT_LIST".equals(stopTransfer.debugState())) {
             // Once the filename exists, feed DATA that arrived before 01.
@@ -1008,9 +1035,15 @@ public final class MemoketRemoteRecordingService extends Service {
         if (!stopPending || stopCompleted || stopTransfer == null) return;
         long now = System.currentTimeMillis();
         try {
-            // No absolute download time cap: only missing BLE progress is fatal.
-            if ((!monitorDriven || streamStopRequested) && now - lastStopActivityAtMs > 60_000L) {
-                throw new IllegalStateException("Gemから60秒間DATA/RESPONSEがなく、処理を終了しました");
+            // During mic-gated recording, Gem retains audio locally and does
+            // not owe real-time DATA. After STOP, only a transfer that has
+            // actually begun can be judged stalled; VAD silence is unrelated.
+            if (GemTransferProgressPolicy.stalled(monitorDriven, streamStopRequested,
+                    streamMetadataReceived, monitorTransferDataSeen,
+                    now, monitorDriven ? lastStopDataAtMs : lastStopActivityAtMs)) {
+                throw new IllegalStateException(monitorDriven
+                        ? "Gem停止後に開始したファイル転送が中断しました（録音の成否は未確認）"
+                        : "Gemから60秒間DATA/RESPONSEがなく、処理を終了しました");
             }
             if (inFlightMetadata && now - lastMetadataRequestAtMs > 5_000L) {
                 // A lost 02 response must not permanently block metadata queries.
@@ -1022,10 +1055,10 @@ public final class MemoketRemoteRecordingService extends Service {
                         && now - stopRequestedAtMs > 30_000L) {
                     throw new IllegalStateException("録音停止の確定要求にGemが応答しませんでした");
                 }
-                if (streamStopRequested && !inFlightMetadata
-                        && stopTransfer.shouldRequestMetadata()
-                        && now - lastMetadataRequestAtMs >= 1_000L
-                        && !commandBusy && commands.isEmpty()) {
+                if (GemTransferProgressPolicy.retryMetadata(streamStopRequested,
+                        monitorDriven, streamMetadataReceived,
+                        stopTransfer.shouldRequestMetadata(), inFlightMetadata,
+                        !commandBusy && commands.isEmpty(), now, lastMetadataRequestAtMs)) {
                     inFlightMetadata = true;
                     lastMetadataRequestAtMs = now;
                     trace.phase("STREAM_STOP_METADATA_RETRY", stateDetails());
@@ -1070,6 +1103,7 @@ public final class MemoketRemoteRecordingService extends Service {
         stopCompleted = true;
         stopPending = false;
         recordingActive = false;
+        monitorTransferDataSeen = false;
         stopHandler.removeCallbacks(stopWatchdog);
         trace.phase("FILE_SAVED_05_ACK_IDLE_STOP_UNVERIFIED", stateDetails());
         updateState("音声1件保存済み");

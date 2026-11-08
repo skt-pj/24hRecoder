@@ -6,6 +6,7 @@ public final class GemVoiceGate {
     private long lastSpeechAtMs;
     private boolean starting;
     private boolean recording;
+    private boolean stopping;
     private boolean fetching;
     private boolean userStopped;
 
@@ -14,7 +15,7 @@ public final class GemVoiceGate {
     }
 
     public boolean shouldStart(long nowMs) {
-        return !userStopped && !starting && !recording && !fetching
+        return !userStopped && !starting && !recording && !stopping && !fetching
                 && lastSpeechAtMs > 0L && nowMs - lastSpeechAtMs < SPEECH_TO_START_MS;
     }
 
@@ -28,17 +29,23 @@ public final class GemVoiceGate {
     }
 
     public boolean shouldStop(long nowMs) {
-        return recording && !fetching && (userStopped
+        return recording && !stopping && !fetching && (userStopped
                 || lastSpeechAtMs <= 0L || nowMs - lastSpeechAtMs >= SILENCE_TO_STOP_MS);
     }
 
     public void stopSent() {
+        stopping = true;
+    }
+
+    public void fetchStarted() {
+        stopping = false;
         fetching = true;
     }
 
     public void acquired() {
         starting = false;
         recording = false;
+        stopping = false;
         fetching = false;
     }
 
@@ -47,7 +54,7 @@ public final class GemVoiceGate {
     }
 
     public boolean canExit() {
-        return userStopped && !starting && !recording && !fetching;
+        return userStopped && !starting && !recording && !stopping && !fetching;
     }
 
     public boolean isStarting() {
@@ -56,6 +63,10 @@ public final class GemVoiceGate {
 
     public boolean isRecording() {
         return recording;
+    }
+
+    public boolean isStopping() {
+        return stopping;
     }
 
     public boolean isFetching() {

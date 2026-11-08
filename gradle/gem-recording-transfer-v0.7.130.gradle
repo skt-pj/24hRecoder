@@ -1,0 +1,34 @@
+def sourceDir = rootProject.file('app/src/main/java/com/sktpj/recorder24h/memoket')
+def serviceSource = new File(sourceDir, 'MemoketRemoteRecordingService.java').getText('UTF-8')
+def gateSource = new File(sourceDir, 'GemVoiceGate.java').getText('UTF-8')
+def monitorSource = new File(sourceDir, 'GemMicMonitorService.java').getText('UTF-8')
+def policySource = new File(sourceDir, 'GemTransferProgressPolicy.java').getText('UTF-8')
+def healthSource = rootProject.file('app/src/main/java/com/sktpj/recorder24h/storage/RecorderHealth.java').getText('UTF-8')
+def homeSource = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt').getText('UTF-8')
+if (!serviceSource.contains('GemTransferProgressPolicy.stalled(monitorDriven, streamStopRequested,')
+        || !serviceSource.contains('GemTransferProgressPolicy.retryMetadata(streamStopRequested,')
+        || !serviceSource.contains('signalMonitor(GemMicMonitorService.ACTION_GEM_STOPPING)')
+        || !serviceSource.contains('signalMonitor(GemMicMonitorService.ACTION_GEM_FETCHING)')
+        || !serviceSource.contains('streamMetadataReceived = true;')
+        || !serviceSource.contains('GEM_POST_STOP_FILE_FETCH_010000_REQUESTED')
+        || !policySource.contains('requestPostStopFetch(boolean micDriven, boolean stopRequested,')
+        || !serviceSource.contains('queue(MemoketTransfer.metadataCommand());')
+        || !serviceSource.contains('queue(MemoketTransfer.initialCommand());')
+        || !policySource.contains('micDriven && (!stopRequested || !metadataConfirmed || !transferDataSeen)')
+        || !gateSource.contains('private boolean stopping;')
+        || !monitorSource.contains('if (gate.isStopping()) return "STOPPING";')
+        || !gateSource.contains('SILENCE_TO_STOP_MS = 60_000L')
+        || !healthSource.contains('if (gemSource && "TRANSFERRING".equals(rawState))')
+        || healthSource.indexOf('if (gemSource && "TRANSFERRING".equals(rawState))')
+           > healthSource.indexOf('if (heartbeatMs <= 0L')
+        || !homeSource.contains('"TRANSFERRING" -> "Gemファイル取得中"')) {
+    throw new GradleException('Gem recording/STOP/file-transfer phase separation regression')
+}
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1130)
+            output.versionName.set('0.7.130')
+        }
+    }
+}

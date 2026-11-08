@@ -617,7 +617,7 @@ private fun RecordingCard(
                 }
             )
             if (dashboard.heartbeatMs > 0L) InfoRow("最終heartbeat", formatAgo(dashboard.heartbeatMs))
-            if (dashboard.lastAudioReadMs > 0L) InfoRow(if (dashboard.inputSource == "MEMOKET") "スマホマイク入力" else "マイク入力", formatAgo(dashboard.lastAudioReadMs))
+            if (dashboard.lastAudioReadMs > 0L && !(dashboard.inputSource == "MEMOKET" && dashboard.state == "TRANSFERRING")) InfoRow(if (dashboard.inputSource == "MEMOKET") "スマホマイク入力" else "マイク入力", formatAgo(dashboard.lastAudioReadMs))
             if (dashboard.inputSource != "MEMOKET" && dashboard.currentSegmentStartedAtMs > 0L) {
                 InfoRow("現在の5分音声", "${formatDuration(System.currentTimeMillis() - dashboard.currentSegmentStartedAtMs)} 経過")
             }
@@ -644,13 +644,17 @@ private fun RecordingCard(
             if (active) {
                 Button(
                     onClick = onRequestStop,
-                    enabled = dashboard.state != "STOPPING",
+                    enabled = dashboard.state !in setOf("STOPPING", "TRANSFERRING"),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError
                     ),
                     modifier = Modifier.fillMaxWidth().height(56.dp)
-                ) { Text(if (dashboard.state == "STOPPING") "停止中…" else "録音を停止") }
+                ) { Text(when (dashboard.state) {
+                    "STOPPING" -> "停止処理中…"
+                    "TRANSFERRING" -> "Gemファイル取得中…"
+                    else -> "録音を停止"
+                }) }
             } else {
                 Button(onClick = onRequestStart, modifier = Modifier.fillMaxWidth().height(56.dp)) {
                     Text("録音を開始")
@@ -1605,6 +1609,8 @@ private fun recordingStateLabel(state: String) = when (state) {
     "RECORDING" -> "録音中"
     "STARTING" -> "録音を開始中"
     "STOPPING" -> "録音を停止中"
+    "TRANSFERRING" -> "Gemファイル取得中"
+    "MONITORING" -> "会話を監視中"
     "ERROR" -> "録音エラー"
     else -> "録音停止中"
 }
