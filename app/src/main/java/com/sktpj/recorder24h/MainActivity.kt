@@ -1604,7 +1604,7 @@ private fun formatAgo(timestampMs: Long): String {
 private fun recordingStateLabel(state: String) = when (state) {
     "RECORDING" -> "録音中"
     "STARTING" -> "録音を開始中"
-    "STOPPING" -> "Gem停止処理中"
+    "STOPPING" -> "録音を停止中"
     "TRANSFERRING" -> "Gemファイル取得中"
     "MONITORING" -> "会話を監視中"
     "ERROR" -> "録音エラー"
