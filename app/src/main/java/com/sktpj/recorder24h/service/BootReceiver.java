@@ -35,14 +35,17 @@ public final class BootReceiver extends BroadcastReceiver {
         }
 
         final boolean wasRequested = RecordingIntentStore.isRequested(context);
-        if (!wasRequested) return;
+        // An interrupted Gem STOPPING state may remain even after the
+        // request flag was cleared; reconcile both independently.
+        String oldState = RecorderStateStore.read(context).optString("state", "STOPPED");
+        boolean interruptedGem = GemStateRecoveryPolicy.interruptedByProcessReplacement(
+                MemoketSettings.source(context), oldState);
+        if (!wasRequested && !interruptedGem) return;
 
         // App upgrade / reboot terminates the prior process and its BLE session.
         // Do not report its persisted STOPPING or TRANSFERRING as a live operation.
         // Leave Gem-side files untouched; physical record/stop remains unknown.
-        String oldState = RecorderStateStore.read(context).optString("state", "STOPPED");
-        if (GemStateRecoveryPolicy.interruptedByProcessReplacement(
-                MemoketSettings.source(context), wasRequested, oldState)) {
+        if (interruptedGem) {
             String reason = "アプリ更新・端末再起動で前回のGem操作が中断されました。"
                     + "Gem本体の録音状態と未取得ファイルは未確認です。";
             RecordingIntentStore.setRequested(context, false);
