@@ -8,8 +8,10 @@ public final class GemStateRecoveryPolicy {
     private GemStateRecoveryPolicy() {}
 
     public static boolean interruptedByProcessReplacement(
-            String inputSource, boolean wasRequested, String previousState) {
-        if (!"MEMOKET".equals(inputSource) || !wasRequested) return false;
+            String inputSource, String previousState) {
+        // The process that owned this state no longer exists after restart,
+        // even if the user had already switched the request flag off.
+        if (!"MEMOKET".equals(inputSource)) return false;
         return "STARTING".equals(previousState)
                 || "MONITORING".equals(previousState)
                 || "RECORDING".equals(previousState)
