@@ -186,11 +186,13 @@ public final class MemoketRemoteRecordingService extends Service {
     private boolean monitorStartFilenameConfirmed;
     private int monitor020000Replies;
     private final Runnable monitorStartFilenameDeadline = () -> {
-        if (monitorDriven && !stopCompleted && stopPending
-                && !streamStopRequested && !monitorStartFilenameConfirmed) {
-            trace.phase("GEM_010000_FILENAME_REPLY_NOT_RECEIVED", stateDetails());
-            finishWithError("Gemへの010000書込は成功しましたが、20秒以内に"
-                    + "010101と今回のファイル名が応答されませんでした。Gemの録音開始は未確認です");
+        synchronized (MemoketRemoteRecordingService.this) {
+            if (monitorDriven && !stopCompleted && stopPending
+                    && !streamStopRequested && !monitorStartFilenameConfirmed) {
+                trace.phase("GEM_010000_FILENAME_REPLY_NOT_RECEIVED", stateDetails());
+                finishWithError("Gemへの010000書込は成功しましたが、20秒以内に"
+                        + "010101と今回のファイル名が応答されませんでした。Gemの録音開始は未確認です");
+            }
         }
     };
     private boolean recoveringOwnedPendingFile;
