@@ -3,6 +3,8 @@ def serviceSource = new File(sourceDir, 'MemoketRemoteRecordingService.java').ge
 def gateSource = new File(sourceDir, 'GemVoiceGate.java').getText('UTF-8')
 def monitorSource = new File(sourceDir, 'GemMicMonitorService.java').getText('UTF-8')
 def policySource = new File(sourceDir, 'GemTransferProgressPolicy.java').getText('UTF-8')
+def healthSource = rootProject.file('app/src/main/java/com/sktpj/recorder24h/storage/RecorderHealth.java').getText('UTF-8')
+def homeSource = rootProject.file('app/src/main/java/com/sktpj/recorder24h/MainActivity.kt').getText('UTF-8')
 if (!serviceSource.contains('GemTransferProgressPolicy.stalled(monitorDriven, streamStopRequested,')
         || !serviceSource.contains('GemTransferProgressPolicy.retryMetadata(streamStopRequested,')
         || !serviceSource.contains('signalMonitor(GemMicMonitorService.ACTION_GEM_STOPPING)')
@@ -15,7 +17,11 @@ if (!serviceSource.contains('GemTransferProgressPolicy.stalled(monitorDriven, st
         || !policySource.contains('micDriven && (!stopRequested || !metadataConfirmed || !transferDataSeen)')
         || !gateSource.contains('private boolean stopping;')
         || !monitorSource.contains('if (gate.isStopping()) return "STOPPING";')
-        || !gateSource.contains('SILENCE_TO_STOP_MS = 60_000L')) {
+        || !gateSource.contains('SILENCE_TO_STOP_MS = 60_000L')
+        || !healthSource.contains('if (gemSource && "TRANSFERRING".equals(rawState))')
+        || healthSource.indexOf('if (gemSource && "TRANSFERRING".equals(rawState))')
+           > healthSource.indexOf('if (heartbeatMs <= 0L')
+        || !homeSource.contains('"TRANSFERRING" -> "Gemファイル取得中"')) {
     throw new GradleException('Gem recording/STOP/file-transfer phase separation regression')
 }
 androidComponents {
