@@ -45,4 +45,19 @@ public class GemTransferProgressPolicyTest {
         assertFalse(GemTransferProgressPolicy.retryMetadata(
                 false, true, false, true, false, true, 6_000L, 500L));
     }
+
+    @Test public void fetchOnlyAfterStopMetadataAndOnlyIfNoFileWasAnnounced() {
+        assertFalse(GemTransferProgressPolicy.requestPostStopFetch(
+                true, false, false, true, false));
+        assertFalse(GemTransferProgressPolicy.requestPostStopFetch(
+                true, true, false, true, false));
+        assertFalse(GemTransferProgressPolicy.requestPostStopFetch(
+                true, true, true, false, false));
+        assertFalse(GemTransferProgressPolicy.requestPostStopFetch(
+                true, true, true, true, true));
+        assertFalse(GemTransferProgressPolicy.requestPostStopFetch(
+                false, true, true, true, false));
+        assertTrue(GemTransferProgressPolicy.requestPostStopFetch(
+                true, true, true, true, false));
+    }
 }
