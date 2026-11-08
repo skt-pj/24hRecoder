@@ -57,4 +57,37 @@ public class GemVoiceGateTest {
         gate.acquired();
         assertTrue(gate.canExit());
     }
+
+    @Test public void stopRequestIsNotTheStartOfFileTransfer() {
+        GemVoiceGate gate = new GemVoiceGate();
+        gate.heardSpeech(10_000L);
+        gate.startSent();
+        gate.started();
+        gate.stopSent();
+        assertTrue(gate.isStopping());
+        assertFalse(gate.isFetching());
+        assertFalse(gate.shouldStop(100_000L));
+        gate.fetchStarted();
+        assertFalse(gate.isStopping());
+        assertTrue(gate.isFetching());
+        assertFalse(gate.shouldStart(100_000L));
+        gate.acquired();
+        assertFalse(gate.isStopping());
+        assertFalse(gate.isFetching());
+    }
+
+    @Test public void explicitStopMustWaitForStoppingAndTransfer() {
+        GemVoiceGate gate = new GemVoiceGate();
+        gate.heardSpeech(10_000L);
+        gate.startSent();
+        gate.started();
+        gate.stopRequested();
+        gate.stopSent();
+        assertTrue(gate.isStopping());
+        assertFalse(gate.canExit());
+        gate.fetchStarted();
+        assertFalse(gate.canExit());
+        gate.acquired();
+        assertTrue(gate.canExit());
+    }
 }
