@@ -42,6 +42,13 @@ public final class RecorderHealth {
             return neutral("STOPPING", "録音を停止中", "現在の音声セグメントを確定しています。", true,
                     heartbeatAge, audioAge, segmentAge);
         }
+        // Gem file acquisition is not microphone recording. Once STOP has
+        // entered the file stage, a stopped phone mic heartbeat is expected.
+        if (gemSource && "TRANSFERRING".equals(rawState)) {
+            return neutral("GEM_FETCH", "Gem音声を取得中",
+                    "Gem録音停止後のファイルを取得・検証・保存しています。", true,
+                    heartbeatAge, audioAge, segmentAge);
+        }
         if ("RECOVERING".equals(rawState)) {
             String detail = isBlank(error)
                     ? "録音サービスを自動再試行しています。"
@@ -70,11 +77,6 @@ public final class RecorderHealth {
                     heartbeatAge, audioAge, segmentAge);
         }
         if (gemSource) {
-            if ("TRANSFERRING".equals(rawState)) {
-                return neutral("GEM_FETCH", "Gem音声を取得中",
-                        "録音停止後の音声を端末へ取得・保存しています。", true,
-                        heartbeatAge, audioAge, segmentAge);
-            }
             if (audioReadMs <= 0L || audioAge > AUDIO_READ_STALE_MS) {
                 return problem("GEM_PHONE_MIC_STALE", "スマホマイク入力を確認できません",
                         "スマホマイクから15秒以上音声を取得できていません。", true,
