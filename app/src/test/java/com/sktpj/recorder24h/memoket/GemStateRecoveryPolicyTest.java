@@ -6,26 +6,26 @@ import static org.junit.Assert.*;
 public class GemStateRecoveryPolicyTest {
     @Test public void packageUpdateMarksInterruptedGemStopAndTransferAsNoLongerLive() {
         assertTrue(GemStateRecoveryPolicy.interruptedByProcessReplacement(
-                "MEMOKET", true, "STOPPING"));
+                "MEMOKET", "STOPPING"));
         assertTrue(GemStateRecoveryPolicy.interruptedByProcessReplacement(
-                "MEMOKET", true, "TRANSFERRING"));
+                "MEMOKET", "TRANSFERRING"));
         assertTrue(GemStateRecoveryPolicy.interruptedByProcessReplacement(
-                "MEMOKET", true, "MONITORING"));
+                "MEMOKET", "MONITORING"));
         assertTrue(GemStateRecoveryPolicy.interruptedByProcessReplacement(
-                "MEMOKET", true, "RECORDING"));
+                "MEMOKET", "RECORDING"));
         assertTrue(GemStateRecoveryPolicy.interruptedByProcessReplacement(
-                "MEMOKET", true, "STARTING"));
+                "MEMOKET", "STARTING"));
     }
 
     @Test public void neverResetLocalRecordingOrAnAlreadyStoppedGemOnPackageReplacement() {
         assertFalse(GemStateRecoveryPolicy.interruptedByProcessReplacement(
-                "LOCAL", true, "STOPPING"));
+                "LOCAL", "STOPPING"));
+        assertTrue(GemStateRecoveryPolicy.interruptedByProcessReplacement(
+                "MEMOKET", "STOPPING"));
         assertFalse(GemStateRecoveryPolicy.interruptedByProcessReplacement(
-                "MEMOKET", false, "STOPPING"));
+                "MEMOKET", "STOPPED"));
         assertFalse(GemStateRecoveryPolicy.interruptedByProcessReplacement(
-                "MEMOKET", true, "STOPPED"));
-        assertFalse(GemStateRecoveryPolicy.interruptedByProcessReplacement(
-                "MEMOKET", true, "ERROR"));
+                "MEMOKET", "ERROR"));
     }
 
     @Test public void manualAbortIsLimitedToGemStopAndFileFetchStages() {
