@@ -6,9 +6,14 @@ import android.os.Build;
 import android.os.SystemClock;
 
 import com.sktpj.recorder24h.util.AppLogger;
+import com.sktpj.recorder24h.util.DiagnosticLogSettings;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.ArrayDeque;
+import java.util.Arrays;
+import java.util.Deque;
 import java.util.UUID;
 
 public final class MemoketDebugTrace {
@@ -16,6 +21,28 @@ public final class MemoketDebugTrace {
     private final String sessionId;
     private final String route;
     private final long startedElapsedMs;
+
+    // Keep complete incoming BLE DATA bytes in memory only until a sequence fault.
+    // The diagnostic event stores the last 16 raw notifications, including the bad frame.
+    private static final int RAW_DATA_HISTORY_LIMIT = 16;
+    private final Deque<RawDataFrame> recentRawData = new ArrayDeque<>();
+
+    private static final class RawDataFrame {
+        final long timestampMs;
+        final String characteristicUuid;
+        final byte[] bytes;
+        final long expectedSequence;
+        final String transferState;
+
+        RawDataFrame(long timestampMs, String characteristicUuid, byte[] bytes,
+                long expectedSequence, String transferState) {
+            this.timestampMs = timestampMs;
+            this.characteristicUuid = characteristicUuid;
+            this.bytes = Arrays.copyOf(bytes, bytes.length);
+            this.expectedSequence = expectedSequence;
+            this.transferState = transferState;
+        }
+    }
 
     private volatile String phase = "CREATED";
     private volatile String lastCommandHex = "";
@@ -172,6 +199,48 @@ public final class MemoketDebugTrace {
         put(d, "bufferedBytes", bufferedBytes);
         put(d, "transferState", transferState);
         AppLogger.diagnostic(context, "MEMOKET_DATA_BLOCK_RECEIVED", d);
+    }
+
+    /** Preserve incoming notification bytes without changing the transfer protocol. */
+    public synchronized void rawDataReceived(String characteristicUuid, byte[] value,
+            long expectedSequence, String transferState) {
+        if (!DiagnosticLogSettings.isDetailedEnabled(context) || value == null) return;
+        if (recentRawData.size() == RAW_DATA_HISTORY_LIMIT) recentRawData.removeFirst();
+        recentRawData.addLast(new RawDataFrame(System.currentTimeMillis(),
+                characteristicUuid, value, expectedSequence, transferState));
+    }
+
+    /** Persist the actual BLE bytes at a sequence fault, before the session is torn down. */
+    public synchronized void rawDataMismatch(String message) {
+        if (!DiagnosticLogSettings.isDetailedEnabled(context)) return;
+        JSONArray frames = new JSONArray();
+        for (RawDataFrame frame : recentRawData) {
+            JSONObject row = new JSONObject();
+            put(row, "timestampMs", frame.timestampMs);
+            put(row, "characteristicUuid", frame.characteristicUuid);
+            put(row, "packetBytes", frame.bytes.length);
+            put(row, "expectedSequence", frame.expectedSequence);
+            put(row, "interpretedSequence", sequence(frame.bytes));
+            put(row, "transferState", frame.transferState);
+            put(row, "rawHex", hex(frame.bytes));
+            frames.put(row);
+        }
+        JSONObject details = base();
+        put(details, "error", message);
+        put(details, "lastCommandHex", lastCommandHex);
+        put(details, "lastResponseHex", lastResponseHex);
+        put(details, "rawDataFrames", frames);
+        put(details, "rawFrameHistoryLimit", RAW_DATA_HISTORY_LIMIT);
+        AppLogger.diagnostic(context, "MEMOKET_RAW_DATA_SEQUENCE_MISMATCH", details);
+    }
+
+    /** Update counters for the regular recording path without writing every audio frame. */
+    public void dataAccepted(byte[] value, String transferState, long bufferedBytes) {
+        dataBlocks++;
+        dataBytes += value == null ? 0 : Math.max(0, value.length - 5);
+        lastDataSequence = sequence(value);
+        lastTransferState = transferState == null ? "" : transferState;
+        lastBufferedBytes = bufferedBytes;
     }
 
     public void metadataProbeScheduled(long delayMs, String transferState, long bufferedBytes) {
