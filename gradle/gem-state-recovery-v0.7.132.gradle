@@ -1,0 +1,25 @@
+def sourceRoot = rootProject.file('app/src/main/java/com/sktpj/recorder24h')
+def recovery = new File(sourceRoot, 'memoket/GemStateRecoveryPolicy.java').getText('UTF-8')
+def boot = new File(sourceRoot, 'service/BootReceiver.java').getText('UTF-8')
+def controller = new File(sourceRoot, 'service/RecorderService.java').getText('UTF-8')
+def screen = new File(sourceRoot, 'MainActivity.kt').getText('UTF-8')
+def remote = new File(sourceRoot, 'memoket/MemoketRemoteRecordingService.java').getText('UTF-8')
+if (!recovery.contains('interruptedByProcessReplacement(')
+        || !recovery.contains('requiresExplicitLocalAbort(')
+        || !boot.contains('GEM_INTERRUPTED_STATE_RECOVERED_AFTER_RESTART')
+        || !boot.contains('RecordingIntentStore.setRequested(context, false)')
+        || !screen.contains('GEM_PENDING_OPERATION_ABORTED_BY_USER')
+        || !screen.contains('stopService(Intent(this, MemoketRemoteRecordingService::class.java))')
+        || !screen.contains('"STOPPING" -> "操作を中断"')
+        || !remote.contains('stopCompleted = true;\n        monitorDriven = false;\n        stopHandler.removeCallbacks(monitorStartFilenameDeadline)')
+        || !controller.contains('Do not overwrite that result.')) {
+    throw new GradleException('Gem interrupted session recovery / user abort requirements regressed')
+}
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1132)
+            output.versionName.set('0.7.132')
+        }
+    }
+}
