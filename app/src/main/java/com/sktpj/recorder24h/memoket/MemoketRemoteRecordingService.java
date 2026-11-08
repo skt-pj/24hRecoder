@@ -770,6 +770,14 @@ public final class MemoketRemoteRecordingService extends Service {
 
     private synchronized void handleNotification(UUID uuid, byte[] value) {
         if (stopCompleted) return;
+        // Retain original DATA bytes around a fault without changing BLE handling.
+        if (uuid.equals(MemoketGattSync.DATA) && trace != null) {
+            MemoketTransfer receiving = diagFileOnly && diagTransfer != null
+                    ? diagTransfer : stopTransfer;
+            trace.rawDataReceived(uuid.toString(), value,
+                    receiving == null ? -1 : receiving.dataBlockCount(),
+                    receiving == null ? "NONE" : receiving.debugState());
+        }
         try {
             if (diagFileOnly && diagTransfer != null) {
                 onDiagnosticFileNotification(uuid, value);
@@ -849,7 +857,12 @@ public final class MemoketRemoteRecordingService extends Service {
                 }
             }
         } catch (Exception error) {
-            finishWithError(error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage());
+            String message = error.getMessage() == null
+                    ? error.getClass().getSimpleName() : error.getMessage();
+            if (message.startsWith("Memoket block order mismatch") && trace != null) {
+                trace.rawDataMismatch(message);
+            }
+            finishWithError(message);
         }
     }
 
@@ -1024,7 +1037,11 @@ public final class MemoketRemoteRecordingService extends Service {
     }
 
     private void onOfficialData(byte[] value) {
+        long previousBlocks = stopTransfer.dataBlockCount();
         byte[] next = stopTransfer.onData(value);
+        if (stopTransfer.dataBlockCount() > previousBlocks) {
+            trace.dataAccepted(value, stopTransfer.debugState(), stopTransfer.bufferedBytes());
+        }
         if (next != null) queue(next);
         long blocks = stopTransfer.dataBlockCount();
         if (blocks == 1 || blocks == 32 || blocks == 128 || blocks == 512
