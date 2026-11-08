@@ -499,7 +499,9 @@ public final class MemoketRemoteRecordingService extends Service {
         }, new MemoketRecordingStore(this).directory(), sessionFileSelector, 1, true, false, true);
         stopNotifyStep = 3;
         stopPending = true;
-        recordingActive = true;
+        // A successful 010000 write is not evidence of an accepted Gem file
+        // session; the mic-driven path waits for the validated 010101 reply.
+        recordingActive = !monitorDriven;
         trace.phase(continuousMode ? "GEM_SEGMENT_START_010000" : "STREAM_CAPTURE_START_010000", stateDetails());
         updateState(monitorDriven ? "Gem開始応答待ち" : "録音中");
         updateNotification(monitorDriven ? "Gemのファイル名応答を確認中"
@@ -1007,6 +1009,7 @@ public final class MemoketRemoteRecordingService extends Service {
                 && GemResponsePhasePolicy.receivedFileAnnouncement(
                         value, stopTransfer.debugState())) {
             monitorStartFilenameConfirmed = true;
+            recordingActive = true;
             stopHandler.removeCallbacks(monitorStartFilenameDeadline);
             trace.phase("GEM_010101_FILE_ANNOUNCED_START_EFFECT_UNVERIFIED", stateDetails());
             updateState("録音中");
