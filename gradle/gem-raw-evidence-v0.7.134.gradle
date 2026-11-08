@@ -1,0 +1,25 @@
+// Diagnostic-only change: retain the original five-second Gem BLE test sequence.
+def sourceRoot = rootProject.file('app/src/main/java/com/sktpj/recorder24h/memoket')
+def transfer = new File(sourceRoot, 'MemoketTransfer.java').getText('UTF-8')
+def remote = new File(sourceRoot, 'MemoketRemoteRecordingService.java').getText('UTF-8')
+def trace = new File(sourceRoot, 'MemoketDebugTrace.java').getText('UTF-8')
+if (!trace.contains('MEMOKET_RAW_DATA_SEQUENCE_MISMATCH')
+        || !trace.contains('rawDataFrames')
+        || !trace.contains('frame.bytes')
+        || !remote.contains('trace.rawDataReceived(')
+        || !remote.contains('trace.rawDataMismatch(message)')
+        || !remote.contains('trace.dataAccepted(')
+        || !remote.contains('GEM_MIC_START_CONTROL_010000_WRITE_OK')
+        || !remote.contains('GEM_MIC_STOP_CONTROL_0200_REQUESTED')
+        || !remote.contains('queue(MemoketTransfer.metadataCommand());')
+        || !transfer.contains('Memoket block order mismatch')) {
+    throw new GradleException('Gem raw BLE capture or verified 010000/0200 path missing')
+}
+androidComponents {
+    onVariants(selector().withBuildType('debug')) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(1134)
+            output.versionName.set('0.7.134')
+        }
+    }
+}
