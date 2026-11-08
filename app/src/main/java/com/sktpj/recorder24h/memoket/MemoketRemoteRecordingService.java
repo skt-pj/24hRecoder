@@ -1040,7 +1040,7 @@ public final class MemoketRemoteRecordingService extends Service {
             // actually begun can be judged stalled; VAD silence is unrelated.
             if (GemTransferProgressPolicy.stalled(monitorDriven, streamStopRequested,
                     streamMetadataReceived, monitorTransferDataSeen,
-                    now, lastStopActivityAtMs)) {
+                    now, monitorDriven ? lastStopDataAtMs : lastStopActivityAtMs)) {
                 throw new IllegalStateException(monitorDriven
                         ? "Gem停止後に開始したファイル転送が中断しました（録音の成否は未確認）"
                         : "Gemから60秒間DATA/RESPONSEがなく、処理を終了しました");
