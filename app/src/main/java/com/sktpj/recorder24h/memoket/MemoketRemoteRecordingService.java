@@ -183,6 +183,18 @@ public final class MemoketRemoteRecordingService extends Service {
     // that a post-stop file transfer has begun.
     private boolean monitorTransferDataSeen;
     private boolean monitorPostStopFetchRequested;
+    private boolean monitorStartFilenameConfirmed;
+    private int monitor020000Replies;
+    private final Runnable monitorStartFilenameDeadline = () -> {
+        synchronized (MemoketRemoteRecordingService.this) {
+            if (monitorDriven && !stopCompleted && stopPending
+                    && !streamStopRequested && !monitorStartFilenameConfirmed) {
+                trace.phase("GEM_010000_FILENAME_REPLY_NOT_RECEIVED", stateDetails());
+                finishWithError("Gemへの010000書込は成功しましたが、20秒以内に"
+                        + "010101と今回のファイル名が応答されませんでした。Gemの録音開始は未確認です");
+            }
+        }
+    };
     private boolean recoveringOwnedPendingFile;
     private final Runnable streamStopAtFiveSeconds = () -> {
         if (!streamCaptureMode || stopCompleted || streamStopRequested || !stopPending) return;
@@ -467,6 +479,9 @@ public final class MemoketRemoteRecordingService extends Service {
         streamCaptureTimerStarted = false;
         streamStopRequested = false;
         streamMetadataReceived = false;
+        monitorStartFilenameConfirmed = false;
+        monitor020000Replies = 0;
+        stopHandler.removeCallbacks(monitorStartFilenameDeadline);
         monitorTransferDataSeen = false;
         monitorPostStopFetchRequested = false;
         stopRequestedAtMs = 0;
@@ -486,10 +501,13 @@ public final class MemoketRemoteRecordingService extends Service {
         }, new MemoketRecordingStore(this).directory(), sessionFileSelector, 1, true, false, true);
         stopNotifyStep = 3;
         stopPending = true;
-        recordingActive = true;
+        // A successful 010000 write is not evidence of an accepted Gem file
+        // session; the mic-driven path waits for the validated 010101 reply.
+        recordingActive = !monitorDriven;
         trace.phase(continuousMode ? "GEM_SEGMENT_START_010000" : "STREAM_CAPTURE_START_010000", stateDetails());
-        updateState("録音中");
-        updateNotification(continuousMode || monitorDriven ? "Gemで録音中" : "Gemで5秒録音中");
+        updateState(monitorDriven ? "Gem開始応答待ち" : "録音中");
+        updateNotification(monitorDriven ? "Gemのファイル名応答を確認中"
+                : continuousMode ? "Gemで録音中" : "Gemで5秒録音中");
         queue(MemoketTransfer.initialCommand());
         stopHandler.removeCallbacks(stopWatchdog);
         stopHandler.postDelayed(stopWatchdog, 500L);
@@ -704,8 +722,12 @@ public final class MemoketRemoteRecordingService extends Service {
                         && Arrays.equals(lastCommand, MemoketTransfer.initialCommand())) {
                     streamCaptureTimerStarted = true;
                     if (monitorDriven) {
-                        trace.phase("GEM_MIC_CAPTURE_START_010000_ACCEPTED", stateDetails());
-                        signalMonitor(GemMicMonitorService.ACTION_GEM_STARTED);
+                        trace.phase("GEM_START_WRITE_OK_AWAITING_FILE_RESPONSE", stateDetails());
+                        if (!monitorStartFilenameConfirmed) {
+                            stopHandler.removeCallbacks(monitorStartFilenameDeadline);
+                            stopHandler.postDelayed(monitorStartFilenameDeadline,
+                                    GemResponsePhasePolicy.FILE_ANNOUNCEMENT_TIMEOUT_MS);
+                        }
                     } else {
                         trace.phase("STREAM_CAPTURE_5S_TIMER_STARTED", stateDetails());
                         stopHandler.postDelayed(streamStopAtFiveSeconds,
@@ -960,11 +982,20 @@ public final class MemoketRemoteRecordingService extends Service {
             midTransferStatusStep = 3;
             trace.phase("OFFICIAL_E1_STATUS_RECEIVED");
         }
+        if (monitorDriven && streamStopRequested && GemResponsePhasePolicy.is020000(value)) {
+            monitor020000Replies++;
+            trace.phase("GEM_STOP_METADATA_020000_" + monitor020000Replies, stateDetails());
+            if (GemResponsePhasePolicy.exceeded020000Limit(monitor020000Replies)) {
+                throw new IllegalStateException("Gemの停止後、0200に対して020000が3回返されました。"
+                        + "今回のファイル名・確定メタデータが取得できず、Gemの録音停止も未確認です");
+            }
+        }
         if (opcode == 2) {
             inFlightMetadata = false;
             if (streamCaptureMode && streamStopRequested && value.length >= 3
                     && value[1] == 0 && value[2] == 1) {
                 streamMetadataReceived = true;
+                monitor020000Replies = 0;
                 trace.phase("STREAM_STOP_METADATA_RECEIVED", stateDetails());
                 if (monitorDriven) {
                     // A valid 02 metadata response is the first confirmed
@@ -975,6 +1006,18 @@ public final class MemoketRemoteRecordingService extends Service {
             }
         }
         byte[] next = stopTransfer == null ? null : stopTransfer.onControl(value);
+        if (monitorDriven && !monitorStartFilenameConfirmed && !streamStopRequested
+                && stopTransfer != null
+                && GemResponsePhasePolicy.receivedFileAnnouncement(
+                        value, stopTransfer.debugState())) {
+            monitorStartFilenameConfirmed = true;
+            recordingActive = true;
+            stopHandler.removeCallbacks(monitorStartFilenameDeadline);
+            trace.phase("GEM_010101_FILE_ANNOUNCED_START_EFFECT_UNVERIFIED", stateDetails());
+            updateState("録音中");
+            updateNotification("Gemのファイル名応答を確認しました");
+            signalMonitor(GemMicMonitorService.ACTION_GEM_STARTED);
+        }
         if (GemTransferProgressPolicy.requestPostStopFetch(monitorDriven,
                 streamStopRequested, streamMetadataReceived,
                 stopTransfer != null && "WAIT_LIST".equals(stopTransfer.debugState()),
@@ -1100,6 +1143,7 @@ public final class MemoketRemoteRecordingService extends Service {
     private void finishOfficialTransfer() {
         stopHandler.removeCallbacks(fiveSecondStop);
         stopHandler.removeCallbacks(streamStopAtFiveSeconds);
+        stopHandler.removeCallbacks(monitorStartFilenameDeadline);
         stopCompleted = true;
         stopPending = false;
         recordingActive = false;
@@ -1186,6 +1230,7 @@ public final class MemoketRemoteRecordingService extends Service {
     }
 
     private void finishWithError(String message) {
+        boolean micStartUnconfirmed = monitorDriven && !monitorStartFilenameConfirmed;
         String userMessage = message != null && message.startsWith("Unexpected ")
                 ? "Gemからの応答を処理できませんでした"
                 : message;
@@ -1223,10 +1268,13 @@ public final class MemoketRemoteRecordingService extends Service {
         stopHandler.removeCallbacks(diagMetadataProbe);
         stopHandler.removeCallbacks(diagFetchDeadline);
         stopHandler.removeCallbacks(diagStartDeadline);
+        stopHandler.removeCallbacks(monitorStartFilenameDeadline);
         if (trace != null) {
             trace.failure(message, null);
         }
-        MemoketSettings.saveResult(this, stopPending
+        MemoketSettings.saveResult(this, micStartUnconfirmed
+                ? "Gemの録音開始が未確認: " + userMessage
+                : stopPending
                 ? "Gem録音の停止・対象ファイル処理が未完了: " + userMessage
                 : "Gem録音操作失敗: " + userMessage);
         updateState("エラー");
@@ -1258,6 +1306,8 @@ public final class MemoketRemoteRecordingService extends Service {
             d.put("streamCaptureTimerStarted", streamCaptureTimerStarted);
             d.put("streamStopRequested", streamStopRequested);
             d.put("streamMetadataReceived", streamMetadataReceived);
+            d.put("monitorStartFilenameConfirmed", monitorStartFilenameConfirmed);
+            d.put("monitor020000Replies", monitor020000Replies);
             d.put("manualTestMode", manualTestMode);
             d.put("candidateId", candidateId);
             d.put("diagStartOnly", diagStartOnly);
