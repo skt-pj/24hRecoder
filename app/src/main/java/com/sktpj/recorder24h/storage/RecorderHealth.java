@@ -39,8 +39,12 @@ public final class RecorderHealth {
                     heartbeatAge, audioAge, segmentAge);
         }
         if ("STOPPING".equals(rawState)) {
-            return neutral("STOPPING", "録音を停止中", "現在の音声セグメントを確定しています。", true,
-                    heartbeatAge, audioAge, segmentAge);
+            return gemSource
+                    ? neutral("GEM_STOPPING", "Gem停止処理中",
+                            "Gemへ停止要求を送り、録音ファイルの確定を確認しています。", true,
+                            heartbeatAge, audioAge, segmentAge)
+                    : neutral("STOPPING", "録音を停止中", "現在の音声セグメントを確定しています。", true,
+                            heartbeatAge, audioAge, segmentAge);
         }
         // Gem file acquisition is not microphone recording. Once STOP has
         // entered the file stage, a stopped phone mic heartbeat is expected.
