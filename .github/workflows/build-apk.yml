@@ -94,53 +94,73 @@ jobs:
           printf '%s\n' "$VERIFY_OUT"
           printf '%s\n' "$VERIFY_OUT" | grep -F "Signer #1 certificate SHA-256 digest: e648320071b8ab0de038f76790064b99461b67d7dbe7ce7506d12a5f4fa884d8"
 
-      - name: Verify APK version 0.7.128
+      - name: Verify signed APK version against Gradle metadata
+        id: apk_version
         run: |
           set -euo pipefail
-          AAPT="$ANDROID_HOME/build-tools/36.0.0/aapt"
-          APK="app/build/outputs/apk/debug/app-debug.apk"
-          "$AAPT" dump badging "$APK" | tee app/build/outputs/apk/debug/badging.txt
-          grep -F "versionCode='1128'" app/build/outputs/apk/debug/badging.txt
-          grep -F "versionName='0.7.128'" app/build/outputs/apk/debug/badging.txt
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import re
+          import subprocess
+          output_dir = pathlib.Path("app/build/outputs/apk/debug")
+          expected = json.loads((output_dir / "output-metadata.json").read_text())["elements"][0]
+          aapt = os.path.join(os.environ["ANDROID_HOME"], "build-tools/36.0.0/aapt")
+          badging = subprocess.check_output([aapt, "dump", "badging", str(output_dir / "app-debug.apk")], text=True)
+          (output_dir / "badging.txt").write_text(badging)
+          package_line = next((line for line in badging.splitlines() if line.startswith("package:")), "")
+          match = re.search(r"versionCode='(\d+)'.*versionName='([^']+)'", package_line)
+          if match is None:
+              raise SystemExit("APK version metadata missing")
+          code, version = int(match.group(1)), match.group(2)
+          if code != int(expected["versionCode"]) or version != expected["versionName"]:
+              raise SystemExit(f"APK version {version}/{code} does not match Gradle {expected['versionName']}/{expected['versionCode']}")
+          release_version = version.removesuffix("-debug")
+          if not re.fullmatch(r"\d+\.\d+\.\d+", release_version):
+              raise SystemExit(f"Unexpected APK version: {version}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"version={release_version}\ncode={code}\n")
+          print(f"Verified APK versionName={version} versionCode={code}")
+          PY
 
       - name: Generate APK integrity and build metadata
         run: |
           set -euo pipefail
+          VERSION="${{ steps.apk_version.outputs.version }}"
+          CODE="${{ steps.apk_version.outputs.code }}"
+          APK="24hRecoder-$VERSION-debug.apk"
           mkdir -p release
-          APK="app/build/outputs/apk/debug/app-debug.apk"
-          cp "$APK" release/24hRecoder-0.7.128-debug.apk
-          cd release
-          sha256sum 24hRecoder-0.7.128-debug.apk > 24hRecoder-0.7.128-debug.apk.sha256
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs 24hRecoder-0.7.128-debug.apk > signing-certificate.txt
-          grep -F "Signer #1 certificate SHA-256 digest: e648320071b8ab0de038f76790064b99461b67d7dbe7ce7506d12a5f4fa884d8" signing-certificate.txt
+          cp app/build/outputs/apk/debug/app-debug.apk "release/$APK"
+          (cd release && sha256sum "$APK" > "$APK.sha256")
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "release/$APK" > release/signing-certificate.txt
+          grep -F "Signer #1 certificate SHA-256 digest: e648320071b8ab0de038f76790064b99461b67d7dbe7ce7506d12a5f4fa884d8" release/signing-certificate.txt
           {
             printf 'repository=%s\n' "$GITHUB_REPOSITORY"
             printf 'branch=%s\n' "$GITHUB_REF_NAME"
             printf 'commit=%s\n' "$GITHUB_SHA"
-            printf 'versionName=0.7.128-debug\nversionCode=1128\n'
+            printf 'versionName=%s\nversionCode=%s\n' "$VERSION" "$CODE"
             printf 'workflow_run=%s\n' "$GITHUB_RUN_ID"
             printf 'build_and_test=passed\n'
             printf 'signing=commonStable\n'
-          } > build-metadata.txt
+          } > release/build-metadata.txt
 
       - name: Upload signed debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: 24hRecoder-v0.7.128-debug
-          path: |
-            release/24hRecoder-0.7.128-debug.apk
-            release/24hRecoder-0.7.128-debug.apk.sha256
-            release/signing-certificate.txt
-            release/build-metadata.txt
+          name: 24hRecoder-v${{ steps.apk_version.outputs.version }}-debug
+          path: release/
           if-no-files-found: error
 
       - name: Publish signed APK to GitHub Releases
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.apk_version.outputs.version }}
         run: |
           set -euo pipefail
-          TAG="v0.7.128-debug"
+          TAG="v$VERSION-debug"
+          APK="24hRecoder-$VERSION-debug.apk"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git rev-parse --verify "refs/tags/$TAG" >/dev/null 2>&1; then
@@ -149,14 +169,12 @@ jobs:
               exit 1
             }
           else
-            git tag -a "$TAG" -m "24hRecoder 0.7.128-debug"
+            git tag -a "$TAG" -m "24hRecoder $VERSION-debug"
             git push origin "refs/tags/$TAG"
           fi
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release already published for $TAG"
-          else
-            gh release create "$TAG"               release/24hRecoder-0.7.128-debug.apk               release/24hRecoder-0.7.128-debug.apk.sha256               release/signing-certificate.txt               release/build-metadata.txt               --verify-tag --prerelease               --title "24hRecoder 0.7.128-debug"               --notes "Fix continuous Gem START being treated as STOP and safely recover pending files owned by this app. Retain ASR process-boundary fix. Device validation pending."
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" "release/$APK" "release/$APK.sha256" release/signing-certificate.txt release/build-metadata.txt --verify-tag --prerelease --title "24hRecoder $VERSION-debug" --notes "Gem session recovery fix. Device recording, stop, and file transfer not yet verified on hardware."
           fi
           mkdir -p release-check
-          gh release download "$TAG" --pattern "24hRecoder-0.7.128-debug.apk" --dir release-check
-          test "$(sha256sum release-check/24hRecoder-0.7.128-debug.apk | cut -d' ' -f1)" =                "$(sha256sum release/24hRecoder-0.7.128-debug.apk | cut -d' ' -f1)"
+          gh release download "$TAG" --pattern "$APK" --dir release-check
+          test "$(sha256sum "release-check/$APK" | cut -d' ' -f1)" = "$(sha256sum "release/$APK" | cut -d' ' -f1)"
